@@ -11,6 +11,7 @@ import (
 	"microserver/internal/config"
 	"microserver/internal/jobs"
 	"microserver/internal/middleware"
+	"microserver/internal/services/geoip"
 	"microserver/internal/services/orchestrator"
 	"microserver/internal/services/settings"
 )
@@ -22,6 +23,7 @@ type App struct {
 	Engine   *jobs.Engine
 	Orch     *orchestrator.Orchestrator
 	Auth     *middleware.Auth
+	Geo      *geoip.DB
 	// TestTelegram sends a test message with the current bot settings.
 	TestTelegram func() error
 }

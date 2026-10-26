@@ -44,6 +44,8 @@ const (
 	TelegramChatIDs   = "telegram.chat_ids"
 	TelegramProxy     = "telegram.proxy"
 	TelegramNotify    = "telegram.notify"
+	GeoIPCityURL      = "geoip.city_url"
+	GeoIPASNURL       = "geoip.asn_url"
 )
 
 var Defaults = map[string]string{
@@ -76,6 +78,9 @@ var Defaults = map[string]string{
 	TelegramChatIDs:   "",
 	TelegramProxy:     "",
 	TelegramNotify:    "true",
+	// Empty: DB-IP Lite of the current month.
+	GeoIPCityURL: "",
+	GeoIPASNURL:  "",
 }
 
 // Secret keys are encrypted in the table and masked when listed.

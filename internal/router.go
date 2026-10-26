@@ -85,6 +85,8 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Delete("/template/inbounds/:id", a.DeleteInbound)
 	p.Get("/template/inbounds/:id/links", a.InboundLinks)
 	p.Get("/template/x25519", a.NewX25519)
+	p.Get("/template/xray/base", a.XrayBase)
+	p.Post("/template/outbounds/test", a.TestOutbounds)
 	p.Post("/template/sync", a.EnqueueGlobal(orchestrator.KindSyncAll))
 
 	p.Get("/jobs", a.ListJobs)
@@ -96,6 +98,9 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Post("/settings/test/vpnpannel", a.TestVPNPanel)
 	p.Post("/settings/test/telegram", a.TestTelegramHandler)
 	p.Post("/destination/upload", a.UploadConfigs)
+
+	p.Get("/geo/report", a.GeoReport)
+	p.Post("/geo/update", a.UpdateGeoIP)
 
 	api.Use(func(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "not found"})

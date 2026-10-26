@@ -194,6 +194,7 @@ export interface XrayTemplate {
   routing: string
   dns: string
   observatory: string
+  full: string
   version: number
   hash: string
   updated_at: string
@@ -261,3 +262,78 @@ export interface ServerEvent {
 }
 
 export type Settings = Record<string, string>
+
+export interface GeoGroup {
+  country: string
+  region: string
+  city: string
+  asn: number
+  isp: string
+  key: string
+  ips: number
+  online: number
+  users: number
+  conns: number
+}
+
+export interface GeoUser {
+  email: string
+  ips: number
+  online: number
+  conns: number
+  servers: number
+  cities: string
+  isps: string
+  last_seen: string
+}
+
+export interface GeoIPRow {
+  ip: string
+  country: string
+  region: string
+  city: string
+  asn: number
+  isp: string
+  emails: string
+  servers: string
+  inbounds: string
+  conns: number
+  last_seen: string
+  online: boolean
+}
+
+export interface GeoIPStatus {
+  city: boolean
+  asn: boolean
+  city_date: string
+  asn_date: string
+  error: string
+}
+
+export interface GeoReport {
+  totals: { ips: number; online: number; users: number; conns: number; online_users: number }
+  by_country: GeoGroup[]
+  by_region: GeoGroup[]
+  by_city: GeoGroup[]
+  by_isp: GeoGroup[]
+  by_inbound: GeoGroup[]
+  by_server: GeoGroup[]
+  users: GeoUser[]
+  ips: GeoIPRow[]
+  inbounds: string[]
+  geoip: GeoIPStatus | null
+  online_window_min: number
+}
+
+export interface OutboundTestResult {
+  tag: string
+  ok: boolean
+  skipped?: boolean
+  ms: number
+  error?: string
+  ip?: string
+  country?: string
+  country_code?: string
+  city?: string
+  isp?: string
+}

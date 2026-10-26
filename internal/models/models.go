@@ -155,6 +155,31 @@ type InboundStat struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// ClientIP is one client address seen in a server's xray access log, per
+// user and day. Conns counts accepted connections that day.
+type ClientIP struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	ServerID  uint      `gorm:"uniqueIndex:idx_client_ip;index" json:"server_id"`
+	Day       string    `gorm:"size:10;uniqueIndex:idx_client_ip" json:"day"`
+	IP        string    `gorm:"size:45;uniqueIndex:idx_client_ip;index" json:"ip"`
+	Email     string    `gorm:"size:100;uniqueIndex:idx_client_ip;index" json:"email"`
+	Inbound   string    `gorm:"size:100" json:"inbound"`
+	Conns     int64     `json:"conns"`
+	FirstSeen time.Time `json:"first_seen"`
+	LastSeen  time.Time `gorm:"index" json:"last_seen"`
+}
+
+// IPGeo caches the GeoIP answer for a client address.
+type IPGeo struct {
+	IP        string    `gorm:"primaryKey;size:45" json:"ip"`
+	Country   string    `gorm:"size:2" json:"country"`
+	Region    string    `gorm:"size:100" json:"region"`
+	City      string    `gorm:"size:100" json:"city"`
+	ASN       uint      `json:"asn"`
+	ISP       string    `gorm:"size:150" json:"isp"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // IP pool states.
 const (
 	IPInUse    = "in_use"   // attached to a live server
@@ -217,10 +242,13 @@ type XrayTemplate struct {
 	Routing   string `gorm:"type:text" json:"routing"`
 	DNS       string `gorm:"type:text" json:"dns"`
 	// Observatory probes outbounds for leastPing/leastLoad balancers.
-	Observatory string    `gorm:"type:text" json:"observatory"`
-	Version     int       `json:"version"`
-	Hash        string    `gorm:"size:64" json:"hash"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Observatory string `gorm:"type:text" json:"observatory"`
+	// Full, when set, is the whole xray template (3x-ui's "Advanced" view):
+	// panels get exactly this instead of having the keys above merged in.
+	Full      string    `gorm:"type:text" json:"full"`
+	Version   int       `json:"version"`
+	Hash      string    `gorm:"size:64" json:"hash"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // InboundTemplate is one inbound created identically on every panel. Settings
@@ -286,6 +314,6 @@ func All() []any {
 	return []any{
 		&AdminUser{}, &ProviderAccount{}, &Location{}, &Server{}, &InboundStat{}, &IPAddress{},
 		&CheckRun{}, &CheckProbe{}, &XrayTemplate{}, &InboundTemplate{},
-		&Job{}, &JobLog{}, &Setting{},
+		&Job{}, &JobLog{}, &Setting{}, &ClientIP{}, &IPGeo{},
 	}
 }

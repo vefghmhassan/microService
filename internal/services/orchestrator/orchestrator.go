@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -82,6 +83,10 @@ type Orchestrator struct {
 	Check    func(ctx context.Context, host string, port int) *checker.Result
 	Dest     func() Destination
 	Notify   func(text string)
+	// Geo resolves client addresses for the GeoIP report (nil = skip).
+	Geo GeoLookup
+
+	accessLogOK sync.Map // server ID → access log verified on
 
 	// SSHWait bounds how long a fresh server may take to accept SSH.
 	SSHWait time.Duration

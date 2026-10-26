@@ -1,8 +1,10 @@
 import { useEffect } from 'react'
-import { Button, Card, Col, Divider, Flex, Form, Input, InputNumber, Row, Select, Skeleton, Switch, Typography } from 'antd'
-import { SaveOutlined, SendOutlined, LinkOutlined } from '@ant-design/icons'
-import { keys, post, put, useAction, useSettings, useXUIReleases } from '../api/hooks'
-import type { Settings as S } from '../api/types'
+import { Alert, Button, Card, Col, Divider, Flex, Form, Input, InputNumber, Row, Select, Skeleton, Switch, Tag, Typography } from 'antd'
+import { SaveOutlined, SendOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons'
+import { useQuery } from '@tanstack/react-query'
+import { get, keys, post, put, useAction, useSettings, useXUIReleases } from '../api/hooks'
+import type { GeoReport, Settings as S } from '../api/types'
+import { fmtDate } from '../lib/format'
 import { PageHeader } from '../components/PageHeader'
 
 // Settings keys are dotted; antd forms treat dots as paths, so keys are
@@ -121,6 +123,9 @@ export function Settings() {
             </Card>
           </Col>
           <Col xs={24} xl={12}>
+            <GeoIPCard />
+          </Col>
+          <Col xs={24} xl={12}>
             <Card size="small" title="حساب ادمین">
               <PasswordForm onSubmit={(v) => changePw.mutate(v)} loading={changePw.isPending} />
             </Card>
@@ -142,5 +147,23 @@ function PasswordForm({ onSubmit, loading }: { onSubmit: (v: { current: string; 
         <Button loading={loading} onClick={() => onSubmit(form.getFieldsValue())}>تغییر رمز</Button>
       </Flex>
     </Form>
+  )
+}
+
+/** GeoIPCard shows the GeoIP databases used by «کاربران و موقعیت» and lets them be refreshed. */
+function GeoIPCard() {
+  const st = useQuery({ queryKey: ['geo', 'status'], queryFn: () => get<GeoReport>('/geo/report?range=online'), refetchInterval: 15_000 })
+  const update = useAction(() => post('/geo/update'), { success: 'دانلود پایگاه GeoIP شروع شد', invalidate: [['geo']] })
+  const g = st.data?.geoip
+  return (
+    <Card size="small" title="GeoIP (موقعیت کاربران)" extra={<Button size="small" icon={<ReloadOutlined />} loading={update.isPending} onClick={() => update.mutate()}>به‌روزرسانی الان</Button>}>
+      <Flex vertical gap={4} style={{ marginBottom: 12 }}>
+        <Typography.Text>شهر/استان: {g?.city ? <Tag color="green">{fmtDate(g.city_date)}</Tag> : <Tag>ندارد</Tag>} · ISP: {g?.asn ? <Tag color="green">{fmtDate(g.asn_date)}</Tag> : <Tag>ندارد</Tag>}</Typography.Text>
+        {g?.error && <Alert type="error" showIcon title={g.error} />}
+      </Flex>
+      <F k="geoip.city_url" label="آدرس پایگاه شهر (mmdb)" tip="خالی = DB-IP City Lite همین ماه؛ فایل .mmdb یا .mmdb.gz سازگار با GeoLite2"><Input dir="ltr" placeholder="https://download.db-ip.com/free/dbip-city-lite-YYYY-MM.mmdb.gz" /></F>
+      <F k="geoip.asn_url" label="آدرس پایگاه ASN/ISP (mmdb)" tip="خالی = DB-IP ASN Lite همین ماه"><Input dir="ltr" placeholder="https://download.db-ip.com/free/dbip-asn-lite-YYYY-MM.mmdb.gz" /></F>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>ماهی یک‌بار خودکار به‌روز می‌شود. اگر سرور به db-ip.com دسترسی ندارد، آدرس یک آینه را بدهید.</Typography.Text>
+    </Card>
   )
 }

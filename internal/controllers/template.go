@@ -1,8 +1,10 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
@@ -42,10 +44,44 @@ func (a *App) PutXrayTemplate(c *fiber.Ctx) error {
 		Routing     string `json:"routing"`
 		DNS         string `json:"dns"`
 		Observatory string `json:"observatory"`
-		Sync        bool   `json:"sync"`
+		// Full is the whole template (Advanced tab); "" leaves full mode.
+		// Absent: the form tabs saved, and their keys are written into Full.
+		Full *string `json:"full"`
+		Sync bool    `json:"sync"`
 	}
 	if err := c.BodyParser(&in); err != nil {
 		return errJSON(c, fiber.StatusBadRequest, "invalid body")
+	}
+	var t models.XrayTemplate
+	a.DB.FirstOrCreate(&t, models.XrayTemplate{ID: 1})
+	switch {
+	case in.Full != nil && strings.TrimSpace(*in.Full) != "":
+		full, err := parseFullTemplate(*in.Full)
+		if err != nil {
+			return errJSON(c, fiber.StatusBadRequest, err.Error())
+		}
+		in.Outbounds, in.Routing, in.DNS, in.Observatory = jsonKey(full, "outbounds"), jsonKey(full, "routing"), jsonKey(full, "dns"), jsonKey(full, "observatory")
+		t.Full = *in.Full
+	case in.Full != nil:
+		t.Full = ""
+	case t.Full != "":
+		full, err := parseFullTemplate(t.Full)
+		if err != nil {
+			return errJSON(c, fiber.StatusBadRequest, err.Error())
+		}
+		for k, v := range map[string]string{"outbounds": in.Outbounds, "routing": in.Routing, "dns": in.DNS, "observatory": in.Observatory} {
+			if strings.TrimSpace(v) == "" {
+				delete(full, k)
+				continue
+			}
+			var val any
+			if err := json.Unmarshal([]byte(v), &val); err != nil {
+				return errJSON(c, fiber.StatusBadRequest, k+": JSON نامعتبر: "+err.Error())
+			}
+			full[k] = val
+		}
+		b, _ := json.MarshalIndent(full, "", "  ")
+		t.Full = string(b)
 	}
 	for k, v := range map[string]string{"outbounds": in.Outbounds, "routing": in.Routing, "dns": in.DNS, "observatory": in.Observatory} {
 		if err := validJSON(v, k); err != nil {
@@ -58,13 +94,46 @@ func (a *App) PutXrayTemplate(c *fiber.Ctx) error {
 			return errJSON(c, fiber.StatusBadRequest, "outbounds باید آرایه JSON باشد")
 		}
 	}
-	var t models.XrayTemplate
-	a.DB.FirstOrCreate(&t, models.XrayTemplate{ID: 1})
 	t.Outbounds, t.Routing, t.DNS, t.Observatory = in.Outbounds, in.Routing, in.DNS, in.Observatory
 	if err := a.DB.Save(&t).Error; err != nil {
 		return err
 	}
 	return a.afterTemplateChange(c, in.Sync)
+}
+
+// parseFullTemplate checks a whole xray template. 3x-ui counts traffic
+// through the api/stats/policy sections, so they must be kept.
+func parseFullTemplate(s string) (map[string]any, error) {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "کانفیگ کامل: JSON نامعتبر: "+err.Error())
+	}
+	if m == nil {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "کانفیگ کامل باید یک شیء JSON باشد")
+	}
+	if _, ok := m["outbounds"].([]any); !ok {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "کانفیگ کامل باید outbounds (آرایه) داشته باشد")
+	}
+	var missing []string
+	for _, k := range []string{"api", "stats", "policy"} {
+		if _, ok := m[k]; !ok {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "بخش‌های "+strings.Join(missing, "، ")+" لازم است؛ 3x-ui ترافیک کاربران را از طریق آن‌ها می‌شمارد")
+	}
+	return m, nil
+}
+
+// jsonKey returns one key of m as JSON text ("" when absent).
+func jsonKey(m map[string]any, k string) string {
+	v, ok := m[k]
+	if !ok || v == nil {
+		return ""
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
 func (a *App) afterTemplateChange(c *fiber.Ctx, sync bool) error {
@@ -225,4 +294,68 @@ func (a *App) NewX25519(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(fiber.Map{"private_key": priv, "public_key": pub})
+}
+
+// templateServer is the server named by ?server_id / server_id, or the first
+// live one with 3x-ui, for actions that need a real panel.
+func (a *App) templateServer(id int) (*models.Server, error) {
+	var s models.Server
+	q := a.DB.Preload("ProviderAccount").Where("status IN ? AND xui_port > 0 AND ipv4 <> ''", []string{models.ServerActive, models.ServerFiltered})
+	if id > 0 {
+		q = q.Where("id = ?", id)
+	}
+	if err := q.Order("id").First(&s).Error; err != nil {
+		return nil, fiber.NewError(fiber.StatusConflict, "هیچ سرور فعالی با 3x-ui پیدا نشد")
+	}
+	return &s, nil
+}
+
+// XrayBase returns the live xray template of one server, to start the
+// Advanced editor from what 3x-ui actually runs.
+func (a *App) XrayBase(c *fiber.Ctx) error {
+	s, err := a.templateServer(c.QueryInt("server_id"))
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(c.UserContext(), 40*time.Second)
+	defer cancel()
+	remote, panel, err := a.Orch.RemoteFor(ctx, s)
+	if err != nil {
+		return errJSON(c, fiber.StatusBadGateway, err.Error())
+	}
+	defer remote.Close()
+	setting, err := panel.XraySetting(ctx)
+	if err != nil {
+		return errJSON(c, fiber.StatusBadGateway, err.Error())
+	}
+	return c.JSON(fiber.Map{"server": s.Name, "template": setting})
+}
+
+// TestOutbounds tests outbounds from a server, like 3x-ui's outbound test.
+func (a *App) TestOutbounds(c *fiber.Ctx) error {
+	var in struct {
+		ServerID  int              `json:"server_id"`
+		Mode      string           `json:"mode"`
+		Outbounds []map[string]any `json:"outbounds"`
+		Tags      []string         `json:"tags"`
+	}
+	if err := c.BodyParser(&in); err != nil {
+		return errJSON(c, fiber.StatusBadRequest, "invalid body")
+	}
+	s, err := a.templateServer(in.ServerID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(c.UserContext(), 60*time.Second)
+	defer cancel()
+	remote, _, err := a.Orch.RemoteFor(ctx, s)
+	if err != nil {
+		return errJSON(c, fiber.StatusBadGateway, err.Error())
+	}
+	defer remote.Close()
+	res, err := orchestrator.TestOutbounds(ctx, remote, in.Mode, in.Outbounds, in.Tags)
+	if err != nil {
+		return errJSON(c, fiber.StatusBadGateway, err.Error())
+	}
+	return c.JSON(fiber.Map{"server": s.Name, "results": res})
 }

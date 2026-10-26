@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/recover"
+	"gorm.io/gorm"
 
 	microserver "microserver"
 	"microserver/internal"
@@ -22,6 +24,7 @@ import (
 	"microserver/internal/database"
 	"microserver/internal/jobs"
 	"microserver/internal/middleware"
+	"microserver/internal/services/geoip"
 	"microserver/internal/services/orchestrator"
 	"microserver/internal/services/secret"
 	"microserver/internal/services/settings"
@@ -61,6 +64,8 @@ func main() {
 	engine := jobs.NewEngine(db, 6)
 	orch := orchestrator.New(db, st, key, engine)
 	orch.Register()
+	geo := geoip.Open(filepath.Join(cfg.DataDir, "geoip"))
+	orch.Geo = geo
 
 	tgBot := &bot.Manager{DB: db, Settings: st, Engine: engine, Orch: orch}
 	if err := tgBot.Start(ctx); err != nil {
@@ -84,6 +89,7 @@ func main() {
 	}
 	go scheduleChecks(ctx, engine, st)
 	go scheduleStats(ctx, orch, st)
+	go scheduleGeoIP(ctx, geo, st, db)
 
 	app := fiber.New(fiber.Config{
 		AppName:      "microServer",
@@ -97,6 +103,7 @@ func main() {
 	}))
 	a := &controllers.App{
 		DB: db, Cfg: cfg, Settings: st, Engine: engine, Orch: orch,
+		Geo:          geo,
 		Auth:         &middleware.Auth{Secret: cfg.JWTSecret, TTL: 7 * 24 * time.Hour},
 		TestTelegram: tgBot.Test,
 	}
@@ -152,6 +159,30 @@ func scheduleStats(ctx context.Context, o *orchestrator.Orchestrator, st *settin
 			}
 			last = time.Now()
 			o.CollectAll(ctx)
+		}
+	}
+}
+
+// scheduleGeoIP downloads the GeoIP databases when they are missing or a
+// month old, then resolves any stored address that has no answer yet.
+func scheduleGeoIP(ctx context.Context, geo *geoip.DB, st *settings.Store, db *gorm.DB) {
+	t := time.NewTicker(24 * time.Hour)
+	defer t.Stop()
+	for {
+		if geo.Stale(35 * 24 * time.Hour) {
+			uctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+			if err := geo.Update(uctx, st.Get(settings.GeoIPCityURL), st.Get(settings.GeoIPASNURL)); err != nil {
+				log.Printf("geoip: %v", err)
+			}
+			cancel()
+		}
+		if geo.Ready() {
+			orchestrator.FillMissingGeo(db, geo)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
 		}
 	}
 }

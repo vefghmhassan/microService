@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Alert, Button, Checkbox, Col, Flex, Input, InputNumber, Modal, Radio, Row, Select, Space, Switch, Table, Tag, Tooltip, Typography } from 'antd'
-import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, ImportOutlined, PlusOutlined } from '@ant-design/icons'
+import { Alert, App as AntApp, Button, Checkbox, Col, Flex, Input, InputNumber, Modal, Radio, Row, Select, Space, Spin, Switch, Table, Tag, Tooltip, Typography } from 'antd'
+import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, GlobalOutlined, ImportOutlined, PlusOutlined, ThunderboltOutlined, WifiOutlined } from '@ant-design/icons'
+import { post } from '../../api/hooks'
+import type { OutboundTestResult, TemplateResponse } from '../../api/types'
 import { alpnOptions, domainStrategies, fingerprints, outboundProtocols, ssMethods, vlessFlows, vmessSecurity, xhttpModes, type Obj } from '../../lib/xray'
 import { formToOutbound, linkToForm, outboundToForm, proxyProtocols, type OutboundForm } from '../../lib/outbound'
 
@@ -10,6 +12,31 @@ function F({ label, tip, children }: { label: string; tip?: string; children: Re
       <Col xs={24} sm={8}><Tooltip title={tip}><Typography.Text>{label}</Typography.Text></Tooltip></Col>
       <Col xs={24} sm={16}>{children}</Col>
     </Row>
+  )
+}
+
+type TestMode = 'tcp' | 'real' | 'http'
+const testModes: { value: TestMode; label: string; tip: string; icon: React.ReactNode }[] = [
+  { value: 'tcp', label: 'پینگ TCP', tip: 'زمان اتصال TCP از سرور به آدرس خروجی (همه همزمان)', icon: <WifiOutlined /> },
+  { value: 'real', label: 'تست واقعی', tip: 'یک درخواست واقعی از داخل هر خروجی (مثل Real Delay در 3x-ui)', icon: <ThunderboltOutlined /> },
+  { value: 'http', label: 'HTTP + کشور', tip: 'درخواست HTTP از داخل خروجی؛ IP خروجی و کشورش را نشان می‌دهد', icon: <GlobalOutlined /> },
+]
+
+const flagOf = (cc?: string) => (cc && cc.length === 2 ? String.fromCodePoint(...[...cc.toUpperCase()].map((c) => 0x1f1a5 + c.charCodeAt(0))) : '')
+
+function TestCell({ r, loading }: { r?: OutboundTestResult & { mode: TestMode }; loading: boolean }) {
+  if (loading) return <Spin size="small" />
+  if (!r) return <Typography.Text type="secondary">—</Typography.Text>
+  if (r.skipped) return <Tooltip title={r.error}><Tag>N/A</Tag></Tooltip>
+  if (!r.ok) return <Tooltip title={r.error}><Tag color="red">{r.mode === 'tcp' ? 'TCP ' : ''}خطا</Tag></Tooltip>
+  const color = r.ms < 300 ? 'green' : r.ms < 1000 ? 'orange' : 'red'
+  return (
+    <Space size={4} wrap>
+      <Tag color={color} style={{ direction: 'ltr' }}>{r.mode === 'tcp' ? 'tcp ' : ''}{r.ms} ms</Tag>
+      {r.mode === 'http' && r.country_code && (
+        <Tooltip title={`${r.ip} · ${r.city ?? ''} · ${r.isp ?? ''}`}><span>{flagOf(r.country_code)} {r.country_code}</span></Tooltip>
+      )}
+    </Space>
   )
 }
 
@@ -26,9 +53,31 @@ function endpoint(o: Obj): string {
  * table with order arrows and a form dialog per outbound. The first outbound
  * is xray's default route.
  */
-export function OutboundsEditor({ value, onChange }: { value: Obj[]; onChange: (v: Obj[]) => void }) {
+export function OutboundsEditor({ value, onChange, servers }: { value: Obj[]; onChange: (v: Obj[]) => void; servers?: TemplateResponse['servers'] }) {
   const [editing, setEditing] = useState<{ i: number; f: OutboundForm } | null>(null)
   const [importOpen, setImportOpen] = useState(false)
+  const { message } = AntApp.useApp()
+  const live = (servers ?? []).filter((s) => s.status === 'active' || s.status === 'filtered')
+  const [serverId, setServerId] = useState<number>()
+  const [results, setResults] = useState<Record<string, OutboundTestResult & { mode: TestMode }>>({})
+  const [running, setRunning] = useState<{ mode: TestMode; tags: string[] } | null>(null)
+  const runTest = async (mode: TestMode, tags: string[] = []) => {
+    setRunning({ mode, tags })
+    try {
+      const r = await post<{ server: string; results: OutboundTestResult[] }>('/template/outbounds/test', { server_id: serverId ?? 0, mode, outbounds: value, tags })
+      setResults((cur) => {
+        const next = { ...cur }
+        for (const x of r.results) next[x.tag] = { ...x, mode }
+        return next
+      })
+      message.success(`تست از سرور ${r.server} انجام شد`)
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setRunning(null)
+    }
+  }
+  const busy = (tag?: string) => !!running && (!tag || !running.tags.length || running.tags.includes(tag))
   const move = (i: number, d: number) => {
     const next = [...value]
     ;[next[i], next[i + d]] = [next[i + d], next[i]]
@@ -40,6 +89,16 @@ export function OutboundsEditor({ value, onChange }: { value: Obj[]; onChange: (
       <Flex gap={8} wrap style={{ marginBottom: 12 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setEditing({ i: -1, f: { tag: '', protocol: 'freedom', domainStrategy: 'AsIs' } })}>افزودن خروجی</Button>
         <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>وارد کردن از لینک</Button>
+        <span style={{ flex: 1 }} />
+        <Select size="middle" placeholder={live.length ? 'تست از اولین سرور فعال' : 'سرور فعالی نیست'} allowClear style={{ minWidth: 190 }} value={serverId} onChange={setServerId}
+          options={live.map((s) => ({ value: s.id, label: `${s.name} · ${s.ipv4}` }))} />
+        <Space.Compact>
+          {testModes.map((m) => (
+            <Tooltip key={m.value} title={m.tip}>
+              <Button icon={m.icon} disabled={!live.length || !!running} loading={running?.mode === m.value && !running.tags.length} onClick={() => runTest(m.value)}>{m.label}</Button>
+            </Tooltip>
+          ))}
+        </Space.Compact>
         {!tags.includes('direct') && (
           <Button onClick={() => onChange([...value, { tag: 'direct', protocol: 'freedom', settings: { domainStrategy: 'AsIs' } }])}>+ direct</Button>
         )}
@@ -48,7 +107,7 @@ export function OutboundsEditor({ value, onChange }: { value: Obj[]; onChange: (
         )}
       </Flex>
       <Table<Obj>
-        size="small" rowKey={(o) => o.tag ?? Math.random()} dataSource={value} pagination={false} scroll={{ x: 560 }}
+        size="small" rowKey={(o) => o.tag ?? Math.random()} dataSource={value} pagination={false} scroll={{ x: 860 }}
         columns={[
           { title: '#', width: 90, render: (_, _o, i) => (
             <Flex gap={2} align="center">
@@ -61,8 +120,10 @@ export function OutboundsEditor({ value, onChange }: { value: Obj[]; onChange: (
           { title: 'پروتکل', dataIndex: 'protocol', render: (p: string) => <Tag>{p}</Tag> },
           { title: 'آدرس', render: (_, o) => <span dir="ltr">{endpoint(o) || '—'}</span> },
           { title: 'ترنسپورت', render: (_, o) => (o.streamSettings ? `${o.streamSettings.network ?? 'tcp'} / ${o.streamSettings.security || 'none'}` : '—') },
-          { title: '', width: 80, render: (_, o, i) => (
+          { title: 'تست', width: 190, render: (_, o) => <TestCell r={results[o.tag]} loading={busy(o.tag)} /> },
+          { title: '', width: 110, render: (_, o, i) => (
             <Flex gap={4}>
+              <Tooltip title="تست واقعی همین خروجی"><Button size="small" icon={<ThunderboltOutlined />} disabled={!live.length || !!running || !o.tag} onClick={() => runTest('real', [o.tag])} /></Tooltip>
               <Button size="small" icon={<EditOutlined />} onClick={() => setEditing({ i, f: outboundToForm(o) })} />
               <Button size="small" danger icon={<DeleteOutlined />} onClick={() => onChange(value.filter((_, j) => j !== i))} />
             </Flex>

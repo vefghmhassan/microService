@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +51,7 @@ func (o *Orchestrator) CollectAll(ctx context.Context) {
 		}(&servers[i])
 	}
 	wg.Wait()
+	PruneClientIPs(o.DB)
 }
 
 // CollectStats reads one panel's inbounds (cumulative up/down per inbound and
@@ -64,6 +66,17 @@ func (o *Orchestrator) CollectStats(ctx context.Context, s *models.Server) error
 	inbounds, err := panel.ListInbounds(ctx)
 	if err != nil {
 		return err
+	}
+	tagRemark := map[string]string{}
+	for _, in := range inbounds {
+		if in.Tag != "" {
+			tagRemark[in.Tag] = strings.TrimPrefix(in.Remark, ManagedPrefix)
+		}
+	}
+	if err := o.ensureAccessLog(ctx, s, panel); err != nil {
+		log.Printf("stats %s: access log: %v", s.Name, err)
+	} else if err := o.collectIPs(ctx, remote, s, tagRemark); err != nil {
+		log.Printf("stats %s: client ips: %v", s.Name, err)
 	}
 	online := map[string]bool{}
 	if emails, err := panel.Onlines(ctx); err == nil {

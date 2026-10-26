@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Flex, Modal, Skeleton, Switch, Table, Tabs, Typography } from 'antd'
+import { Alert, Button, Card, Flex, Modal, Skeleton, Switch, Table, Tabs, Tag, Typography } from 'antd'
 import { DeleteOutlined, EditOutlined, LinkOutlined, PlusOutlined, SaveOutlined, SyncOutlined } from '@ant-design/icons'
 import { del, get, keys, post, put, useAction, useTemplate } from '../api/hooks'
-import type { InboundTemplate, Job, Link, XrayTemplate } from '../api/types'
+import type { InboundTemplate, Job, Link, TemplateResponse, XrayTemplate } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { StatusTag } from '../components/StatusTag'
 import { JsonEditor } from '../components/JsonEditor'
@@ -11,6 +11,7 @@ import { CopyText } from '../components/CopyText'
 import { useOpenJob } from '../components/JobViewer'
 import { InboundFormModal } from '../components/template/InboundFormModal'
 import { OutboundsEditor } from '../components/template/OutboundsEditor'
+import { AdvancedXray } from '../components/template/AdvancedXray'
 import { RoutingEditor, type RoutingValue } from '../components/template/RoutingEditor'
 import { serverStatus, syncStatus } from '../lib/labels'
 import { prettyJSON, timeAgo } from '../lib/format'
@@ -32,12 +33,14 @@ export function Templates() {
         subtitle={`نسخه ${data.xray.version} · ${timeAgo(data.xray.updated_at)} — هر تغییر روی همه پنل‌ها اعمال می‌شود`}
         extra={<Button type="primary" icon={<SyncOutlined />} loading={syncAll.isPending} onClick={() => syncAll.mutate()}>اعمال روی همه ({data.servers.length})</Button>}
       />
+      {data.xray.full && <Alert type="info" showIcon style={{ marginBottom: 16 }} title="حالت پیشرفته فعال است: کل تمپلیت Xray از تب «پیشرفته» روی پنل‌ها نوشته می‌شود؛ تغییرات تب‌های خروجی/روتینگ/DNS هم داخل همان ذخیره می‌شود." />}
       {drift > 0 && <Alert type="warning" showIcon style={{ marginBottom: 16 }} title={`${drift} سرور با تمپلیت فعلی همگام نیستند.`} />}
       <Tabs items={[
         { key: 'inbounds', label: `ورودی‌ها (${data.inbounds.length})`, children: <Inbounds list={data.inbounds} /> },
-        { key: 'outbounds', label: 'خروجی‌ها', children: <XrayForm xray={data.xray} part="outbounds" inboundTags={inboundTags} /> },
+        { key: 'outbounds', label: 'خروجی‌ها', children: <XrayForm xray={data.xray} part="outbounds" inboundTags={inboundTags} servers={data.servers} /> },
         { key: 'routing', label: 'روتینگ و بالانسر', children: <XrayForm xray={data.xray} part="routing" inboundTags={inboundTags} /> },
         { key: 'dns', label: 'DNS', children: <DNSPart xray={data.xray} /> },
+        { key: 'advanced', label: <span>پیشرفته {data.xray.full && <Tag color="green" style={{ marginInlineStart: 4 }}>فعال</Tag>}</span>, children: <AdvancedXray data={data} /> },
         {
           key: 'servers', label: 'وضعیت سرورها',
           children: (
@@ -62,7 +65,7 @@ const starterOutbounds: Obj[] = [
 ]
 
 /** XrayForm edits outbounds or routing with forms and saves the xray part. */
-function XrayForm({ xray, part, inboundTags }: { xray: XrayTemplate; part: 'outbounds' | 'routing'; inboundTags: string[] }) {
+function XrayForm({ xray, part, inboundTags, servers }: { xray: XrayTemplate; part: 'outbounds' | 'routing'; inboundTags: string[]; servers?: TemplateResponse['servers'] }) {
   const openJob = useOpenJob()
   const initial = useMemo(() => ({
     outbounds: xray.outbounds ? parseArray(xray.outbounds) : starterOutbounds,
@@ -98,7 +101,7 @@ function XrayForm({ xray, part, inboundTags }: { xray: XrayTemplate; part: 'outb
   return (
     <Card size="small">
       {part === 'outbounds'
-        ? <OutboundsEditor value={outbounds} onChange={(v) => { setOutbounds(v); setDirty(true) }} />
+        ? <OutboundsEditor value={outbounds} servers={servers} onChange={(v) => { setOutbounds(v); setDirty(true) }} />
         : <RoutingEditor value={routing} outboundTags={outboundTags} inboundTags={inboundTags} onChange={(v) => { setRouting(v); setDirty(true) }} />}
       <Flex gap={8} style={{ marginTop: 16 }} wrap align="center">
         <Button icon={<SaveOutlined />} disabled={!dirty} loading={save.isPending && !save.variables} onClick={() => save.mutate(false)}>ذخیره</Button>

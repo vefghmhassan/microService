@@ -13,6 +13,7 @@ import { Servers } from './pages/Servers'
 import { ServerDetail } from './pages/ServerDetail'
 import { Providers } from './pages/Providers'
 import { IPPool } from './pages/IPPool'
+import { GeoReport } from './pages/GeoReport'
 import { Checks } from './pages/Checks'
 import { Jobs } from './pages/Jobs'
 import { Templates } from './pages/Templates'
@@ -57,6 +58,7 @@ export default function App() {
             <Route path="/configs" element={<ConfigBuilder />} />
             <Route path="/checks" element={<Checks />} />
             <Route path="/ips" element={<IPPool />} />
+            <Route path="/geo" element={<GeoReport />} />
             <Route path="/locations" element={<Locations />} />
             <Route path="/providers" element={<Providers />} />
             <Route path="/jobs" element={<Jobs />} />

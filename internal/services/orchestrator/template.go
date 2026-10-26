@@ -39,6 +39,9 @@ func LoadSnapshot(db *gorm.DB) (*Snapshot, error) {
 	}
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00", canonical(snap.Xray.Outbounds), canonical(snap.Xray.Routing), canonical(snap.Xray.DNS), canonical(snap.Xray.Observatory))
+	if snap.Xray.Full != "" {
+		fmt.Fprintf(h, "full:%s\x00", canonical(snap.Xray.Full))
+	}
 	ins := append([]models.InboundTemplate{}, snap.Inbounds...)
 	sort.Slice(ins, func(i, j int) bool { return ins[i].Port < ins[j].Port })
 	for _, in := range ins {
@@ -129,13 +132,22 @@ func Apply(ctx context.Context, p Panel, snap *Snapshot, logf func(string, ...an
 		}
 	}
 
-	if snap.Xray.Outbounds != "" || snap.Xray.Routing != "" || snap.Xray.DNS != "" || snap.Xray.Observatory != "" {
+	{
 		setting, err := p.XraySetting(ctx)
 		if err != nil {
 			return fmt.Errorf("read xray template: %w", err)
 		}
+		if snap.Xray.Full != "" {
+			var full map[string]any
+			if err := json.Unmarshal([]byte(snap.Xray.Full), &full); err != nil {
+				return fmt.Errorf("full xray template is not valid JSON: %w", err)
+			}
+			setting = full
+		}
+		// The GeoIP report reads client addresses from the access log.
+		withAccessLog(setting)
 		for key, val := range map[string]string{"outbounds": snap.Xray.Outbounds, "routing": snap.Xray.Routing, "dns": snap.Xray.DNS, "observatory": snap.Xray.Observatory} {
-			if strings.TrimSpace(val) == "" {
+			if snap.Xray.Full != "" || strings.TrimSpace(val) == "" {
 				continue
 			}
 			var v any
@@ -147,7 +159,7 @@ func Apply(ctx context.Context, p Panel, snap *Snapshot, logf func(string, ...an
 		if err := p.UpdateXraySetting(ctx, setting); err != nil {
 			return fmt.Errorf("update xray template: %w", err)
 		}
-		logf("applied outbounds/routing/dns (template v%d)", snap.Xray.Version)
+		logf("applied xray template v%d", snap.Xray.Version)
 	}
 	if err := p.RestartXray(ctx); err != nil {
 		return fmt.Errorf("restart xray: %w", err)
