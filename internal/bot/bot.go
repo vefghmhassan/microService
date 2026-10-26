@@ -3,6 +3,7 @@
 package bot
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 
 	tg "github.com/go-telegram/bot"
 	tgm "github.com/go-telegram/bot/models"
+	qrcode "github.com/skip2/go-qrcode"
 	"gorm.io/gorm"
 
 	"microserver/internal/jobs"
@@ -29,6 +31,7 @@ type Manager struct {
 	DB       *gorm.DB
 	Settings *settings.Store
 	Engine   *jobs.Engine
+	Orch     *orchestrator.Orchestrator
 
 	mu     sync.Mutex
 	b      *tg.Bot
@@ -71,11 +74,21 @@ func (m *Manager) Start(parent context.Context) error {
 	if err != nil {
 		return fmt.Errorf("telegram: %w", err)
 	}
-	b.RegisterHandler(tg.HandlerTypeMessageText, "/servers", tg.MatchTypeCommand, m.cmdServers)
-	b.RegisterHandler(tg.HandlerTypeMessageText, "/status", tg.MatchTypeCommand, m.cmdStatus)
-	b.RegisterHandler(tg.HandlerTypeMessageText, "/new", tg.MatchTypeCommand, m.cmdNew)
-	b.RegisterHandler(tg.HandlerTypeMessageText, "/checkall", tg.MatchTypeCommand, m.cmdCheckAll)
-	b.RegisterHandler(tg.HandlerTypeMessageText, "/sync", tg.MatchTypeCommand, m.cmdSyncAll)
+	// Each action answers both its /command and its main-menu keyboard button.
+	for _, h := range []struct {
+		cmd, btn string
+		fn       tg.HandlerFunc
+	}{
+		{"/servers", btnServers, m.cmdServers},
+		{"/status", btnStatus, m.cmdStatus},
+		{"/new", btnNew, m.cmdNew},
+		{"/checkall", btnCheckAll, m.cmdCheckAll},
+		{"/sync", btnSync, m.cmdSyncAll},
+		{"/help", btnHelp, m.help},
+	} {
+		b.RegisterHandler(tg.HandlerTypeMessageText, h.cmd, tg.MatchTypeCommand, h.fn)
+		b.RegisterHandler(tg.HandlerTypeMessageText, h.btn, tg.MatchTypeExact, h.fn)
+	}
 	b.RegisterHandler(tg.HandlerTypeCallbackQueryData, "", tg.MatchTypePrefix, m.callback)
 
 	ctx, cancel := context.WithCancel(parent)
@@ -178,11 +191,38 @@ func (m *Manager) OnJobFinish(j *models.Job) {
 	m.Notify(fmt.Sprintf("❌ کار %s #%d%s ناموفق بود:\n%s", kindFa(j.Kind), j.ID, name, truncate(j.Error, 500)))
 }
 
-func (m *Manager) send(ctx context.Context, b *tg.Bot, chat int64, text string, kb [][]tgm.InlineKeyboardButton) {
-	p := &tg.SendMessageParams{ChatID: chat, Text: text, ParseMode: tgm.ParseModeHTML}
-	if kb != nil {
-		p.ReplyMarkup = &tgm.InlineKeyboardMarkup{InlineKeyboard: kb}
+// Main-menu keyboard buttons; their text is what the bot receives on a tap.
+const (
+	btnServers  = "🖥 سرورها"
+	btnStatus   = "📊 وضعیت و مصرف"
+	btnNew      = "➕ سرور جدید"
+	btnCheckAll = "📡 چک همه از ایران"
+	btnSync     = "🔁 اعمال تمپلیت"
+	btnHelp     = "❓ راهنما"
+)
+
+func mainMenu() *tgm.ReplyKeyboardMarkup {
+	return &tgm.ReplyKeyboardMarkup{
+		Keyboard: [][]tgm.KeyboardButton{
+			{{Text: btnServers}, {Text: btnStatus}},
+			{{Text: btnNew}, {Text: btnCheckAll}},
+			{{Text: btnSync}, {Text: btnHelp}},
+		},
+		ResizeKeyboard: true,
+		IsPersistent:   true,
 	}
+}
+
+func (m *Manager) send(ctx context.Context, b *tg.Bot, chat int64, text string, kb [][]tgm.InlineKeyboardButton) {
+	var rm tgm.ReplyMarkup
+	if kb != nil {
+		rm = &tgm.InlineKeyboardMarkup{InlineKeyboard: kb}
+	}
+	m.sendMarkup(ctx, b, chat, text, rm)
+}
+
+func (m *Manager) sendMarkup(ctx context.Context, b *tg.Bot, chat int64, text string, rm tgm.ReplyMarkup) {
+	p := &tg.SendMessageParams{ChatID: chat, Text: text, ParseMode: tgm.ParseModeHTML, ReplyMarkup: rm}
 	if _, err := b.SendMessage(ctx, p); err != nil {
 		log.Printf("telegram send: %v", err)
 	}
@@ -192,14 +232,14 @@ func (m *Manager) help(ctx context.Context, b *tg.Bot, u *tgm.Update) {
 	if u.Message == nil {
 		return
 	}
-	m.send(ctx, b, u.Message.Chat.ID, strings.Join([]string{
-		"<b>microServer</b>",
-		"/servers — فهرست سرورها و عملیات",
-		"/status — خلاصه وضعیت",
-		"/new — ساخت سرور جدید",
-		"/checkall — چک همه سرورها از ایران",
-		"/sync — اعمال تمپلیت روی همه پنل‌ها",
-	}, "\n"), nil)
+	m.sendMarkup(ctx, b, u.Message.Chat.ID, strings.Join([]string{
+		"<b>microServer</b> — از دکمه‌های پایین صفحه استفاده کنید:",
+		btnServers + " — فهرست سرورها و عملیات هر سرور",
+		btnStatus + " — خلاصه وضعیت، ترافیک و کاربران آنلاین",
+		btnNew + " — ساخت سرور جدید (خودکار یا روی یک حساب)",
+		btnCheckAll + " — چک همه سرورها از ایران",
+		btnSync + " — اعمال تمپلیت روی همه پنل‌ها",
+	}, "\n"), mainMenu())
 }
 
 func (m *Manager) cmdServers(ctx context.Context, b *tg.Bot, u *tgm.Update) {
@@ -233,6 +273,10 @@ func (m *Manager) cmdStatus(ctx context.Context, b *tg.Bot, u *tgm.Update) {
 	var active int64
 	m.DB.Model(&models.Job{}).Where("status IN ?", []string{models.JobQueued, models.JobRunning}).Count(&active)
 	lines = append(lines, fmt.Sprintf("⚙️ کارهای در جریان: %d", active))
+	var t struct{ Up, Down, Online int64 }
+	m.DB.Model(&models.Server{}).Select("COALESCE(SUM(traffic_up),0) AS up, COALESCE(SUM(traffic_down),0) AS down, COALESCE(SUM(online_count),0) AS online").
+		Where("status <> ?", models.ServerDeleted).Scan(&t)
+	lines = append(lines, fmt.Sprintf("📈 ترافیک کل: %s · 👥 آنلاین: %d", humanBytes(t.Up+t.Down), t.Online))
 	m.send(ctx, b, u.Message.Chat.ID, strings.Join(lines, "\n"), nil)
 }
 
@@ -314,6 +358,23 @@ func (m *Manager) callback(ctx context.Context, b *tg.Bot, u *tgm.Update) {
 		enqueue(orchestrator.KindUpload, struct{}{}, "⬆️ بارگذاری روی vpn-pannel در صف قرار گرفت.")
 	case "lnk":
 		m.sendLinks(ctx, b, chat, id)
+	case "qr":
+		m.sendQRs(ctx, b, chat, id)
+	case "rpl":
+		m.send(ctx, b, chat, "یک سرور جدید ساخته شود و کانفیگ‌ها به آن منتقل شوند، بعد این سرور حذف شود؟", [][]tgm.InlineKeyboardButton{{
+			{Text: "♻️ بله، جایگزین کن", CallbackData: fmt.Sprintf("rplok:%d", id)},
+			{Text: "انصراف", CallbackData: fmt.Sprintf("srv:%d", id)},
+		}})
+	case "rplok":
+		var s models.Server
+		if m.DB.First(&s, id).Error != nil || m.Orch == nil {
+			return
+		}
+		if _, err := m.Orch.QueueReplace(&s, "manual (telegram)", "telegram"); err != nil {
+			m.send(ctx, b, chat, "خطا: "+html.EscapeString(err.Error()), nil)
+			return
+		}
+		m.send(ctx, b, chat, "♻️ جایگزینی سرور در صف قرار گرفت؛ نتیجه را خبر می‌دهم.", nil)
 	case "del":
 		m.send(ctx, b, chat, "⚠️ سرور برای همیشه حذف شود؟", [][]tgm.InlineKeyboardButton{{
 			{Text: "🗑 بله، حذف کن", CallbackData: fmt.Sprintf("delok:%d", id)},
@@ -359,13 +420,20 @@ func (m *Manager) showServer(ctx context.Context, b *tg.Bot, chat int64, id uint
 	if s.ProviderAccount != nil {
 		prov = s.ProviderAccount.Name
 	}
-	text := fmt.Sprintf("<b>%s</b>\nوضعیت: %s %s\nIP: <code>%s</code>\nارائه‌دهنده: %s · %s\n3x-ui: %s · xray: %s\nهمگام‌سازی: %s\nآخرین چک: %s\nتعداد تعویض IP: %d",
+	traffic := humanBytes(s.TrafficUp + s.TrafficDown)
+	if m.Orch != nil {
+		if lim := m.Orch.TrafficLimit(&s); lim > 0 {
+			traffic += " از " + humanBytes(lim)
+		}
+	}
+	text := fmt.Sprintf("<b>%s</b>\nوضعیت: %s %s\nIP: <code>%s</code>\nارائه‌دهنده: %s · %s\n3x-ui: %s · xray: %s\nهمگام‌سازی: %s\nآخرین چک: %s\nتعداد تعویض IP: %d\n📈 ترافیک: %s · 👥 آنلاین: %d",
 		html.EscapeString(s.Name), statusIcon(s.Status), statusFa(s.Status), s.IPv4, html.EscapeString(prov), s.Region,
-		orDash(s.PanelVersion), orDash(s.XrayVersion), orDash(s.SyncStatus), check, s.RotateCount)
+		orDash(s.PanelVersion), orDash(s.XrayVersion), orDash(s.SyncStatus), check, s.RotateCount, traffic, s.OnlineCount)
 	m.send(ctx, b, chat, text, [][]tgm.InlineKeyboardButton{
 		{{Text: "🔄 تعویض IP", CallbackData: fmt.Sprintf("rot:%d", id)}, {Text: "📡 چک ایران", CallbackData: fmt.Sprintf("chk:%d", id)}},
 		{{Text: "🔁 همگام‌سازی", CallbackData: fmt.Sprintf("syn:%d", id)}, {Text: "🔗 لینک‌ها", CallbackData: fmt.Sprintf("lnk:%d", id)}},
-		{{Text: "⬆️ بارگذاری", CallbackData: fmt.Sprintf("upl:%d", id)}, {Text: "🗑 حذف", CallbackData: fmt.Sprintf("del:%d", id)}},
+		{{Text: "📷 QR کانفیگ‌ها", CallbackData: fmt.Sprintf("qr:%d", id)}, {Text: "⬆️ بارگذاری", CallbackData: fmt.Sprintf("upl:%d", id)}},
+		{{Text: "♻️ جایگزینی سرور", CallbackData: fmt.Sprintf("rpl:%d", id)}, {Text: "🗑 حذف", CallbackData: fmt.Sprintf("del:%d", id)}},
 	})
 }
 
@@ -393,6 +461,54 @@ func (m *Manager) sendLinks(ctx context.Context, b *tg.Bot, chat int64, id uint)
 		sb.WriteString(line)
 	}
 	m.send(ctx, b, chat, sb.String(), nil)
+}
+
+// sendQRs sends each config of the server as a QR photo, captioned with its link.
+func (m *Manager) sendQRs(ctx context.Context, b *tg.Bot, chat int64, id uint) {
+	var s models.Server
+	if m.DB.First(&s, id).Error != nil {
+		return
+	}
+	snap, err := orchestrator.LoadSnapshot(m.DB)
+	if err != nil {
+		return
+	}
+	links, _ := orchestrator.Links(snap, s.IPv4)
+	if len(links) == 0 {
+		m.send(ctx, b, chat, "لینکی وجود ندارد", nil)
+		return
+	}
+	for _, l := range links {
+		png, err := qrcode.Encode(l.URL, qrcode.Medium, 512)
+		if err != nil {
+			log.Printf("telegram qr: %v", err)
+			continue
+		}
+		// Captions are capped at 1024 characters; drop the link if it does not fit.
+		caption := "<b>" + html.EscapeString(l.Email) + "</b>\n<code>" + html.EscapeString(l.URL) + "</code>"
+		if len([]rune(caption)) > 1000 {
+			caption = "<b>" + html.EscapeString(l.Email) + "</b>"
+		}
+		if _, err := b.SendPhoto(ctx, &tg.SendPhotoParams{
+			ChatID: chat, Photo: &tgm.InputFileUpload{Filename: "qr.png", Data: bytes.NewReader(png)},
+			Caption: caption, ParseMode: tgm.ParseModeHTML,
+		}); err != nil {
+			log.Printf("telegram send qr: %v", err)
+		}
+	}
+}
+
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 func statusIcon(s string) string {

@@ -62,7 +62,7 @@ func main() {
 	orch := orchestrator.New(db, st, key, engine)
 	orch.Register()
 
-	tgBot := &bot.Manager{DB: db, Settings: st, Engine: engine}
+	tgBot := &bot.Manager{DB: db, Settings: st, Engine: engine, Orch: orch}
 	if err := tgBot.Start(ctx); err != nil {
 		log.Printf("telegram: %v", err)
 	}
