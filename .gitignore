@@ -1,0 +1,9 @@
+.env
+/data/
+/microserver
+/microserver.exe
+/server
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
+.idea/

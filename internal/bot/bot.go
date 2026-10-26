@@ -1,0 +1,445 @@
+// Package bot is the Telegram front end: the same actions as the dashboard
+// (list, check, rotate IP, sync, delete, create) plus notifications.
+package bot
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"html"
+	"log"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	tg "github.com/go-telegram/bot"
+	tgm "github.com/go-telegram/bot/models"
+	"gorm.io/gorm"
+
+	"microserver/internal/jobs"
+	"microserver/internal/models"
+	"microserver/internal/services/orchestrator"
+	"microserver/internal/services/settings"
+)
+
+type Manager struct {
+	DB       *gorm.DB
+	Settings *settings.Store
+	Engine   *jobs.Engine
+
+	mu     sync.Mutex
+	b      *tg.Bot
+	cancel context.CancelFunc
+	chats  map[int64]bool
+}
+
+// Start (re)starts the bot from the current settings; with no token it stops.
+func (m *Manager) Start(parent context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel, m.b = nil, nil
+	}
+	token := m.Settings.Get(settings.TelegramToken)
+	m.chats = map[int64]bool{}
+	for _, s := range m.Settings.List(settings.TelegramChatIDs) {
+		if id, err := strconv.ParseInt(s, 10, 64); err == nil {
+			m.chats[id] = true
+		}
+	}
+	if token == "" {
+		return nil
+	}
+	httpClient := &http.Client{Timeout: 70 * time.Second}
+	if p := m.Settings.Get(settings.TelegramProxy); p != "" {
+		pu, err := url.Parse(p)
+		if err != nil {
+			return fmt.Errorf("telegram proxy: %w", err)
+		}
+		httpClient.Transport = &http.Transport{Proxy: http.ProxyURL(pu)}
+	}
+	b, err := tg.New(token,
+		tg.WithHTTPClient(60*time.Second, httpClient),
+		tg.WithMiddlewares(m.guard),
+		tg.WithDefaultHandler(m.help),
+		tg.WithErrorsHandler(func(err error) { log.Printf("telegram: %v", err) }),
+	)
+	if err != nil {
+		return fmt.Errorf("telegram: %w", err)
+	}
+	b.RegisterHandler(tg.HandlerTypeMessageText, "/servers", tg.MatchTypeCommand, m.cmdServers)
+	b.RegisterHandler(tg.HandlerTypeMessageText, "/status", tg.MatchTypeCommand, m.cmdStatus)
+	b.RegisterHandler(tg.HandlerTypeMessageText, "/new", tg.MatchTypeCommand, m.cmdNew)
+	b.RegisterHandler(tg.HandlerTypeMessageText, "/checkall", tg.MatchTypeCommand, m.cmdCheckAll)
+	b.RegisterHandler(tg.HandlerTypeMessageText, "/sync", tg.MatchTypeCommand, m.cmdSyncAll)
+	b.RegisterHandler(tg.HandlerTypeCallbackQueryData, "", tg.MatchTypePrefix, m.callback)
+
+	ctx, cancel := context.WithCancel(parent)
+	m.b, m.cancel = b, cancel
+	go b.Start(ctx)
+	log.Printf("telegram bot started (%d allowed chats)", len(m.chats))
+	return nil
+}
+
+func chatOf(u *tgm.Update) int64 {
+	switch {
+	case u.Message != nil:
+		return u.Message.Chat.ID
+	case u.CallbackQuery != nil && u.CallbackQuery.Message.Message != nil:
+		return u.CallbackQuery.Message.Message.Chat.ID
+	}
+	return 0
+}
+
+// guard drops updates from chats that are not allowed. An unknown chat is told
+// its id once, so the admin can paste it into the settings.
+func (m *Manager) guard(next tg.HandlerFunc) tg.HandlerFunc {
+	return func(ctx context.Context, b *tg.Bot, u *tgm.Update) {
+		id := chatOf(u)
+		m.mu.Lock()
+		ok := m.chats[id]
+		m.mu.Unlock()
+		if !ok {
+			if u.Message != nil {
+				_, _ = b.SendMessage(ctx, &tg.SendMessageParams{ChatID: id,
+					Text: fmt.Sprintf("دسترسی ندارید. شناسه این چت: <code>%d</code>\nآن را در تنظیمات پنل اضافه کنید.", id), ParseMode: tgm.ParseModeHTML})
+			}
+			return
+		}
+		next(ctx, b, u)
+	}
+}
+
+// Notify sends text to every allowed chat.
+func (m *Manager) Notify(text string) {
+	if !m.Settings.Bool(settings.TelegramNotify) {
+		return
+	}
+	m.mu.Lock()
+	b := m.b
+	chats := make([]int64, 0, len(m.chats))
+	for id := range m.chats {
+		chats = append(chats, id)
+	}
+	m.mu.Unlock()
+	if b == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for _, id := range chats {
+		if _, err := b.SendMessage(ctx, &tg.SendMessageParams{ChatID: id, Text: text}); err != nil {
+			log.Printf("telegram notify %d: %v", id, err)
+		}
+	}
+}
+
+// Test sends a message to every allowed chat and reports the first failure.
+func (m *Manager) Test() error {
+	m.mu.Lock()
+	b := m.b
+	chats := make([]int64, 0, len(m.chats))
+	for id := range m.chats {
+		chats = append(chats, id)
+	}
+	m.mu.Unlock()
+	if b == nil {
+		return errors.New("توکن ربات تنظیم نشده است")
+	}
+	if len(chats) == 0 {
+		return errors.New("هیچ chat id مجازی تنظیم نشده؛ به ربات پیام دهید تا شناسه را ببینید")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for _, id := range chats {
+		if _, err := b.SendMessage(ctx, &tg.SendMessageParams{ChatID: id, Text: "✅ اتصال ربات microServer برقرار است"}); err != nil {
+			return fmt.Errorf("chat %d: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// OnJobFinish reports failures; successes are announced by the flows.
+func (m *Manager) OnJobFinish(j *models.Job) {
+	if j.Status != models.JobFailed {
+		return
+	}
+	name := ""
+	if j.ServerID != nil {
+		var s models.Server
+		if m.DB.Select("name").First(&s, *j.ServerID).Error == nil {
+			name = " — " + s.Name
+		}
+	}
+	m.Notify(fmt.Sprintf("❌ کار %s #%d%s ناموفق بود:\n%s", kindFa(j.Kind), j.ID, name, truncate(j.Error, 500)))
+}
+
+func (m *Manager) send(ctx context.Context, b *tg.Bot, chat int64, text string, kb [][]tgm.InlineKeyboardButton) {
+	p := &tg.SendMessageParams{ChatID: chat, Text: text, ParseMode: tgm.ParseModeHTML}
+	if kb != nil {
+		p.ReplyMarkup = &tgm.InlineKeyboardMarkup{InlineKeyboard: kb}
+	}
+	if _, err := b.SendMessage(ctx, p); err != nil {
+		log.Printf("telegram send: %v", err)
+	}
+}
+
+func (m *Manager) help(ctx context.Context, b *tg.Bot, u *tgm.Update) {
+	if u.Message == nil {
+		return
+	}
+	m.send(ctx, b, u.Message.Chat.ID, strings.Join([]string{
+		"<b>microServer</b>",
+		"/servers — فهرست سرورها و عملیات",
+		"/status — خلاصه وضعیت",
+		"/new — ساخت سرور جدید",
+		"/checkall — چک همه سرورها از ایران",
+		"/sync — اعمال تمپلیت روی همه پنل‌ها",
+	}, "\n"), nil)
+}
+
+func (m *Manager) cmdServers(ctx context.Context, b *tg.Bot, u *tgm.Update) {
+	var list []models.Server
+	m.DB.Where("status <> ?", models.ServerDeleted).Order("id").Limit(60).Find(&list)
+	if len(list) == 0 {
+		m.send(ctx, b, u.Message.Chat.ID, "هیچ سروری وجود ندارد. /new", nil)
+		return
+	}
+	var kb [][]tgm.InlineKeyboardButton
+	for _, s := range list {
+		kb = append(kb, []tgm.InlineKeyboardButton{{
+			Text:         fmt.Sprintf("%s %s · %s", statusIcon(s.Status), s.Name, s.IPv4),
+			CallbackData: fmt.Sprintf("srv:%d", s.ID),
+		}})
+	}
+	m.send(ctx, b, u.Message.Chat.ID, "سرورها:", kb)
+}
+
+func (m *Manager) cmdStatus(ctx context.Context, b *tg.Bot, u *tgm.Update) {
+	type row struct {
+		Status string
+		N      int
+	}
+	var rows []row
+	m.DB.Model(&models.Server{}).Select("status, count(*) as n").Where("status <> ?", models.ServerDeleted).Group("status").Scan(&rows)
+	var lines []string
+	for _, r := range rows {
+		lines = append(lines, fmt.Sprintf("%s %s: %d", statusIcon(r.Status), statusFa(r.Status), r.N))
+	}
+	var active int64
+	m.DB.Model(&models.Job{}).Where("status IN ?", []string{models.JobQueued, models.JobRunning}).Count(&active)
+	lines = append(lines, fmt.Sprintf("⚙️ کارهای در جریان: %d", active))
+	m.send(ctx, b, u.Message.Chat.ID, strings.Join(lines, "\n"), nil)
+}
+
+func (m *Manager) cmdNew(ctx context.Context, b *tg.Bot, u *tgm.Update) {
+	var accs []models.ProviderAccount
+	m.DB.Where("enabled = ? AND default_region <> '' AND default_plan <> ''", true).Find(&accs)
+	var locs int64
+	m.DB.Model(&models.Location{}).Where("enabled = ?", true).Count(&locs)
+	if len(accs) == 0 && locs == 0 {
+		m.send(ctx, b, u.Message.Chat.ID, "نه لوکیشنی تعریف شده و نه حسابی با منطقه و پلن پیش‌فرض. از پنل تنظیم کنید.", nil)
+		return
+	}
+	var kb [][]tgm.InlineKeyboardButton
+	if locs > 0 {
+		kb = append(kb, []tgm.InlineKeyboardButton{{
+			Text: fmt.Sprintf("🤖 خودکار — طبق اولویت %d لوکیشن", locs), CallbackData: "newauto:1",
+		}})
+	}
+	for _, a := range accs {
+		kb = append(kb, []tgm.InlineKeyboardButton{{
+			Text:         fmt.Sprintf("%s (%s · %s/%s)", a.Name, a.Type, a.DefaultRegion, a.DefaultPlan),
+			CallbackData: fmt.Sprintf("new:%d", a.ID),
+		}})
+	}
+	m.send(ctx, b, u.Message.Chat.ID, "سرور جدید روی کدام حساب ساخته شود؟", kb)
+}
+
+func (m *Manager) cmdCheckAll(ctx context.Context, b *tg.Bot, u *tgm.Update) {
+	if _, err := m.Engine.Enqueue(orchestrator.KindCheckAll, nil, struct{}{}, "telegram"); err != nil {
+		m.send(ctx, b, u.Message.Chat.ID, "خطا: "+html.EscapeString(err.Error()), nil)
+		return
+	}
+	m.send(ctx, b, u.Message.Chat.ID, "📡 چک همه سرورها در صف قرار گرفت", nil)
+}
+
+func (m *Manager) cmdSyncAll(ctx context.Context, b *tg.Bot, u *tgm.Update) {
+	if _, err := m.Engine.Enqueue(orchestrator.KindSyncAll, nil, struct{}{}, "telegram"); err != nil {
+		m.send(ctx, b, u.Message.Chat.ID, "خطا: "+html.EscapeString(err.Error()), nil)
+		return
+	}
+	m.send(ctx, b, u.Message.Chat.ID, "🔁 اعمال تمپلیت روی همه سرورها در صف قرار گرفت", nil)
+}
+
+func (m *Manager) callback(ctx context.Context, b *tg.Bot, u *tgm.Update) {
+	q := u.CallbackQuery
+	if q == nil {
+		return
+	}
+	_, _ = b.AnswerCallbackQuery(ctx, &tg.AnswerCallbackQueryParams{CallbackQueryID: q.ID})
+	chat := chatOf(u)
+	action, arg, _ := strings.Cut(q.Data, ":")
+	id64, _ := strconv.ParseUint(arg, 10, 64)
+	id := uint(id64)
+
+	enqueue := func(kind string, params any, done string) {
+		sid := id
+		if _, err := m.Engine.Enqueue(kind, &sid, params, "telegram"); err != nil {
+			m.send(ctx, b, chat, "خطا: "+html.EscapeString(err.Error()), nil)
+			return
+		}
+		m.send(ctx, b, chat, done, nil)
+	}
+
+	switch action {
+	case "srv":
+		m.showServer(ctx, b, chat, id)
+	case "rot":
+		m.send(ctx, b, chat, "IP این سرور عوض شود؟", [][]tgm.InlineKeyboardButton{{
+			{Text: "✅ بله، تعویض کن", CallbackData: fmt.Sprintf("rotok:%d", id)},
+			{Text: "انصراف", CallbackData: fmt.Sprintf("srv:%d", id)},
+		}})
+	case "rotok":
+		enqueue(orchestrator.KindRotate, orchestrator.RotateParams{Reason: "telegram"}, "🔄 تعویض IP در صف قرار گرفت؛ نتیجه را خبر می‌دهم.")
+	case "chk":
+		enqueue(orchestrator.KindCheck, struct{}{}, "📡 چک از ایران در صف قرار گرفت.")
+	case "syn":
+		enqueue(orchestrator.KindSync, struct{}{}, "🔁 اعمال تمپلیت در صف قرار گرفت.")
+	case "upl":
+		enqueue(orchestrator.KindUpload, struct{}{}, "⬆️ بارگذاری روی vpn-pannel در صف قرار گرفت.")
+	case "lnk":
+		m.sendLinks(ctx, b, chat, id)
+	case "del":
+		m.send(ctx, b, chat, "⚠️ سرور برای همیشه حذف شود؟", [][]tgm.InlineKeyboardButton{{
+			{Text: "🗑 بله، حذف کن", CallbackData: fmt.Sprintf("delok:%d", id)},
+			{Text: "انصراف", CallbackData: fmt.Sprintf("srv:%d", id)},
+		}})
+	case "delok":
+		enqueue(orchestrator.KindDelete, struct{}{}, "🗑 حذف در صف قرار گرفت.")
+	case "new":
+		var a models.ProviderAccount
+		if m.DB.First(&a, id).Error != nil {
+			return
+		}
+		m.send(ctx, b, chat, fmt.Sprintf("ساخت سرور روی %s در %s با پلن %s؟", html.EscapeString(a.Name), a.DefaultRegion, a.DefaultPlan),
+			[][]tgm.InlineKeyboardButton{{
+				{Text: "✅ بساز", CallbackData: fmt.Sprintf("newok:%d", id)},
+			}})
+	case "newauto":
+		if _, err := m.Engine.Enqueue(orchestrator.KindProvisionAuto, nil, orchestrator.AutoParams{Count: 1}, "telegram"); err != nil {
+			m.send(ctx, b, chat, "خطا: "+html.EscapeString(err.Error()), nil)
+			return
+		}
+		m.send(ctx, b, chat, "🤖 ساخت خودکار شروع شد: لوکیشن‌ها به ترتیب امتحان می‌شوند و نتیجه را خبر می‌دهم.", nil)
+	case "newok":
+		if _, err := m.Engine.Enqueue(orchestrator.KindProvision, nil, orchestrator.ProvisionParams{AccountID: id}, "telegram"); err != nil {
+			m.send(ctx, b, chat, "خطا: "+html.EscapeString(err.Error()), nil)
+			return
+		}
+		m.send(ctx, b, chat, "🚀 ساخت سرور شروع شد؛ وقتی آماده شد خبر می‌دهم.", nil)
+	}
+}
+
+func (m *Manager) showServer(ctx context.Context, b *tg.Bot, chat int64, id uint) {
+	var s models.Server
+	if m.DB.Preload("ProviderAccount").First(&s, id).Error != nil {
+		m.send(ctx, b, chat, "سرور پیدا نشد", nil)
+		return
+	}
+	check := "—"
+	if s.LastCheckAt != nil {
+		check = fmt.Sprintf("%s (%s)", map[bool]string{true: "✅ باز", false: "⛔️ بسته"}[s.LastCheckOK != nil && *s.LastCheckOK], s.LastCheckAt.Format("01-02 15:04"))
+	}
+	prov := ""
+	if s.ProviderAccount != nil {
+		prov = s.ProviderAccount.Name
+	}
+	text := fmt.Sprintf("<b>%s</b>\nوضعیت: %s %s\nIP: <code>%s</code>\nارائه‌دهنده: %s · %s\n3x-ui: %s · xray: %s\nهمگام‌سازی: %s\nآخرین چک: %s\nتعداد تعویض IP: %d",
+		html.EscapeString(s.Name), statusIcon(s.Status), statusFa(s.Status), s.IPv4, html.EscapeString(prov), s.Region,
+		orDash(s.PanelVersion), orDash(s.XrayVersion), orDash(s.SyncStatus), check, s.RotateCount)
+	m.send(ctx, b, chat, text, [][]tgm.InlineKeyboardButton{
+		{{Text: "🔄 تعویض IP", CallbackData: fmt.Sprintf("rot:%d", id)}, {Text: "📡 چک ایران", CallbackData: fmt.Sprintf("chk:%d", id)}},
+		{{Text: "🔁 همگام‌سازی", CallbackData: fmt.Sprintf("syn:%d", id)}, {Text: "🔗 لینک‌ها", CallbackData: fmt.Sprintf("lnk:%d", id)}},
+		{{Text: "⬆️ بارگذاری", CallbackData: fmt.Sprintf("upl:%d", id)}, {Text: "🗑 حذف", CallbackData: fmt.Sprintf("del:%d", id)}},
+	})
+}
+
+func (m *Manager) sendLinks(ctx context.Context, b *tg.Bot, chat int64, id uint) {
+	var s models.Server
+	if m.DB.First(&s, id).Error != nil {
+		return
+	}
+	snap, err := orchestrator.LoadSnapshot(m.DB)
+	if err != nil {
+		return
+	}
+	links, _ := orchestrator.Links(snap, s.IPv4)
+	if len(links) == 0 {
+		m.send(ctx, b, chat, "لینکی وجود ندارد", nil)
+		return
+	}
+	var sb strings.Builder
+	for _, l := range links {
+		line := "<code>" + html.EscapeString(l.URL) + "</code>\n\n"
+		if sb.Len()+len(line) > 3800 {
+			m.send(ctx, b, chat, sb.String(), nil)
+			sb.Reset()
+		}
+		sb.WriteString(line)
+	}
+	m.send(ctx, b, chat, sb.String(), nil)
+}
+
+func statusIcon(s string) string {
+	switch s {
+	case models.ServerActive:
+		return "🟢"
+	case models.ServerFiltered:
+		return "🔴"
+	case models.ServerError:
+		return "⚠️"
+	case models.ServerRotating:
+		return "🔄"
+	default:
+		return "🟡"
+	}
+}
+
+func statusFa(s string) string {
+	return map[string]string{
+		models.ServerCreating: "در حال ساخت", models.ServerChecking: "در حال چک", models.ServerInstalling: "نصب پنل",
+		models.ServerConfiguring: "پیکربندی", models.ServerActive: "فعال", models.ServerFiltered: "فیلتر",
+		models.ServerRotating: "تعویض IP", models.ServerError: "خطا", models.ServerDeleting: "در حال حذف", models.ServerDeleted: "حذف شده",
+	}[s]
+}
+
+func kindFa(k string) string {
+	if v, ok := map[string]string{
+		orchestrator.KindProvision: "ساخت سرور", orchestrator.KindRotate: "تعویض IP", orchestrator.KindCheck: "چک",
+		orchestrator.KindInstall: "نصب", orchestrator.KindSync: "همگام‌سازی", orchestrator.KindUpload: "بارگذاری",
+		orchestrator.KindDelete: "حذف", orchestrator.KindXrayVersion: "تغییر هسته", orchestrator.KindPanelVersion: "تغییر نسخه پنل",
+		orchestrator.KindProvisionAuto: "ساخت خودکار",
+	}[k]; ok {
+		return v
+	}
+	return k
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
+}
