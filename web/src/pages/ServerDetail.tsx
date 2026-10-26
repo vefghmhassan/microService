@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  Alert, Button, Card, Col, Descriptions, Flex, InputNumber, Progress, Row, Select, Skeleton, Space, Switch, Table, Tabs, Tag, Typography,
+  Alert, Button, Card, Col, Descriptions, Flex, InputNumber, Modal, Progress, QRCode, Row, Select, Skeleton, Space, Switch, Table, Tabs, Tag, Typography,
 } from 'antd'
-import { ArrowRightOutlined, CloudUploadOutlined, ExportOutlined, EyeOutlined, ReloadOutlined } from '@ant-design/icons'
+import { ArrowRightOutlined, CloudUploadOutlined, ExportOutlined, EyeOutlined, LeftOutlined, QrcodeOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons'
 import {
   get, keys, post, put, serverAction, useAction, useJobs, useServer, useServerChecks, useServerInbounds, useServerLinks, useServerLive, useXUIReleases,
 } from '../api/hooks'
@@ -19,6 +19,7 @@ import { CheckBadge } from '../components/ServerCard'
 import { useOpenJob } from '../components/JobViewer'
 import { jobKind, jobStatus, rotateMethod, serverStatus, syncStatus, verdict } from '../lib/labels'
 import { bytes, flagEmoji, fmtDate, timeAgo } from '../lib/format'
+import { linkRemark } from '../lib/outbound'
 
 export function ServerDetail() {
   const id = Number(useParams().id)
@@ -224,6 +225,9 @@ function Checks({ id }: { id: number }) {
 
 function Links({ id, active }: { id: number; active: boolean }) {
   const { data, isLoading } = useServerLinks(id, active)
+  const links = data?.links ?? []
+  const [qr, setQr] = useState<number | null>(null)
+  const cur = qr === null ? undefined : links[qr]
   const openJob = useOpenJob()
   const upload = useAction(() => serverAction(id, 'upload'), { success: 'بارگذاری در صف قرار گرفت', invalidate: [['jobs']], onSuccess: (j) => openJob((j as Job).id) })
   const all = data?.links.map((l) => l.url).join('\n') ?? ''
@@ -239,8 +243,25 @@ function Links({ id, active }: { id: number; active: boolean }) {
         columns={[
           { title: 'کاربر', dataIndex: 'email', width: 160 },
           { title: 'لینک', dataIndex: 'url', render: (u: string) => <CopyText text={u} maxWidth={520} /> },
+          { title: 'QR', width: 56, render: (_, __, i) => <Button size="small" icon={<QrcodeOutlined />} onClick={() => setQr(i)} /> },
         ]}
       />
+      <Modal open={!!cur} onCancel={() => setQr(null)} footer={null} width={380} centered title={cur && linkRemark(cur.url) || cur?.email}>
+        {cur && (
+          <Flex vertical align="center" gap={12}>
+            {/* White background keeps the code scannable in dark mode. */}
+            <QRCode value={cur.url} size={300} bgColor="#fff" color="#000" errorLevel="M" style={{ padding: 8 }} />
+            <CopyText text={cur.url} maxWidth={320} />
+            {links.length > 1 && (
+              <Flex gap={8} align="center">
+                <Button icon={<RightOutlined />} disabled={qr === 0} onClick={() => setQr((q) => (q ?? 1) - 1)} />
+                <Typography.Text type="secondary">{(qr ?? 0) + 1} از {links.length}</Typography.Text>
+                <Button icon={<LeftOutlined />} disabled={qr === links.length - 1} onClick={() => setQr((q) => (q ?? 0) + 1)} />
+              </Flex>
+            )}
+          </Flex>
+        )}
+      </Modal>
     </Flex>
   )
 }

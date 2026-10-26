@@ -16,10 +16,13 @@ COPY --from=web /web/dist ./web/dist
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /microserver ./cmd/server
 
 FROM alpine:3.22
-RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 10001 app && mkdir /data && chown app /data
-USER app
+RUN apk add --no-cache ca-certificates tzdata su-exec && adduser -D -u 10001 app && mkdir /data && chown app /data
 COPY --from=build /microserver /usr/local/bin/microserver
+# The entrypoint fixes /data ownership as root, then runs the app as "app".
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && chmod 755 /usr/local/bin/docker-entrypoint.sh
 ENV DATA_DIR=/data APP_PORT=8090
 VOLUME /data
 EXPOSE 8090
-ENTRYPOINT ["microserver"]
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["microserver"]

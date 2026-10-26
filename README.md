@@ -57,6 +57,8 @@ go run ./cmd/server    # http://localhost:8090
 
 Or with Docker: `docker compose up -d --build`
 
+The container fixes the ownership of `./data` on every start, so no `chown` is needed on a new server. Back up `data/master.key` together with `data/microserver.db`. Without the key, the stored tokens and passwords cannot be decrypted.
+
 For frontend development, run `npm run dev` inside `web/`. It proxies `/api` to port 8090.
 
 ## Tests
