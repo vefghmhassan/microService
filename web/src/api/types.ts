@@ -338,3 +338,15 @@ export interface OutboundTestResult {
   city?: string
   isp?: string
 }
+
+export interface Destination {
+  id: number
+  name: string
+  url: string
+  email: string
+  ads_mode: 'normal' | 'ads' | 'both'
+  enabled: boolean
+  has_password: boolean
+  created_at: string
+  updated_at: string
+}

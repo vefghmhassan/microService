@@ -257,7 +257,7 @@ func setup(t *testing.T) (*Orchestrator, *fakeProvider, *fakePanel, *fakeDest, *
 		checker.Decide(res, checker.Policy{MinOK: 2, MinASN: 2})
 		return res
 	}
-	o.Dest = func() Destination { return dest }
+	o.Dests = func() []NamedDest { return []NamedDest{{Name: "test", Destination: dest}} }
 	o.Register()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

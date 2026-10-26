@@ -1,11 +1,12 @@
 import { useEffect } from 'react'
 import { Alert, Button, Card, Col, Divider, Flex, Form, Input, InputNumber, Row, Select, Skeleton, Switch, Tag, Typography } from 'antd'
-import { SaveOutlined, SendOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons'
+import { SaveOutlined, SendOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { get, keys, post, put, useAction, useSettings, useXUIReleases } from '../api/hooks'
 import type { GeoReport, Settings as S } from '../api/types'
 import { fmtDate } from '../lib/format'
 import { PageHeader } from '../components/PageHeader'
+import { DestinationsCard } from '../components/DestinationsCard'
 
 // Settings keys are dotted; antd forms treat dots as paths, so keys are
 // encoded for the form and decoded on save.
@@ -46,7 +47,6 @@ export function Settings() {
   }, [data, form])
 
   const save = useAction((v: Record<string, unknown>) => put('/settings', fromForm(v)), { success: 'ذخیره شد', invalidate: [keys.settings] })
-  const testPanel = useAction(() => post('/settings/test/vpnpannel'), { success: 'اتصال به vpn-pannel برقرار است' })
   const testBot = useAction(() => post('/settings/test/telegram'), { success: 'پیام تست ارسال شد' })
   const changePw = useAction((v: { current: string; password: string }) => post('/auth/password', v), { success: 'رمز تغییر کرد' })
 
@@ -103,16 +103,7 @@ export function Settings() {
             </Card>
           </Col>
           <Col xs={24} xl={12}>
-            <Card size="small" title="vpn-pannel (پنل مقصد)" extra={<Button size="small" icon={<LinkOutlined />} loading={testPanel.isPending} onClick={() => testPanel.mutate()}>تست</Button>}>
-              <F k="vpnpannel.url" label="آدرس"><Input dir="ltr" placeholder="https://panel.example.com" /></F>
-              <Row gutter={12}>
-                <Col xs={24} sm={12}><F k="vpnpannel.email" label="ایمیل ادمین"><Input dir="ltr" /></F></Col>
-                <Col xs={24} sm={12}><F k="vpnpannel.password" label="رمز"><Input.Password dir="ltr" /></F></Col>
-                <Col span={12}><F k="vpnpannel.auto_upload" label="بارگذاری خودکار بعد از ساخت" bool><Switch /></F></Col>
-                <Col span={12}><F k="vpnpannel.ads" label="کانفیگ‌ها تبلیغاتی باشند" bool><Switch /></F></Col>
-              </Row>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>تست را بعد از ذخیره بزنید.</Typography.Text>
-            </Card>
+            <DestinationsCard extra={<Form.Item name={enc('vpnpannel.auto_upload')} label="بارگذاری خودکار در پنل‌های مقصد بعد از ساخت سرور" valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>} />
           </Col>
           <Col xs={24} xl={12}>
             <Card size="small" title="ربات تلگرام" extra={<Button size="small" icon={<SendOutlined />} loading={testBot.isPending} onClick={() => testBot.mutate()}>پیام تست</Button>}>

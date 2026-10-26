@@ -18,7 +18,6 @@ import (
 	"microserver/internal/services/destination"
 	"microserver/internal/services/orchestrator"
 	"microserver/internal/services/providers"
-	"microserver/internal/services/settings"
 )
 
 // ---- dashboard ----
@@ -240,20 +239,6 @@ func (a *App) PutSettings(c *fiber.Ctx) error {
 	return c.JSON(a.Settings.Public())
 }
 
-func (a *App) TestVPNPanel(c *fiber.Ctx) error {
-	u := a.Settings.Get(settings.VPNPanelURL)
-	if u == "" {
-		return errJSON(c, fiber.StatusBadRequest, "آدرس vpn-pannel تنظیم نشده است")
-	}
-	ctx, cancel := context.WithTimeout(c.UserContext(), 20*time.Second)
-	defer cancel()
-	v := destination.NewVPNPanel(u, a.Settings.Get(settings.VPNPanelEmail), a.Settings.Get(settings.VPNPanelPassword))
-	if err := v.Test(ctx); err != nil {
-		return errJSON(c, fiber.StatusBadGateway, err.Error())
-	}
-	return c.JSON(fiber.Map{"ok": true})
-}
-
 // UploadConfigs sends share links or full xray JSON configs, built by hand in
 // the dashboard, to vpn-pannel. vpn-pannel stores a JSON entry as a custom node.
 func (a *App) UploadConfigs(c *fiber.Ctx) error {
@@ -261,7 +246,10 @@ func (a *App) UploadConfigs(c *fiber.Ctx) error {
 		Configs  []string `json:"configs"`
 		BaseName string   `json:"base_name"`
 		Country  string   `json:"country"`
-		Ads      bool     `json:"ads"`
+		// Ads overrides each panel's own setting when sent.
+		Ads *bool `json:"ads"`
+		// DestinationIDs picks panels; empty = every enabled one.
+		DestinationIDs []uint `json:"destination_ids"`
 	}
 	if err := c.BodyParser(&in); err != nil {
 		return errJSON(c, fiber.StatusBadRequest, "invalid body")
@@ -285,17 +273,13 @@ func (a *App) UploadConfigs(c *fiber.Ctx) error {
 	if len(configs) == 0 {
 		return errJSON(c, fiber.StatusBadRequest, "no configs to upload")
 	}
-	u := a.Settings.Get(settings.VPNPanelURL)
-	if u == "" {
-		return errJSON(c, fiber.StatusBadRequest, "آدرس vpn-pannel تنظیم نشده است")
-	}
-	ctx, cancel := context.WithTimeout(c.UserContext(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(c.UserContext(), 120*time.Second)
 	defer cancel()
-	v := destination.NewVPNPanel(u, a.Settings.Get(settings.VPNPanelEmail), a.Settings.Get(settings.VPNPanelPassword))
-	if err := v.Upload(ctx, destination.UploadRequest{Links: configs, BaseName: in.BaseName, Country: in.Country, Ads: in.Ads}); err != nil {
-		return errJSON(c, fiber.StatusBadGateway, err.Error())
+	results, err := a.uploadToDestinations(ctx, in.DestinationIDs, destination.UploadRequest{Links: configs, BaseName: in.BaseName, Country: in.Country}, in.Ads)
+	if err != nil {
+		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": err.Error(), "results": results})
 	}
-	return c.JSON(fiber.Map{"ok": true, "count": len(configs)})
+	return c.JSON(fiber.Map{"ok": true, "count": len(configs), "results": results})
 }
 
 func (a *App) TestTelegramHandler(c *fiber.Ctx) error {

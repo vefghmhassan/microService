@@ -95,7 +95,11 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 
 	p.Get("/settings", a.GetSettings)
 	p.Put("/settings", a.PutSettings)
-	p.Post("/settings/test/vpnpannel", a.TestVPNPanel)
+	p.Get("/destinations", a.ListDestinations)
+	p.Post("/destinations", a.CreateDestination)
+	p.Put("/destinations/:id", a.UpdateDestination)
+	p.Delete("/destinations/:id", a.DeleteDestination)
+	p.Post("/destinations/:id/test", a.TestDestination)
 	p.Post("/settings/test/telegram", a.TestTelegramHandler)
 	p.Post("/destination/upload", a.UploadConfigs)
 

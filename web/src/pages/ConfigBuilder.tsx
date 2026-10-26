@@ -4,6 +4,7 @@ import { CloudUploadOutlined, CopyOutlined } from '@ant-design/icons'
 import { get, post, useAction, useServers } from '../api/hooks'
 import type { Link } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
+import { useDestinations } from '../components/DestinationsCard'
 import { buildClientConfig, defaultCamo, splitLinks, type CamoOptions } from '../lib/clientjson'
 
 const mono = { fontFamily: 'ui-monospace, Consolas, monospace', direction: 'ltr' as const }
@@ -16,7 +17,8 @@ export function ConfigBuilder() {
   const [opt, setOpt] = useState<CamoOptions>(defaultCamo)
   const [baseName, setBaseName] = useState('')
   const [country, setCountry] = useState('')
-  const [ads, setAds] = useState(false)
+  const [dests, setDests] = useState<number[]>([])
+  const { data: destinations } = useDestinations()
   const set = (p: Partial<CamoOptions>) => setOpt((o) => ({ ...o, ...p }))
 
   const links = useMemo(() => splitLinks(text), [text])
@@ -31,8 +33,14 @@ export function ConfigBuilder() {
       if (r.warning) message.warning(r.warning)
     })
   const upload = useAction(
-    () => post<{ count: number }>('/destination/upload', { configs: ok.map(jsonOf), base_name: baseName, country, ads }),
-    { onSuccess: (r) => message.success(`${r.count} کانفیگ JSON در پنل مقصد بارگذاری شد`) },
+    () => post<{ count: number; results: { name: string; ok: boolean; error?: string }[] }>('/destination/upload', { configs: ok.map(jsonOf), base_name: baseName, country, destination_ids: dests }),
+    {
+      onSuccess: (r) => {
+        const failed = r.results.filter((x) => !x.ok)
+        message.success(`${r.count} کانفیگ JSON در ${r.results.length - failed.length} پنل بارگذاری شد`)
+        for (const f of failed) message.error(`${f.name}: ${f.error}`)
+      },
+    },
   )
 
   return (
@@ -76,7 +84,8 @@ export function ConfigBuilder() {
                 <Col span={14}><Input addonBefore="base_name" value={baseName} onChange={(e) => setBaseName(e.target.value)} /></Col>
                 <Col span={10}><Input addonBefore="کشور" placeholder="DE" maxLength={2} value={country} onChange={(e) => setCountry(e.target.value.toUpperCase())} style={mono} /></Col>
               </Row>
-              <Checkbox checked={ads} onChange={(e) => setAds(e.target.checked)}>تبلیغات (ads)</Checkbox>
+              <Select mode="multiple" allowClear value={dests} onChange={setDests} placeholder="همه پنل‌های فعال" style={{ width: '100%' }}
+                options={destinations?.filter((d) => d.enabled).map((d) => ({ value: d.id, label: `${d.name}${d.ads_mode === 'ads' ? ' (تبلیغاتی)' : d.ads_mode === 'both' ? ' (معمولی + تبلیغاتی)' : ''}` }))} />
               <Button type="primary" icon={<CloudUploadOutlined />} disabled={!ok.length} loading={upload.isPending} onClick={() => upload.mutate()}>
                 بارگذاری {ok.length || ''} کانفیگ JSON
               </Button>

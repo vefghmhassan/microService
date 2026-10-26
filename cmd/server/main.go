@@ -53,6 +53,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("settings: %v", err)
 	}
+	if err := controllers.MigrateLegacyDestination(db, st); err != nil {
+		log.Fatalf("destinations: %v", err)
+	}
 	key, err := sshx.LoadOrCreateKey(cfg.DataDir)
 	if err != nil {
 		log.Fatalf("ssh key: %v", err)

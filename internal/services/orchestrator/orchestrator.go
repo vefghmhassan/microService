@@ -81,7 +81,7 @@ type Orchestrator struct {
 	Connect  func(ctx context.Context, s *models.Server) (Remote, string, error) // returns the host key seen
 	PanelFor func(s *models.Server, r Remote) Panel
 	Check    func(ctx context.Context, host string, port int) *checker.Result
-	Dest     func() Destination
+	Dests    func() []NamedDest // every enabled vpn-pannel
 	Notify   func(text string)
 	// Geo resolves client addresses for the GeoIP report (nil = skip).
 	Geo GeoLookup
@@ -118,7 +118,7 @@ func New(db *gorm.DB, st *settings.Store, key *sshx.Keypair, engine *jobs.Engine
 		return xui.New(s.XUIScheme, "127.0.0.1", s.XUIPort, s.XUIBasePath, string(s.XUIToken), r.DialContext)
 	}
 	o.Check = o.defaultCheck
-	o.Dest = o.defaultDest
+	o.Dests = o.defaultDests
 	return o
 }
 
@@ -144,12 +144,23 @@ func (o *Orchestrator) defaultCheck(ctx context.Context, host string, port int) 
 	return o.NewChecker().Run(ctx, host, port)
 }
 
-func (o *Orchestrator) defaultDest() Destination {
-	u := o.Settings.Get(settings.VPNPanelURL)
-	if u == "" {
-		return nil
+// NamedDest is one enabled vpn-pannel with its per-panel upload options.
+type NamedDest struct {
+	Name string
+	// Ads lists one ads flag per upload: [false], [true], or both for a
+	// panel that keeps a normal and an ads set of every server's configs.
+	Ads []bool
+	Destination
+}
+
+func (o *Orchestrator) defaultDests() []NamedDest {
+	var rows []models.Destination
+	o.DB.Where("enabled = ?", true).Order("id").Find(&rows)
+	out := make([]NamedDest, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, NamedDest{Name: d.Name, Ads: d.AdsValues(), Destination: destination.NewVPNPanel(d.URL, d.Email, string(d.Password))})
 	}
-	return destination.NewVPNPanel(u, o.Settings.Get(settings.VPNPanelEmail), o.Settings.Get(settings.VPNPanelPassword))
+	return out
 }
 
 // Register wires every job kind into the engine.

@@ -461,29 +461,48 @@ func (o *Orchestrator) fallbackToNextLocation(r *jobs.Run, s *models.Server) boo
 	return true
 }
 
-// moveDestination points vpn-pannel's configs at the new IP. When it had none
-// on the old address (never uploaded, or removed by hand) the links are
-// uploaded fresh.
+// moveDestination points every vpn-pannel's configs at the new IP. A panel
+// that had none on the old address (never uploaded, or removed by hand) gets
+// the links uploaded fresh. It fails only when no panel could be updated.
 func (o *Orchestrator) moveDestination(ctx context.Context, r *jobs.Run, s *models.Server, oldIP string) error {
-	dest := o.Dest()
-	if dest == nil {
+	dests := o.Dests()
+	if len(dests) == 0 {
 		r.Info("vpn-pannel is not configured; skipped")
 		return nil
 	}
 	if oldIP == "" || oldIP == s.IPv4 {
 		return nil
 	}
-	res, err := dest.ReplaceAddress(ctx, oldIP, s.IPv4, s.Country)
-	if errors.Is(err, destination.ErrNoNodes) {
-		r.Info("vpn-pannel had no configs on %s; uploading", oldIP)
-		return o.uploadLinks(ctx, r, s, "")
+	var fresh []NamedDest
+	var errs []error
+	moved := 0
+	for _, d := range dests {
+		res, err := d.ReplaceAddress(ctx, oldIP, s.IPv4, s.Country)
+		if errors.Is(err, destination.ErrNoNodes) {
+			r.Info("%s: no configs on %s; uploading", d.Name, oldIP)
+			fresh = append(fresh, d)
+			continue
+		}
+		if err != nil {
+			r.Logf("warn", "%s: %v", d.Name, err)
+			errs = append(errs, fmt.Errorf("%s: %w", d.Name, err))
+			continue
+		}
+		moved++
+		r.Info("%s: %d configs moved, %d skipped", d.Name, res.Updated, res.Skipped)
+		for _, e := range res.Errors {
+			r.Logf("warn", "%s: %s", d.Name, e)
+		}
 	}
-	if err != nil {
-		return err
+	if len(fresh) > 0 {
+		if err := o.uploadTo(ctx, r, s, "", fresh); err != nil {
+			errs = append(errs, err)
+		} else {
+			moved += len(fresh)
+		}
 	}
-	r.Info("vpn-pannel: %d configs moved, %d skipped", res.Updated, res.Skipped)
-	for _, e := range res.Errors {
-		r.Logf("warn", "vpn-pannel: %s", e)
+	if moved == 0 {
+		return errors.Join(errs...)
 	}
 	now := time.Now()
 	s.UploadedIP, s.UploadedAt = s.IPv4, &now
@@ -606,11 +625,26 @@ func (o *Orchestrator) upload(ctx context.Context, r *jobs.Run) error {
 
 func (o *Orchestrator) uploadLinks(ctx context.Context, r *jobs.Run, s *models.Server, baseName string) error {
 	r.Step("upload links to vpn-pannel")
-	dest := o.Dest()
-	if dest == nil {
+	dests := o.Dests()
+	if len(dests) == 0 {
 		r.Info("vpn-pannel is not configured; skipped")
 		return nil
 	}
+	return o.uploadTo(ctx, r, s, baseName, dests)
+}
+
+// AdsBaseName tells the two sets of a "both" panel apart: the ads set gets
+// an "-ads" suffix so its names never collide with the normal set.
+func AdsBaseName(base string, ads, both bool) string {
+	if both && ads {
+		return base + "-ads"
+	}
+	return base
+}
+
+// uploadTo sends the server's links to each of dests. It fails only when
+// none of them took the upload.
+func (o *Orchestrator) uploadTo(ctx context.Context, r *jobs.Run, s *models.Server, baseName string, dests []NamedDest) error {
 	snap, err := LoadSnapshot(o.DB)
 	if err != nil {
 		return err
@@ -625,15 +659,31 @@ func (o *Orchestrator) uploadLinks(ctx context.Context, r *jobs.Run, s *models.S
 	if baseName == "" {
 		baseName = strings.ToLower(firstNonEmpty(s.Country, "xx")) + "-" + s.Name
 	}
-	if err := dest.Upload(ctx, destination.UploadRequest{
-		Links: urls, BaseName: baseName, Country: s.Country, Ads: o.Settings.Bool(settings.VPNPanelAds),
-	}); err != nil {
-		return err
+	var errs []error
+	ok := 0
+	for _, d := range dests {
+		ads := d.Ads
+		if len(ads) == 0 {
+			ads = []bool{false}
+		}
+		for _, a := range ads {
+			name := AdsBaseName(baseName, a, len(ads) > 1)
+			err := d.Upload(ctx, destination.UploadRequest{Links: urls, BaseName: name, Country: s.Country, Ads: a})
+			if err != nil {
+				r.Logf("warn", "%s: %v", d.Name, err)
+				errs = append(errs, fmt.Errorf("%s: %w", d.Name, err))
+				continue
+			}
+			ok++
+			r.Info("%s: uploaded %d links as %s", d.Name, len(urls), name)
+		}
+	}
+	if ok == 0 {
+		return errors.Join(errs...)
 	}
 	now := time.Now()
 	s.UploadedIP, s.UploadedAt = s.IPv4, &now
 	o.save(r, s, "uploaded_ip", "uploaded_at")
-	r.Info("uploaded %d links to vpn-pannel as %s", len(urls), baseName)
 	return nil
 }
 
@@ -713,11 +763,13 @@ func (o *Orchestrator) delete(ctx context.Context, r *jobs.Run) error {
 	}
 	o.DB.Model(&models.IPAddress{}).Where("server_id = ? AND status = ?", s.ID, models.IPInUse).
 		Updates(map[string]any{"status": models.IPReleased, "server_id": nil})
-	if dest := o.Dest(); dest != nil && s.UploadedIP != "" {
-		if err := dest.SetActive(ctx, s.UploadedIP, false); err != nil {
-			r.Logf("warn", "vpn-pannel: could not deactivate configs on %s: %v", s.UploadedIP, err)
-		} else {
-			r.Info("vpn-pannel: configs on %s deactivated", s.UploadedIP)
+	if s.UploadedIP != "" {
+		for _, d := range o.Dests() {
+			if err := d.SetActive(ctx, s.UploadedIP, false); err != nil {
+				r.Logf("warn", "%s: could not deactivate configs on %s: %v", d.Name, s.UploadedIP, err)
+			} else {
+				r.Info("%s: configs on %s deactivated", d.Name, s.UploadedIP)
+			}
 		}
 	}
 	s.Status = models.ServerDeleted

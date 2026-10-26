@@ -158,6 +158,54 @@ type InboundStat struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// Destination is one vpn-pannel admin that generated configs are pushed to.
+// Every enabled destination gets every upload, IP move and deactivation.
+type Destination struct {
+	ID       uint          `gorm:"primaryKey" json:"id"`
+	Name     string        `gorm:"size:100;not null" json:"name"`
+	URL      string        `gorm:"size:255;not null" json:"url"`
+	Email    string        `gorm:"size:255" json:"email"`
+	Password secret.String `json:"-"`
+	// AdsMode is what each server's configs are uploaded as: "normal",
+	// "ads" or "both" (two sets, one of each).
+	AdsMode string `gorm:"size:10" json:"ads_mode"`
+	// Ads is the boolean of older versions, read when AdsMode is empty.
+	Ads       bool      `json:"-"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Ads modes of a destination.
+const (
+	AdsNormal = "normal"
+	AdsOnly   = "ads"
+	AdsBoth   = "both"
+)
+
+// AdsValues lists the ads flag of every upload this destination gets.
+func (d Destination) AdsValues() []bool {
+	switch d.Mode() {
+	case AdsOnly:
+		return []bool{true}
+	case AdsBoth:
+		return []bool{false, true}
+	}
+	return []bool{false}
+}
+
+// Mode is AdsMode, falling back to the older Ads flag.
+func (d Destination) Mode() string {
+	switch d.AdsMode {
+	case AdsNormal, AdsOnly, AdsBoth:
+		return d.AdsMode
+	}
+	if d.Ads {
+		return AdsOnly
+	}
+	return AdsNormal
+}
+
 // ClientIP is one client address seen in a server's xray access log, per
 // user and day. Conns counts accepted connections that day.
 type ClientIP struct {
@@ -317,6 +365,6 @@ func All() []any {
 	return []any{
 		&AdminUser{}, &ProviderAccount{}, &Location{}, &Server{}, &InboundStat{}, &IPAddress{},
 		&CheckRun{}, &CheckProbe{}, &XrayTemplate{}, &InboundTemplate{},
-		&Job{}, &JobLog{}, &Setting{}, &ClientIP{}, &IPGeo{},
+		&Job{}, &JobLog{}, &Setting{}, &ClientIP{}, &IPGeo{}, &Destination{},
 	}
 }
