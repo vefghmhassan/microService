@@ -33,7 +33,17 @@ type GeoLookup interface {
 // a summary crosses SSH. It sticks to POSIX awk (Ubuntu ships mawk).
 const accessLogScript = `F=` + AccessLogPath + `
 echo "TZ $(date +%z)"
-if [ -e "$F" ]; then echo "SIZE $(wc -c < "$F" | tr -d ' ')"; else echo "SIZE missing"; fi
+if [ -e "$F" ]; then echo "SIZE $(wc -c < "$F" | tr -d ' ')"; else
+  echo "SIZE missing"
+  # Why: what the running xray was started with, and its access log setting.
+  P=$(pgrep -f 'xray-linux' | head -n1)
+  if [ -n "$P" ]; then
+    D=$(readlink /proc/$P/cwd)
+    C=$(tr '\0' ' ' < /proc/$P/cmdline | sed -n 's/.* -c \([^ ]*\).*/\1/p')
+    case "$C" in /*) ;; *) C="$D/$C" ;; esac
+    echo "RUN cwd=$D config=$C $(grep -o '"access": *"[^"]*"' "$C" 2>/dev/null | head -n1 | tr -d ' ')"
+  else echo "RUN xray-not-running"; fi
+fi
 [ -s "$F" ] || exit 0
 T=$(mktemp) || exit 0
 cp "$F" "$T" && : > "$F"
@@ -65,6 +75,7 @@ type seenIP struct {
 // accessSummary is accessLogScript's output.
 type accessSummary struct {
 	Size string // access log size in bytes before it was taken, or "missing"
+	Run  string // when missing: the running xray's cwd, config and access setting
 	Rows []seenIP
 	Junk []string // lines that were not understood (e.g. an awk error)
 }
@@ -86,6 +97,10 @@ func parseAccessSummary(out string) (*accessSummary, error) {
 		}
 		if sz, ok := strings.CutPrefix(line, "SIZE "); ok && sum.Size == "" {
 			sum.Size = strings.TrimSpace(sz)
+			continue
+		}
+		if r, ok := strings.CutPrefix(line, "RUN "); ok && sum.Run == "" {
+			sum.Run = strings.TrimSpace(r)
 			continue
 		}
 		p := strings.Split(line, "\t")
@@ -128,7 +143,7 @@ func zoneOf(z string) (*time.Location, error) {
 // collectIPs reads the client addresses seen since the last run and stores
 // them, with their GeoIP answer, keyed by server, day, address and user. It
 // returns a short note for the report's per-server status.
-func (o *Orchestrator) collectIPs(ctx context.Context, remote Remote, s *models.Server, tagRemark map[string]string) (string, error) {
+func (o *Orchestrator) collectIPs(ctx context.Context, remote Remote, panel Panel, s *models.Server, tagRemark map[string]string) (string, error) {
 	out, err := remote.Run(ctx, accessLogScript, nil)
 	if err != nil {
 		return "", fmt.Errorf("access log: %w: %.200s", err, strings.TrimSpace(out))
@@ -138,7 +153,24 @@ func (o *Orchestrator) collectIPs(ctx context.Context, remote Remote, s *models.
 		return "", err
 	}
 	if sum.Size == "missing" {
-		return "", fmt.Errorf("xray has not written %s yet", AccessLogPath)
+		// The template has the access log but the running xray does not:
+		// 3x-ui did not regenerate its config. Restart xray, then the whole
+		// panel if that was not enough.
+		if !strings.Contains(sum.Run, AccessLogPath) {
+			switch o.kickXray(s.ID) {
+			case 1:
+				if err := panel.RestartXray(ctx); err != nil {
+					return "", fmt.Errorf("access log missing (%s); restarting xray: %w", sum.Run, err)
+				}
+				return "", fmt.Errorf("access log missing (%s); xray restarted", sum.Run)
+			case 2:
+				if out, err := remote.Run(ctx, "systemctl restart x-ui", nil); err != nil {
+					return "", fmt.Errorf("access log missing (%s); restarting x-ui: %w %s", sum.Run, err, out)
+				}
+				return "", fmt.Errorf("access log missing (%s); x-ui restarted", sum.Run)
+			}
+		}
+		return "", fmt.Errorf("xray has not written %s (%s)", AccessLogPath, sum.Run)
 	}
 	if len(sum.Rows) == 0 && len(sum.Junk) > 0 {
 		return "", fmt.Errorf("access log not understood: %.200s", strings.Join(sum.Junk, " | "))
@@ -148,6 +180,16 @@ func (o *Orchestrator) collectIPs(ctx context.Context, remote Remote, s *models.
 		return note, nil
 	}
 	return note, StoreClientIPs(o.DB, o.Geo, s.ID, sum.Rows, tagRemark)
+}
+
+// kickXray counts restart attempts for a server whose xray runs without the
+// access log (1 = restart xray, 2 = restart x-ui, then give up until the
+// process restarts).
+func (o *Orchestrator) kickXray(id uint) int {
+	v, _ := o.xrayKicks.LoadOrStore(id, new(int))
+	n := v.(*int)
+	*n++
+	return *n
 }
 
 // recordIPCollect stores how the last address collection went on s.

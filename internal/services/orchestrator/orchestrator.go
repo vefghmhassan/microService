@@ -87,6 +87,7 @@ type Orchestrator struct {
 	Geo GeoLookup
 
 	accessLogOK sync.Map // server ID → access log verified on
+	xrayKicks   sync.Map // server ID → *int restarts tried for a missing access log
 
 	// SSHWait bounds how long a fresh server may take to accept SSH.
 	SSHWait time.Duration

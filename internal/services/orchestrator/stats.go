@@ -75,7 +75,7 @@ func (o *Orchestrator) CollectStats(ctx context.Context, s *models.Server) error
 	if err := o.ensureAccessLog(ctx, s, panel); err != nil {
 		o.recordIPCollect(s, "", fmt.Errorf("enable access log: %w", err))
 	} else {
-		note, err := o.collectIPs(ctx, remote, s, tagRemark)
+		note, err := o.collectIPs(ctx, remote, panel, s, tagRemark)
 		o.recordIPCollect(s, note, err)
 	}
 	online := map[string]bool{}
