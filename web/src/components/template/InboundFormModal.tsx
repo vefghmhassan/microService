@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Alert, AutoComplete, Button, Checkbox, Col, DatePicker, Flex, Input, InputNumber, Modal, Radio, Row, Select, Space,
+  Alert, AutoComplete, Button, Checkbox, Col, DatePicker, Flex, Input, InputNumber, Modal, Radio, Row, Segmented, Select, Space,
   Switch, Table, Tabs, Tag, Tooltip, Typography,
 } from 'antd'
 import { DeleteOutlined, EditOutlined, KeyOutlined, PlusOutlined, ReloadOutlined, UsergroupAddOutlined } from '@ant-design/icons'
@@ -23,6 +23,7 @@ interface Model {
   port: number
   enabled: boolean
   upload: boolean
+  uploadJSON: boolean
   sync: boolean
   settings: Obj
   stream: Obj
@@ -51,7 +52,7 @@ function setIn(obj: Obj, path: string[], v: unknown): Obj {
 function fromTemplate(t: InboundTemplate | null): Model {
   if (!t) {
     return {
-      remark: '', protocol: 'vless', port: randomPort(), enabled: true, upload: true, sync: true,
+      remark: '', protocol: 'vless', port: randomPort(), enabled: true, upload: true, uploadJSON: false, sync: true,
       settings: defaultSettings('vless'), stream: { network: 'tcp', security: 'none', ...defaultNetwork('tcp') },
       sniffing: { ...defaultSniffing },
     }
@@ -63,7 +64,7 @@ function fromTemplate(t: InboundTemplate | null): Model {
     delete stream.realitySettings.dest
   }
   return {
-    remark: t.remark, protocol: t.protocol, port: t.port, enabled: t.enabled, upload: t.upload, sync: true,
+    remark: t.remark, protocol: t.protocol, port: t.port, enabled: t.enabled, upload: t.upload, uploadJSON: !!t.upload_json, sync: true,
     settings: parse(t.settings), stream: { network: 'tcp', security: 'none', ...stream },
     sniffing: Object.keys(parse(t.sniffing)).length ? parse(t.sniffing) : { ...defaultSniffing },
   }
@@ -95,7 +96,7 @@ export function InboundFormModal({ value, onClose }: { value: InboundTemplate | 
 
   const save = useAction(() => {
     const body = {
-      remark: m.remark.trim(), protocol: m.protocol, port: m.port, enabled: m.enabled, upload: m.upload, sync: m.sync,
+      remark: m.remark.trim(), protocol: m.protocol, port: m.port, enabled: m.enabled, upload: m.upload, upload_json: m.upload && m.uploadJSON, sync: m.sync,
       client_count: 0,
       settings: JSON.stringify(m.settings), stream_settings: JSON.stringify(m.stream), sniffing: JSON.stringify(m.sniffing),
     }
@@ -162,6 +163,9 @@ export function InboundFormModal({ value, onClose }: { value: InboundTemplate | 
                   </Space.Compact>
                 </F>
                 <F label="بارگذاری لینک‌ها در vpn-pannel"><Switch checked={m.upload} onChange={(v) => set(['upload'], v)} /></F>
+                <F label="ارسال به‌صورت کانفیگ JSON" tip="به‌جای لینک عادی، برای هر کاربر کانفیگ کامل کلاینت (مثل صفحه «ساخت کانفیگ JSON») ساخته و در پنل مقصد ذخیره می‌شود">
+                  <Switch checked={m.upload && m.uploadJSON} disabled={!m.upload} onChange={(v) => set(['uploadJSON'], v)} />
+                </F>
                 <F label="اعمال فوری روی همه سرورها"><Switch checked={m.sync} onChange={(v) => set(['sync'], v)} /></F>
               </>
             ),
@@ -199,7 +203,7 @@ export function InboundFormModal({ value, onClose }: { value: InboundTemplate | 
           },
           {
             key: 'json', label: 'JSON پیشرفته', children: (
-              <AdvancedJSON m={m} onChange={(next) => setM((cur) => ({ ...cur, ...next }))} />
+              <JSONTab m={m} onChange={(next) => setM((cur) => ({ ...cur, ...next }))} />
             ),
           },
         ]}
@@ -548,6 +552,17 @@ function ClientModal({ value, protocol, flowOK, keyField, onCancel, onSave, emai
   )
 }
 
+function JSONTab({ m, onChange }: { m: Model; onChange: (next: Partial<Model>) => void }) {
+  const [mode, setMode] = useState<'full' | 'parts'>('full')
+  return (
+    <Flex vertical gap={12}>
+      <Segmented block value={mode} onChange={(v) => setMode(v as 'full' | 'parts')}
+        options={[{ value: 'full', label: 'کل JSON ورودی' }, { value: 'parts', label: 'بخش‌ها' }]} />
+      {mode === 'full' ? <FullJSON m={m} onChange={onChange} /> : <AdvancedJSON m={m} onChange={onChange} />}
+    </Flex>
+  )
+}
+
 function AdvancedJSON({ m, onChange }: { m: Model; onChange: (next: Partial<Model>) => void }) {
   const [txt, setTxt] = useState({ settings: '', stream: '', sniffing: '' })
   const [err, setErr] = useState('')
@@ -573,6 +588,52 @@ function AdvancedJSON({ m, onChange }: { m: Model; onChange: (next: Partial<Mode
       <JsonEditor value={txt.sniffing} onChange={(v) => setTxt((t) => ({ ...t, sniffing: v }))} height="100px" />
       {err && <Alert type="error" showIcon title={err} />}
       <Button onClick={apply}>اعمال JSON</Button>
+    </Flex>
+  )
+}
+
+/** The whole inbound as one 3x-ui style object, so a config copied from another panel can be pasted in. */
+function toFullJSON(m: Model): string {
+  return JSON.stringify({
+    remark: m.remark, enable: m.enabled, listen: '', port: m.port, protocol: m.protocol,
+    settings: m.settings, streamSettings: m.stream, sniffing: m.sniffing,
+  }, null, 2)
+}
+
+function FullJSON({ m, onChange }: { m: Model; onChange: (next: Partial<Model>) => void }) {
+  const [txt, setTxt] = useState('')
+  const [err, setErr] = useState('')
+  useEffect(() => { setTxt(toFullJSON(m)) }, [m])
+  const apply = () => {
+    try {
+      const o = JSON.parse(txt)
+      if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error('JSON باید یک شیء باشد')
+      const protocol = o.protocol ?? m.protocol
+      if (!inboundProtocols.includes(protocol)) throw new Error('پروتکل باید یکی از vless, vmess, trojan, shadowsocks باشد')
+      // 3x-ui exports may carry these as JSON strings instead of objects.
+      const obj = (v: unknown, fallback: Obj): Obj => (typeof v === 'string' ? parse(v) : v && typeof v === 'object' ? (v as Obj) : fallback)
+      const stream = { network: 'tcp', security: 'none', ...obj(o.streamSettings ?? o.stream_settings, m.stream) }
+      const port = Number(o.port ?? m.port)
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('پورت نامعتبر است')
+      onChange({
+        remark: String(o.remark || m.remark || o.tag || ''),
+        protocol, port, enabled: o.enable ?? o.enabled ?? m.enabled,
+        settings: obj(o.settings, m.settings), stream, sniffing: obj(o.sniffing, m.sniffing),
+      })
+      setErr('')
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+  return (
+    <Flex vertical gap={8}>
+      <Typography.Text type="secondary">
+        کانفیگ کامل ورودی (مثل خروجی 3x-ui) را اینجا بچسبانید و «اعمال» را بزنید، سپس ذخیره کنید تا روی همه سرورها اضافه شود.
+        کاربران، کلیدها و تنظیمات همین‌طور که هست کپی می‌شوند. listen و tag نادیده گرفته می‌شوند.
+      </Typography.Text>
+      <JsonEditor value={txt} onChange={setTxt} height="420px" />
+      {err && <Alert type="error" showIcon title={err} />}
+      <Button type="primary" onClick={apply}>اعمال JSON</Button>
     </Flex>
   )
 }

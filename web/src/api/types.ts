@@ -209,6 +209,7 @@ export interface InboundTemplate {
   stream_settings: string
   sniffing: string
   upload: boolean
+  upload_json: boolean
   created_at: string
   updated_at: string
 }

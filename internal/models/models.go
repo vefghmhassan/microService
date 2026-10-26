@@ -226,17 +226,19 @@ type XrayTemplate struct {
 // InboundTemplate is one inbound created identically on every panel. Settings
 // already carries its clients so links are the same on every server.
 type InboundTemplate struct {
-	ID             uint      `gorm:"primaryKey" json:"id"`
-	Remark         string    `gorm:"size:100;not null" json:"remark"`
-	Protocol       string    `gorm:"size:16;not null" json:"protocol"`
-	Port           int       `gorm:"uniqueIndex;not null" json:"port"`
-	Enabled        bool      `json:"enabled"`
-	Settings       string    `gorm:"type:text" json:"settings"`
-	StreamSettings string    `gorm:"type:text" json:"stream_settings"`
-	Sniffing       string    `gorm:"type:text" json:"sniffing"`
-	Upload         bool      `json:"upload"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             uint   `gorm:"primaryKey" json:"id"`
+	Remark         string `gorm:"size:100;not null" json:"remark"`
+	Protocol       string `gorm:"size:16;not null" json:"protocol"`
+	Port           int    `gorm:"uniqueIndex;not null" json:"port"`
+	Enabled        bool   `json:"enabled"`
+	Settings       string `gorm:"type:text" json:"settings"`
+	StreamSettings string `gorm:"type:text" json:"stream_settings"`
+	Sniffing       string `gorm:"type:text" json:"sniffing"`
+	Upload         bool   `json:"upload"`
+	// UploadJSON sends this inbound to vpn-pannel as full client JSON configs instead of share links.
+	UploadJSON bool      `json:"upload_json"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // Job states.

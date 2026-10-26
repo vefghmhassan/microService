@@ -162,6 +162,37 @@ func orDefault(s, def string) string {
 	return s
 }
 
+// UploadEntries is what goes to vpn-pannel for host: one share link per
+// client, or a compact client JSON config for inbounds marked UploadJSON. A
+// JSON conversion that fails falls back to the plain link and is reported in
+// the returned error.
+func UploadEntries(snap *Snapshot, host string) ([]string, error) {
+	var out []string
+	var errs []error
+	for _, t := range snap.Inbounds {
+		if !t.Enabled || !t.Upload {
+			continue
+		}
+		ls, err := linkgen.Links(t.Protocol, t.Settings, t.StreamSettings, host, t.Port, t.Remark)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", t.Remark, err))
+			continue
+		}
+		for _, l := range ls {
+			entry := l.URL
+			if t.UploadJSON {
+				if j, err := linkgen.ClientJSON(l.URL); err != nil {
+					errs = append(errs, fmt.Errorf("%s: json config: %w", t.Remark, err))
+				} else {
+					entry = j
+				}
+			}
+			out = append(out, entry)
+		}
+	}
+	return out, errors.Join(errs...)
+}
+
 // Links builds the share links of every enabled inbound marked for upload,
 // pointing at host.
 func Links(snap *Snapshot, host string) ([]linkgen.Link, error) {

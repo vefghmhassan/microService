@@ -615,16 +615,12 @@ func (o *Orchestrator) uploadLinks(ctx context.Context, r *jobs.Run, s *models.S
 	if err != nil {
 		return err
 	}
-	links, err := Links(snap, s.IPv4)
+	urls, err := UploadEntries(snap, s.IPv4)
 	if err != nil {
 		r.Logf("warn", "some links could not be built: %v", err)
 	}
-	if len(links) == 0 {
+	if len(urls) == 0 {
 		return errors.New("no inbound is marked for upload")
-	}
-	urls := make([]string, len(links))
-	for i, l := range links {
-		urls[i] = l.URL
 	}
 	if baseName == "" {
 		baseName = strings.ToLower(firstNonEmpty(s.Country, "xx")) + "-" + s.Name

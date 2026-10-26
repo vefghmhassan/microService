@@ -92,6 +92,7 @@ type inboundInput struct {
 	StreamSettings string `json:"stream_settings"`
 	Sniffing       string `json:"sniffing"`
 	Upload         *bool  `json:"upload"`
+	UploadJSON     *bool  `json:"upload_json"`
 	ClientCount    int    `json:"client_count"`
 	Sync           bool   `json:"sync"`
 }
@@ -126,6 +127,9 @@ func (a *App) saveInbound(c *fiber.Ctx, t *models.InboundTemplate) error {
 	}
 	if in.Upload != nil {
 		t.Upload = *in.Upload
+	}
+	if in.UploadJSON != nil {
+		t.UploadJSON = *in.UploadJSON
 	}
 	for k, v := range map[string]string{"settings": in.Settings, "stream_settings": in.StreamSettings, "sniffing": in.Sniffing} {
 		if err := validJSON(v, k); err != nil {

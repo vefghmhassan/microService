@@ -222,7 +222,8 @@ func Links(protocol, settingsJSON, streamJSON, host string, port int, remark str
 		switch protocol {
 		case "vless":
 			q := streamParams(stream)
-			q.Set("encryption", firstNonEmpty(str(settings, "decryption"), "none"))
+			// "decryption" is the server half of VLESS Encryption (holds the private key); links carry the client half.
+			q.Set("encryption", firstNonEmpty(str(settings, "encryption"), "none"))
 			if flow := str(c, "flow"); flow != "" {
 				q.Set("flow", flow)
 			}
