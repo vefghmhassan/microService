@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,11 +39,15 @@ func TestAccessLogScript(t *testing.T) {
 	if b, _ := os.ReadFile(log); len(b) != 0 {
 		t.Fatal("log must be truncated")
 	}
-	out = append([]byte("+0330\n"), out[strings.Index(string(out), "\n")+1:]...)
-	rows, err := parseAccessSummary(string(out))
+	out = append([]byte("TZ +0330\n"), out[strings.Index(string(out), "\n")+1:]...)
+	sum, err := parseAccessSummary(string(out))
 	if err != nil {
 		t.Fatal(err)
 	}
+	if sum.Size != fmt.Sprint(len(sampleAccessLog)) {
+		t.Fatalf("size: %q", sum.Size)
+	}
+	rows := sum.Rows
 	got := map[string]seenIP{}
 	for _, r := range rows {
 		got[r.IP+"|"+r.Email] = r

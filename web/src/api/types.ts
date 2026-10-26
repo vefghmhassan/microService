@@ -323,6 +323,7 @@ export interface GeoReport {
   inbounds: string[]
   geoip: GeoIPStatus | null
   online_window_min: number
+  collect: { id: number; name: string; ipv4: string; ip_collect_at: string | null; ip_collect_note: string }[]
 }
 
 export interface OutboundTestResult {

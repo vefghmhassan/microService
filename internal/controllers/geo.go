@@ -8,6 +8,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
 
+	"microserver/internal/models"
 	"microserver/internal/services/orchestrator"
 	"microserver/internal/services/settings"
 )
@@ -129,6 +130,17 @@ func (a *App) GeoReport(c *fiber.Ctx) error {
 	var inbounds []string
 	a.DB.Table("client_ips").Distinct("inbound").Where("last_seen >= ?", now.Add(-orchestrator.ClientIPRetention)).Order("inbound").Pluck("inbound", &inbounds)
 
+	type collectRow struct {
+		ID            uint       `json:"id"`
+		Name          string     `json:"name"`
+		IPv4          string     `json:"ipv4"`
+		IPCollectAt   *time.Time `json:"ip_collect_at"`
+		IPCollectNote string     `json:"ip_collect_note"`
+	}
+	var collect []collectRow
+	a.DB.Table("servers").Select("id, name, ipv4, ip_collect_at, ip_collect_note").
+		Where("status IN ? AND xui_port > 0", []string{models.ServerActive, models.ServerFiltered}).Order("id").Scan(&collect)
+
 	var geo any
 	if a.Geo != nil {
 		geo = a.Geo.Status()
@@ -145,6 +157,7 @@ func (a *App) GeoReport(c *fiber.Ctx) error {
 		"ips":               ips,
 		"inbounds":          inbounds,
 		"geoip":             geo,
+		"collect":           collect,
 		"online_window_min": int(OnlineWindow / time.Minute),
 	})
 }

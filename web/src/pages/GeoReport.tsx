@@ -92,8 +92,15 @@ export function GeoReport() {
         <Col xs={12} md={6}><StatCard icon={<ApiOutlined />} title="اتصال‌ها" value={t ? num(t.conns) : '…'} /></Col>
       </Row>
 
+      {data?.collect?.some((c) => c.ip_collect_note.startsWith('error')) && (
+        <Alert type="error" showIcon style={{ marginBottom: 16 }} title="جمع‌آوری IP روی بعضی سرورها خطا دارد"
+          description={data.collect.filter((c) => c.ip_collect_note.startsWith('error')).map((c) => <div key={c.id} dir="auto">{c.name}: {c.ip_collect_note}</div>)} />
+      )}
       {data && !data.ips.length && !loading ? (
-        <Card><Empty description="هنوز IPی ثبت نشده. لاگ دسترسی Xray روی سرورها فعال می‌شود و با هر دور خواندن آمار، IPها اینجا می‌آیند." /></Card>
+        <Card>
+          <Empty description="هنوز IPی ثبت نشده. لاگ دسترسی Xray روی سرورها فعال می‌شود و با هر دور خواندن آمار، IPها اینجا می‌آیند." />
+          <CollectTable rows={data.collect} />
+        </Card>
       ) : (
         <Tabs
           items={[
@@ -153,6 +160,7 @@ export function GeoReport() {
                 />
               ),
             },
+            { key: 'collect', label: 'وضعیت جمع‌آوری', children: <CollectTable rows={data?.collect} /> },
             {
               key: 'ips', label: `IPها (${num(data?.ips.length ?? 0)})`,
               children: (
@@ -184,5 +192,21 @@ export function GeoReport() {
         معمولاً به مرکز استان یا تهران نسبت داده می‌شوند. داده‌های GeoIP از IP Geolocation by DB-IP (db-ip.com) است.
       </Typography.Paragraph>
     </>
+  )
+}
+
+/** CollectTable shows how the last address collection went on each server. */
+function CollectTable({ rows }: { rows?: Report['collect'] }) {
+  return (
+    <Table size="small" rowKey="id" dataSource={rows} pagination={false} style={{ marginTop: 12 }}
+      columns={[
+        { title: 'سرور', dataIndex: 'name' },
+        { title: 'IP', dataIndex: 'ipv4', render: (ip: string) => <span style={mono}>{ip}</span> },
+        { title: 'آخرین خواندن', dataIndex: 'ip_collect_at', render: (d: string | null) => (d ? timeAgo(d) : 'هنوز نه') },
+        {
+          title: 'نتیجه', dataIndex: 'ip_collect_note',
+          render: (n: string) => !n ? '—' : n.startsWith('error') ? <Typography.Text type="danger" style={mono}>{n}</Typography.Text> : <span style={mono}>{n}</span>,
+        },
+      ]} />
   )
 }

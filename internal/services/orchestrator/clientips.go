@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +32,8 @@ type GeoLookup interface {
 // "ip email tag count first last" line per address, user and inbound, so only
 // a summary crosses SSH. It sticks to POSIX awk (Ubuntu ships mawk).
 const accessLogScript = `F=` + AccessLogPath + `
-date +%z
+echo "TZ $(date +%z)"
+if [ -e "$F" ]; then echo "SIZE $(wc -c < "$F" | tr -d ' ')"; else echo "SIZE missing"; fi
 [ -s "$F" ] || exit 0
 T=$(mktemp) || exit 0
 cp "$F" "$T" && : > "$F"
@@ -60,21 +62,43 @@ type seenIP struct {
 	First, Last    time.Time
 }
 
+// accessSummary is accessLogScript's output.
+type accessSummary struct {
+	Size string // access log size in bytes before it was taken, or "missing"
+	Rows []seenIP
+	Junk []string // lines that were not understood (e.g. an awk error)
+}
+
 // parseAccessSummary reads accessLogScript's output.
-func parseAccessSummary(out string) ([]seenIP, error) {
+func parseAccessSummary(out string) (*accessSummary, error) {
+	sum := &accessSummary{}
 	sc := bufio.NewScanner(strings.NewReader(out))
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	if !sc.Scan() {
-		return nil, nil
-	}
-	loc, err := zoneOf(strings.TrimSpace(sc.Text()))
-	if err != nil {
-		return nil, err
-	}
-	var rows []seenIP
+	var loc *time.Location
 	for sc.Scan() {
-		p := strings.Split(sc.Text(), "\t")
+		line := sc.Text()
+		if z, ok := strings.CutPrefix(line, "TZ "); ok && loc == nil {
+			var err error
+			if loc, err = zoneOf(strings.TrimSpace(z)); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if sz, ok := strings.CutPrefix(line, "SIZE "); ok && sum.Size == "" {
+			sum.Size = strings.TrimSpace(sz)
+			continue
+		}
+		p := strings.Split(line, "\t")
+		if len(p) != 6 || loc == nil {
+			if strings.TrimSpace(line) != "" && len(sum.Junk) < 5 {
+				sum.Junk = append(sum.Junk, line)
+			}
+			continue
+		}
 		if len(p) != 6 || p[0] == "" {
+			continue
+		}
+		if p[0] == "" {
 			continue
 		}
 		n, _ := strconv.ParseInt(p[3], 10, 64)
@@ -83,9 +107,12 @@ func parseAccessSummary(out string) ([]seenIP, error) {
 		if err1 != nil || err2 != nil {
 			continue
 		}
-		rows = append(rows, seenIP{IP: p[0], Email: p[1], Tag: p[2], Conns: n, First: first.UTC(), Last: last.UTC()})
+		sum.Rows = append(sum.Rows, seenIP{IP: p[0], Email: p[1], Tag: p[2], Conns: n, First: first.UTC(), Last: last.UTC()})
 	}
-	return rows, sc.Err()
+	if loc == nil {
+		return nil, fmt.Errorf("unexpected output: %.200q", out)
+	}
+	return sum, sc.Err()
 }
 
 // zoneOf turns `date +%z` ("+0330") into a fixed zone.
@@ -99,17 +126,39 @@ func zoneOf(z string) (*time.Location, error) {
 }
 
 // collectIPs reads the client addresses seen since the last run and stores
-// them, with their GeoIP answer, keyed by server, day, address and user.
-func (o *Orchestrator) collectIPs(ctx context.Context, remote Remote, s *models.Server, tagRemark map[string]string) error {
+// them, with their GeoIP answer, keyed by server, day, address and user. It
+// returns a short note for the report's per-server status.
+func (o *Orchestrator) collectIPs(ctx context.Context, remote Remote, s *models.Server, tagRemark map[string]string) (string, error) {
 	out, err := remote.Run(ctx, accessLogScript, nil)
 	if err != nil {
-		return fmt.Errorf("access log: %w", err)
+		return "", fmt.Errorf("access log: %w: %.200s", err, strings.TrimSpace(out))
 	}
-	rows, err := parseAccessSummary(out)
-	if err != nil || len(rows) == 0 {
-		return err
+	sum, err := parseAccessSummary(out)
+	if err != nil {
+		return "", err
 	}
-	return StoreClientIPs(o.DB, o.Geo, s.ID, rows, tagRemark)
+	if sum.Size == "missing" {
+		return "", fmt.Errorf("xray has not written %s yet", AccessLogPath)
+	}
+	if len(sum.Rows) == 0 && len(sum.Junk) > 0 {
+		return "", fmt.Errorf("access log not understood: %.200s", strings.Join(sum.Junk, " | "))
+	}
+	note := fmt.Sprintf("log %s bytes, %d rows", sum.Size, len(sum.Rows))
+	if len(sum.Rows) == 0 {
+		return note, nil
+	}
+	return note, StoreClientIPs(o.DB, o.Geo, s.ID, sum.Rows, tagRemark)
+}
+
+// recordIPCollect stores how the last address collection went on s.
+func (o *Orchestrator) recordIPCollect(s *models.Server, note string, err error) {
+	if err != nil {
+		note = "error: " + err.Error()
+		log.Printf("stats %s: client ips: %v", s.Name, err)
+	}
+	now := time.Now()
+	s.IPCollectAt, s.IPCollectNote = &now, truncate(note, 255)
+	o.DB.Model(s).Select("ip_collect_at", "ip_collect_note").Updates(s)
 }
 
 // StoreClientIPs upserts rows and fills the GeoIP cache for new addresses.

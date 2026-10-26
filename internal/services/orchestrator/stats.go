@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -74,9 +73,10 @@ func (o *Orchestrator) CollectStats(ctx context.Context, s *models.Server) error
 		}
 	}
 	if err := o.ensureAccessLog(ctx, s, panel); err != nil {
-		log.Printf("stats %s: access log: %v", s.Name, err)
-	} else if err := o.collectIPs(ctx, remote, s, tagRemark); err != nil {
-		log.Printf("stats %s: client ips: %v", s.Name, err)
+		o.recordIPCollect(s, "", fmt.Errorf("enable access log: %w", err))
+	} else {
+		note, err := o.collectIPs(ctx, remote, s, tagRemark)
+		o.recordIPCollect(s, note, err)
 	}
 	online := map[string]bool{}
 	if emails, err := panel.Onlines(ctx); err == nil {

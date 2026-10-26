@@ -131,6 +131,9 @@ type Server struct {
 	OnlineCount int        `json:"online_count"`
 	StatsAt     *time.Time `json:"stats_at"`
 	StatsError  string     `gorm:"size:255" json:"stats_error"`
+	// How the last client-address collection for the GeoIP report went.
+	IPCollectAt   *time.Time `json:"ip_collect_at"`
+	IPCollectNote string     `gorm:"size:255" json:"ip_collect_note"`
 	// TrafficLimitGB overrides the global cap (0 = use the setting).
 	TrafficLimitGB int `json:"traffic_limit_gb"`
 	// ReplacingAt is set once a replacement was queued, so the cap fires once.
