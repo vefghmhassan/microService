@@ -6,6 +6,7 @@ import { serverStatus, syncStatus } from '../lib/labels'
 import { flagEmoji, timeAgo } from '../lib/format'
 import { StatusTag } from './StatusTag'
 import { CopyText } from './CopyText'
+import { HostBadge } from './HostBadge'
 import { ServerActions } from './ServerActions'
 import { TrafficBar } from './TrafficBar'
 
@@ -41,6 +42,7 @@ export function ServerCard({ server, limit = 0, onJob }: { server: Server; limit
           <CopyText text={server.ipv4} />
           <CheckBadge server={server} />
         </Flex>
+        <HostBadge server={server} />
         <Flex justify="space-between" align="center" gap={8}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>آنلاین: {server.online_count}</Typography.Text>
           <TrafficBar used={server.traffic_up + server.traffic_down} limit={limit} compact />

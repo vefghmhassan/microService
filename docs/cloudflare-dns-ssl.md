@@ -33,13 +33,13 @@ Status: **in progress** (backend done and tested; frontend partly done; not test
   - `POST /servers/:id/cert` (push the certificate again), `POST /servers/:id/dns` (fix the record)
 - **Frontend (done):** `web/src/pages/Cloudflare.tsx` (accounts, zones, certificate status and an issue button), a sidebar item and route, the Location form section and table column, and the types and hooks. `tsc -b` passes.
 
+## Done since the first commit
+- Server UI: `components/HostBadge.tsx` (hostname + SSL lock + DNS error) in the Servers table, ServerCard and ServerDetail; search matches the hostname; ServerActions menu has "به‌روزرسانی رکورد DNS" (`dns`) and "کپی مجدد گواهی SSL" (`cert`).
+- Settings: `acme.staging` switch.
+- `tsc -b` and `npm run build` pass. The Cloudflare page renders (checked on a throwaway instance on port 8091 with an empty data dir); the Location modal and server views were not clicked through yet.
+
 ## Remaining (TODO)
-1. **Server UI:**
-   - Show `hostname` (with the DNS error and certificate expiry) in `pages/Servers.tsx` (IP column), `components/ServerCard.tsx` and the `pages/ServerDetail.tsx` overview.
-   - Add the menu items "به‌روزرسانی DNS" → `dns` and "کپی مجدد گواهی SSL" → `cert` in `components/ServerActions.tsx` (only when `hostname`/`ssl` is set).
-   - Include the hostname in the Servers search filter.
-2. **Settings page:** a switch for `acme.staging` (add it to the `bools` array in `pages/Settings.tsx`).
-3. **Run `npm run build` and check the pages in the browser.**
+1. **Click through** the Location modal's Cloudflare section and the server views with real data.
 4. **E2E with the real account. Agree on the zone and subdomain first, because this changes live DNS:**
    - Add the token, then check that the zones load.
    - Create a Location with `fr{n}` and SSL on, then auto-build a server.

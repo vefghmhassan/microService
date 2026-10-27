@@ -8,6 +8,7 @@ import type { Server } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { StatusTag } from '../components/StatusTag'
 import { CopyText } from '../components/CopyText'
+import { HostBadge } from '../components/HostBadge'
 import { CheckBadge, ServerCard } from '../components/ServerCard'
 import { ServerActions } from '../components/ServerActions'
 import { NewServerModal } from '../components/NewServerModal'
@@ -40,7 +41,7 @@ export function Servers() {
   const list = useMemo(() => (data ?? []).filter((s) => {
     if (status === 'busy' ? !busy.has(s.status) : status && s.status !== status) return false
     const t = q.trim().toLowerCase()
-    return !t || s.name.toLowerCase().includes(t) || s.ipv4.includes(t) || s.region.toLowerCase().includes(t)
+    return !t || s.name.toLowerCase().includes(t) || s.ipv4.includes(t) || (s.hostname ?? '').includes(t) || s.region.toLowerCase().includes(t)
   }), [data, status, q])
 
   return (
@@ -72,7 +73,11 @@ export function Servers() {
               title: 'نام', dataIndex: 'name', sorter: (a, b) => a.name.localeCompare(b.name),
               render: (n: string, s) => <Typography.Link onClick={() => nav(`/servers/${s.id}`)}>{flagEmoji(s.country)} {n}</Typography.Link>,
             },
-            { title: 'IP', dataIndex: 'ipv4', render: (ip: string) => <CopyText text={ip} /> },
+            {
+              title: 'IP / دامنه', dataIndex: 'ipv4', render: (ip: string, s) => (
+                <Flex vertical gap={2}><CopyText text={ip} /><HostBadge server={s} /></Flex>
+              ),
+            },
             { title: 'وضعیت', dataIndex: 'status', render: (st: string) => <StatusTag map={serverStatus} value={st} /> },
             { title: 'ایران', render: (_, s) => <CheckBadge server={s} /> },
             { title: 'آنلاین', dataIndex: 'online_count', width: 70, sorter: (a, b) => a.online_count - b.online_count },

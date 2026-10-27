@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Button, Checkbox, Dropdown, Flex, Modal, Space, Typography } from 'antd'
 import {
-  CloudUploadOutlined, DeleteOutlined, MoreOutlined, RetweetOutlined, RadarChartOutlined, ReloadOutlined, SwapOutlined, SyncOutlined, ToolOutlined,
+  CloudOutlined, CloudUploadOutlined, DeleteOutlined, SafetyCertificateOutlined, MoreOutlined, RetweetOutlined, RadarChartOutlined, ReloadOutlined, SwapOutlined, SyncOutlined, ToolOutlined,
 } from '@ant-design/icons'
 import { deleteServer, keys, serverAction, useAction } from '../api/hooks'
 import type { Job, Server } from '../api/types'
@@ -28,6 +28,8 @@ export function ServerActions({ server, compact, onJob }: { server: Server; comp
     { key: 'upload', icon: <CloudUploadOutlined />, label: 'بارگذاری در vpn-pannel', disabled: !installed },
     { key: 'install', icon: <ToolOutlined />, label: 'نصب مجدد 3x-ui و تمپلیت' },
     { key: 'replace', icon: <RetweetOutlined />, label: 'جایگزینی با سرور جدید', disabled: !!server.replacing_at },
+    ...(server.hostname ? [{ key: 'dns', icon: <CloudOutlined />, label: 'به‌روزرسانی رکورد DNS' }] : []),
+    ...(server.ssl ? [{ key: 'cert', icon: <SafetyCertificateOutlined />, label: 'کپی مجدد گواهی SSL', disabled: !installed }] : []),
     { type: 'divider' as const },
     { key: 'delete', icon: <DeleteOutlined />, label: 'حذف سرور', danger: true },
   ]

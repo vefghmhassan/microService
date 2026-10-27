@@ -13,6 +13,7 @@ import { TrafficBar } from '../components/TrafficBar'
 import { PageHeader } from '../components/PageHeader'
 import { StatusTag } from '../components/StatusTag'
 import { CopyText } from '../components/CopyText'
+import { HostBadge } from '../components/HostBadge'
 import { ServerActions } from '../components/ServerActions'
 import { ProbeTable } from '../components/ProbeTable'
 import { CheckBadge } from '../components/ServerCard'
@@ -84,6 +85,10 @@ function Overview({ id, installed }: { id: number; installed: boolean }) {
             { label: 'تعداد تعویض IP', children: s.rotate_count },
             { label: 'آخرین چک', children: `${timeAgo(s.last_check_at)} — ${s.last_check_note || '—'}` },
             { label: 'تمپلیت', children: <StatusTag map={syncStatus} value={s.sync_status} /> },
+            ...(s.hostname ? [
+              { label: 'دامنه', children: <HostBadge server={s} /> },
+              { label: 'SSL', children: s.ssl ? (s.cert_not_after ? `تا ${fmtDate(s.cert_not_after)}` + (s.xui_scheme === 'https' ? ' · پنل https' : '') : 'هنوز کپی نشده') : 'خاموش' },
+            ] : []),
             { label: 'vpn-pannel', children: s.uploaded_at ? `${s.uploaded_ip} · ${timeAgo(s.uploaded_at)}` : 'بارگذاری نشده' },
             { label: 'ساخته شده', children: fmtDate(s.created_at) },
           ]} />
