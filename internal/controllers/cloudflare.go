@@ -2,6 +2,8 @@ package controllers
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -139,6 +141,10 @@ func (a *App) IssueCertificate(c *fiber.Ctx) error {
 		return errJSON(c, fiber.StatusBadGateway, err.Error())
 	}
 	_ = a.Orch.RenewCerts(context.WithoutCancel(ctx))
+	// A real certificate lets the zone use SSL "strict" for CDN inbounds.
+	if err := a.zoneCDN(ctx, acc, in.ZoneID); err != nil {
+		log.Printf("cloudflare: zone %s CDN settings: %v", in.ZoneName, err)
+	}
 	return c.JSON(certView{Certificate: *cert})
 }
 
@@ -160,6 +166,10 @@ func (a *App) saveCloudflare(c *fiber.Ctx, acc *models.CloudflareAccount) error 
 		Token     string `json:"token"`
 		AcmeEmail string `json:"acme_email"`
 		Enabled   *bool  `json:"enabled"`
+		// With the Global API Key (and the account email) the panel makes a
+		// Zone:Read + DNS:Edit token itself; the key is used once, never stored.
+		GlobalEmail string `json:"global_email"`
+		GlobalKey   string `json:"global_key"`
 	}
 	if err := c.BodyParser(&in); err != nil {
 		return errJSON(c, fiber.StatusBadRequest, "invalid body")
@@ -169,6 +179,35 @@ func (a *App) saveCloudflare(c *fiber.Ctx, acc *models.CloudflareAccount) error 
 	}
 	if t := strings.TrimSpace(in.Token); t != "" {
 		acc.Token = secret.String(t)
+	} else if k := strings.TrimSpace(in.GlobalKey); k != "" {
+		email := strings.TrimSpace(in.GlobalEmail)
+		if email == "" {
+			return errJSON(c, fiber.StatusBadRequest, "ایمیل حساب کلودفلر لازم است")
+		}
+		if acc.Name == "" {
+			acc.Name = email
+		}
+		ctx, cancel := context.WithTimeout(c.UserContext(), 30*time.Second)
+		defer cancel()
+		var t string
+		if cloudflare.LooksLikeGlobalKey(k) {
+			cf := cloudflare.New("")
+			cf.AuthEmail, cf.AuthKey = email, k
+			var err error
+			if t, err = cf.CreateToken(ctx, "microserver panel ("+acc.Name+")"); err != nil {
+				return errJSON(c, fiber.StatusBadRequest, "ساخت توکن با Global API Key نشد: "+err.Error())
+			}
+		} else if _, err := cloudflare.New(k).Zones(ctx); err == nil {
+			// An API token pasted in the wrong field: it already works, use it.
+			t = k
+		} else {
+			return errJSON(c, fiber.StatusBadRequest, "این مقدار Global API Key نیست (کلید ۳۷ حرف است و فقط 0-9 و a-f دارد) و به‌عنوان API Token هم کار نکرد: "+err.Error())
+		}
+		acc.Token = secret.String(t)
+		in.Token = t
+		if acc.AcmeEmail == "" && strings.TrimSpace(in.AcmeEmail) == "" {
+			in.AcmeEmail = email
+		}
 	}
 	acc.AcmeEmail = strings.TrimSpace(in.AcmeEmail)
 	if in.Enabled != nil {
@@ -187,4 +226,38 @@ func (a *App) saveCloudflare(c *fiber.Ctx, acc *models.CloudflareAccount) error 
 		return err
 	}
 	return c.JSON(a.cloudflareView(*acc))
+}
+
+// SetupZoneCDN turns on what CDN inbounds need on one zone (WebSockets,
+// TLS 1.2+, SSL strict when the zone has a certificate). gRPC is not in the
+// API and stays a manual switch.
+func (a *App) SetupZoneCDN(c *fiber.Ctx) error {
+	acc, err := a.cloudflareAccount(c)
+	if err != nil {
+		return err
+	}
+	var in struct {
+		ZoneID string `json:"zone_id"`
+	}
+	if err := c.BodyParser(&in); err != nil || in.ZoneID == "" {
+		return errJSON(c, fiber.StatusBadRequest, "zone_id لازم است")
+	}
+	ctx, cancel := context.WithTimeout(c.UserContext(), 30*time.Second)
+	defer cancel()
+	if err := a.zoneCDN(ctx, acc, in.ZoneID); err != nil {
+		return errJSON(c, fiber.StatusBadGateway, err.Error())
+	}
+	return c.JSON(fiber.Map{"ok": true})
+}
+
+// zoneCDN is SetupZoneCDN without the request; a permission error says how
+// to fix the token.
+func (a *App) zoneCDN(ctx context.Context, acc *models.CloudflareAccount, zoneID string) error {
+	var cert models.Certificate
+	strict := a.DB.Where("cf_zone_id = ? AND not_after IS NOT NULL", zoneID).First(&cert).Error == nil
+	err := cloudflare.New(string(acc.Token)).EnsureCDNSettings(ctx, zoneID, strict)
+	if err != nil && strings.Contains(err.Error(), "10000") {
+		return fmt.Errorf("توکن دسترسی Zone Settings:Edit ندارد؛ توکن را با دکمهٔ ساخت توکن (یا Global API Key) دوباره بسازید و در حساب جایگزین کنید: %w", err)
+	}
+	return err
 }

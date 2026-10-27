@@ -21,6 +21,7 @@ import { useOpenJob } from '../components/JobViewer'
 import { jobKind, jobStatus, rotateMethod, serverStatus, syncStatus, verdict } from '../lib/labels'
 import { bytes, flagEmoji, fmtDate, timeAgo } from '../lib/format'
 import { linkRemark } from '../lib/outbound'
+import { ServerIP } from '../components/ServerIP'
 
 export function ServerDetail() {
   const id = Number(useParams().id)
@@ -36,7 +37,7 @@ export function ServerDetail() {
     <>
       <PageHeader
         title={<Space><Button type="text" icon={<ArrowRightOutlined />} onClick={() => nav('/servers')} />{flagEmoji(s.country)} {s.name}</Space>}
-        subtitle={<Space wrap><StatusTag map={serverStatus} value={s.status} /><CopyText text={s.ipv4} /><CheckBadge server={s} /></Space>}
+        subtitle={<Space wrap><StatusTag map={serverStatus} value={s.status} /><ServerIP server={s} showV4 /><CheckBadge server={s} /></Space>}
         extra={<ServerActions server={s} onJob={(j) => openJob(j.id)} />}
       />
       {s.last_error && s.status === 'error' && <Alert type="error" showIcon title="خطای آخرین عملیات" description={s.last_error} style={{ marginBottom: 16 }} />}
@@ -230,12 +231,16 @@ function Checks({ id }: { id: number }) {
 
 function Links({ id, active }: { id: number; active: boolean }) {
   const { data, isLoading } = useServerLinks(id, active)
-  const links = data?.links ?? []
+  const direct = data?.links ?? []
+  const clean = data?.clean_links ?? []
+  // QR browsing walks the direct links, then the clean-IP ones.
+  const links = [...direct, ...clean]
   const [qr, setQr] = useState<number | null>(null)
   const cur = qr === null ? undefined : links[qr]
   const openJob = useOpenJob()
   const upload = useAction(() => serverAction(id, 'upload'), { success: 'بارگذاری در صف قرار گرفت', invalidate: [['jobs']], onSuccess: (j) => openJob((j as Job).id) })
-  const all = data?.links.map((l) => l.url).join('\n') ?? ''
+  const all = direct.map((l) => l.url).join('\n')
+  const allClean = clean.map((l) => l.url).join('\n')
   return (
     <Flex vertical gap={12}>
       <Flex gap={8} wrap>
@@ -244,13 +249,32 @@ function Links({ id, active }: { id: number; active: boolean }) {
       </Flex>
       {data?.warning && <Alert type="warning" showIcon title={data.warning} />}
       <Table
-        loading={isLoading} size="small" rowKey="url" dataSource={data?.links ?? []} pagination={{ pageSize: 20, hideOnSinglePage: true }}
+        loading={isLoading} size="small" rowKey="url" dataSource={direct} pagination={{ pageSize: 20, hideOnSinglePage: true }}
         columns={[
           { title: 'کاربر', dataIndex: 'email', width: 160 },
           { title: 'لینک', dataIndex: 'url', render: (u: string) => <CopyText text={u} maxWidth={520} /> },
-          { title: 'QR', width: 56, render: (_, __, i) => <Button size="small" icon={<QrcodeOutlined />} onClick={() => setQr(i)} /> },
+          { title: 'QR', width: 56, render: (_, l) => <Button size="small" icon={<QrcodeOutlined />} onClick={() => setQr(links.indexOf(l))} /> },
         ]}
       />
+      {clean.length > 0 && (
+        <>
+          <Flex gap={8} wrap align="center" style={{ marginTop: 8 }}>
+            <Typography.Title level={5} style={{ margin: 0 }}>لینک‌های IP تمیز کلودفلر</Typography.Title>
+            <Typography.Text copyable={{ text: allClean, tooltips: ['کپی همه', 'کپی شد'] }}>کپی همه</Typography.Text>
+          </Flex>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            آدرس = IP تمیز، SNI/Host = ساب‌دامین این سرور. فقط اینجا و در ربات نمایش داده می‌شوند و در vpn-pannel آپلود نمی‌شوند.
+          </Typography.Text>
+          <Table
+            size="small" rowKey="url" dataSource={clean} pagination={{ pageSize: 20, hideOnSinglePage: true }}
+            columns={[
+              { title: 'کاربر', dataIndex: 'email', width: 160 },
+              { title: 'لینک', dataIndex: 'url', render: (u: string) => <CopyText text={u} maxWidth={520} /> },
+              { title: 'QR', width: 56, render: (_, l) => <Button size="small" icon={<QrcodeOutlined />} onClick={() => setQr(links.indexOf(l))} /> },
+            ]}
+          />
+        </>
+      )}
       <Modal open={!!cur} onCancel={() => setQr(null)} footer={null} width={380} centered title={cur && linkRemark(cur.url) || cur?.email}>
         {cur && (
           <Flex vertical align="center" gap={12}>

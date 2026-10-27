@@ -26,6 +26,7 @@ import (
 	"microserver/internal/jobs"
 	"microserver/internal/middleware"
 	"microserver/internal/services/certs"
+	"microserver/internal/services/cleanip"
 	"microserver/internal/services/geoip"
 	"microserver/internal/services/orchestrator"
 	"microserver/internal/services/secret"
@@ -104,6 +105,7 @@ func main() {
 	go scheduleStats(ctx, orch, st)
 	go scheduleGeoIP(ctx, geo, st, db)
 	go scheduleCerts(ctx, orch)
+	go scheduleCleanIPs(ctx, db, st)
 
 	app := fiber.New(fiber.Config{
 		AppName:      "microServer",
@@ -216,6 +218,28 @@ func scheduleCerts(ctx context.Context, o *orchestrator.Orchestrator) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		}
+	}
+}
+
+// scheduleCleanIPs refreshes the fetched clean-IP list every
+// cleanip.interval_hours (read again after each run).
+func scheduleCleanIPs(ctx context.Context, db *gorm.DB, st *settings.Store) {
+	s := &cleanip.Syncer{DB: db, Operators: func() []string { return st.List(settings.CleanIPOperators) }}
+	for {
+		sctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		if err := s.Sync(sctx); err != nil {
+			log.Printf("clean IPs: %v", err)
+		}
+		cancel()
+		h := st.Int(settings.CleanIPInterval)
+		if h < 1 {
+			h = 6
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Duration(h) * time.Hour):
 		}
 	}
 }

@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Alert, App as AntApp, Button, Card, Flex, Segmented, Select, Space, Tag, Typography } from 'antd'
 import { CloudDownloadOutlined, FileAddOutlined, SaveOutlined, SyncOutlined, UndoOutlined } from '@ant-design/icons'
 import { get, keys, put, useAction } from '../../api/hooks'
-import type { Job, TemplateResponse, XrayTemplate } from '../../api/types'
+import type { IPFamily, Job, TemplateResponse, XrayTemplate } from '../../api/types'
+import { publicIP } from '../ServerIP'
 import { JsonEditor } from '../JsonEditor'
 import { ConfirmButton } from '../ConfirmButton'
 import { useOpenJob } from '../JobViewer'
@@ -55,7 +56,7 @@ const pretty = (v: unknown) => (v === undefined ? '' : JSON.stringify(v, null, 2
  * AdvancedXray edits the whole shared xray template as JSON. Once saved, every
  * panel gets exactly this template instead of only the form tabs' keys.
  */
-export function AdvancedXray({ data }: { data: TemplateResponse }) {
+export function AdvancedXray({ data, family = 'v4' }: { data: TemplateResponse; family?: IPFamily }) {
   const { message } = AntApp.useApp()
   const openJob = useOpenJob()
   const xray = data.xray
@@ -119,7 +120,7 @@ export function AdvancedXray({ data }: { data: TemplateResponse }) {
   const loadBase = async () => {
     setLoadingBase(true)
     try {
-      const r = await get<{ server: string; template: Obj }>(`/template/xray/base${serverId ? `?server_id=${serverId}` : ''}`)
+      const r = await get<{ server: string; template: Obj }>(`/template/xray/base?family=${family}${serverId ? `&server_id=${serverId}` : ''}`)
       start(r.template)
       message.success(`تمپلیت Xray سرور ${r.server} بارگذاری شد`)
     } catch (e) {
@@ -129,7 +130,7 @@ export function AdvancedXray({ data }: { data: TemplateResponse }) {
     }
   }
 
-  const save = useAction((v: { sync: boolean; full: string }) => put<{ job?: Job }>('/template/xray', {
+  const save = useAction((v: { sync: boolean; full: string }) => put<{ job?: Job }>(family === 'v6' ? '/template/xray?family=v6' : '/template/xray', {
     outbounds: xray.outbounds, routing: xray.routing, dns: xray.dns, observatory: xray.observatory, full: v.full, sync: v.sync,
   }), {
     success: 'ذخیره شد', invalidate: [keys.template, keys.servers],
@@ -148,7 +149,7 @@ export function AdvancedXray({ data }: { data: TemplateResponse }) {
 
   const serverPicker = (
     <Select allowClear placeholder="اولین سرور فعال" style={{ minWidth: 200 }} value={serverId} onChange={setServerId}
-      options={data.servers.filter((s) => s.status === 'active' || s.status === 'filtered').map((s) => ({ value: s.id, label: `${s.name} · ${s.ipv4}` }))} />
+      options={data.servers.filter((s) => s.status === 'active' || s.status === 'filtered').map((s) => ({ value: s.id, label: `${s.name} · ${publicIP(s)}` }))} />
   )
 
   if (!cfg) {

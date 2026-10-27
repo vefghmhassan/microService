@@ -45,6 +45,7 @@ type vultrInstance struct {
 	ID          string `json:"id"`
 	Label       string `json:"label"`
 	MainIP      string `json:"main_ip"`
+	V6MainIP    string `json:"v6_main_ip"`
 	Status      string `json:"status"`
 	PowerStatus string `json:"power_status"`
 	Region      string `json:"region"`
@@ -59,7 +60,7 @@ func (s *vultrInstance) instance() *Instance {
 	if ip == "0.0.0.0" {
 		ip = ""
 	}
-	return &Instance{Ref: s.ID, Name: s.Label, Status: status, IPv4: ip, Region: s.Region}
+	return &Instance{Ref: s.ID, Name: s.Label, Status: status, IPv4: ip, IPv6: hostIPv6(s.V6MainIP), Region: s.Region}
 }
 
 func (v *Vultr) Validate(ctx context.Context) error {

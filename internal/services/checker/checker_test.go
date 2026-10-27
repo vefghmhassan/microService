@@ -2,6 +2,7 @@ package checker
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -103,5 +104,62 @@ func TestGlobalpingParsesResults(t *testing.T) {
 	}
 	if len(probes) != 2 || !probes[0].OK || probes[1].OK || probes[0].ASN != "AS197207" {
 		t.Fatalf("%+v", probes)
+	}
+}
+
+func TestAtlasRunsV6TracerouteAndParses(t *testing.T) {
+	var def map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Key k" {
+			t.Errorf("auth %q", r.Header.Get("Authorization"))
+		}
+		switch {
+		case r.Method == http.MethodPost:
+			var in struct {
+				Definitions []map[string]any `json:"definitions"`
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			def = in.Definitions[0]
+			io.WriteString(w, `{"measurements":[77]}`)
+		case strings.HasSuffix(r.URL.Path, "/results/"):
+			io.WriteString(w, `[
+				{"prb_id":1,"dst_addr":"2a01:4f8::1","result":[{"hop":1,"result":[{"from":"2a00::9","rtt":2}]},{"hop":9,"result":[{"from":"2a01:4f8:0::1","rtt":61.5}]}]},
+				{"prb_id":2,"dst_addr":"2a01:4f8::1","result":[{"hop":1,"result":[{"x":"*"}]}]}]`)
+		case strings.HasPrefix(r.URL.Path, "/probes/"):
+			io.WriteString(w, `{"results":[{"id":1,"asn_v4":58224,"asn_v6":197207},{"id":2,"asn_v4":44244,"asn_v6":null}]}`)
+		default:
+			io.WriteString(w, `{"status":{"name":"Stopped"}}`)
+		}
+	}))
+	defer srv.Close()
+	a := NewAtlas("k", 4)
+	a.BaseURL, a.PollEvery = srv.URL, time.Millisecond
+	probes, err := a.Check(context.Background(), "2a01:4f8::1", 443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def["af"] != float64(6) || def["protocol"] != "TCP" || def["port"] != float64(443) {
+		t.Fatalf("definition %v", def)
+	}
+	if len(probes) != 2 || !probes[0].OK || probes[0].ASN != "AS197207" || probes[0].LatencyMs != 61.5 || probes[1].OK {
+		t.Fatalf("%+v", probes)
+	}
+}
+
+func TestGlobalpingProbeWithoutIPv6IsNoAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			io.WriteString(w, `{"id":"m1"}`)
+			return
+		}
+		io.WriteString(w, `{"status":"finished","results":[
+			{"probe":{"country":"IR","asn":197207},"result":{"status":"failed","rawOutput":"connect: Network is unreachable"}}]}`)
+	}))
+	defer srv.Close()
+	g := NewGlobalping("", 4)
+	g.BaseURL, g.PollEvery = srv.URL, time.Millisecond
+	probes, err := g.Check(context.Background(), "2a01:4f8::1", 443)
+	if err != nil || len(probes) != 1 || !probes[0].NoAnswer {
+		t.Fatalf("%+v %v", probes, err)
 	}
 }

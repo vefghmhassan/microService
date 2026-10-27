@@ -70,6 +70,7 @@ export function Locations() {
             { title: 'حساب', render: (_, l) => <Tag>{l.provider_account?.name ?? l.provider_account_id}</Tag> },
             { title: 'منطقه', dataIndex: 'region', render: (r: string, l) => <span dir="ltr">{flagEmoji(l.country)} {r}</span> },
             { title: 'پلن', dataIndex: 'plan', render: (p: string) => <span dir="ltr">{p}</span> },
+            { title: 'IP', dataIndex: 'ip_family', render: (f: string) => (f === 'v6' ? <Tag color="purple">IPv6</Tag> : <Tag>IPv4</Tag>) },
             {
               title: 'دامنه', render: (_, l) => (l.cf_account_id ? (
                 <Flex gap={4} align="center">
@@ -112,6 +113,7 @@ interface FormValues {
   dns_pattern?: string
   dns_proxied: boolean
   ssl: boolean
+  ip_family: 'v4' | 'v6'
 }
 
 function LocationModal({ value, onClose }: { value: Location | 'new' | null; onClose: () => void }) {
@@ -152,7 +154,7 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
       onOk={() => form.validateFields().then((v) => save.mutate(v))}
       destroyOnHidden
     >
-      <Form form={form} layout="vertical" requiredMark={false} initialValues={{ capacity: 0, enabled: true, dns_proxied: false, ssl: true, dns_pattern: '' }}>
+      <Form form={form} layout="vertical" requiredMark={false} initialValues={{ capacity: 0, enabled: true, ip_family: 'v4', dns_proxied: false, ssl: true, dns_pattern: '' }}>
         <Form.Item name="provider_account_id" label="حساب ارائه‌دهنده" rules={[{ required: true, message: 'حساب را انتخاب کنید' }]}>
           <Select
             options={accounts?.map((a) => ({ value: a.id, label: `${a.name} (${a.type})` }))}
@@ -188,8 +190,13 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
           <Col xs={12} sm={8}>
             <Form.Item name="country" label="کد کشور"><Input maxLength={2} dir="ltr" placeholder="SG" /></Form.Item>
           </Col>
-          <Col xs={24} sm={8}>
+          <Col xs={12} sm={4}>
             <Form.Item name="enabled" label="فعال" valuePropName="checked"><Switch /></Form.Item>
+          </Col>
+          <Col xs={12} sm={4}>
+            <Form.Item name="ip_family" label="کانفیگ‌ها روی" tooltip="ساخت خودکار در این لوکیشن، سرورها را روی این IP می‌سازد (مگر هنگام ساخت عوض شود)">
+              <Select options={[{ value: 'v4', label: 'IPv4' }, { value: 'v6', label: 'IPv6' }]} />
+            </Form.Item>
           </Col>
         </Row>
         <Form.Item name="image" label="ایمیج (اختیاری)"><Input dir="ltr" /></Form.Item>

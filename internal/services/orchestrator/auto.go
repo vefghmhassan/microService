@@ -34,6 +34,8 @@ type AutoParams struct {
 	// replacement for traffic, not for filtering, can stay where it was).
 	PreferServerLocation bool   `json:"prefer_server_location"`
 	Reason               string `json:"reason"`
+	// IPFamily ("v4"/"v6") overrides the family each location builds with.
+	IPFamily string `json:"ip_family"`
 }
 
 // InstallParams are the install job's parameters.
@@ -81,7 +83,7 @@ func (o *Orchestrator) provisionAuto(ctx context.Context, r *jobs.Run) error {
 			own := models.Location{
 				ProviderAccountID: old.ProviderAccountID, ProviderAccount: old.ProviderAccount,
 				Region: old.Region, Plan: old.Plan, Image: old.Image, Country: old.Country,
-				Capacity: 1, Enabled: true, DNS: old.DNS,
+				Capacity: 1, Enabled: true, DNS: old.DNS, IPFamily: old.Family(),
 			}
 			locs = append([]models.Location{own}, locs...)
 		}
@@ -108,7 +110,7 @@ func (o *Orchestrator) provisionAuto(ctx context.Context, r *jobs.Run) error {
 			continue
 		}
 		r.Step(fmt.Sprintf("location %d: %s %s/%s", i+1, loc.ProviderAccount.Name, loc.Region, loc.Plan))
-		kept, err := o.tryLocation(ctx, r, loc, need)
+		kept, err := o.tryLocation(ctx, r, loc, need, firstNonEmpty(p.IPFamily, loc.IPFamily))
 		if err != nil && ctx.Err() != nil {
 			return err
 		}
@@ -125,7 +127,7 @@ func (o *Orchestrator) provisionAuto(ctx context.Context, r *jobs.Run) error {
 			if _, err := o.Engine.Enqueue(KindInstall, &id, ip, r.Job.Source); err != nil {
 				return err
 			}
-			r.Info("keeping %s (%s); installing 3x-ui in job of its own", s.Name, s.IPv4)
+			r.Info("keeping %s (%s); installing 3x-ui in job of its own", s.Name, s.PublicIP())
 			// Only the first kept server takes over a replaced one.
 			p.ReplaceServerID = 0
 		}
@@ -147,7 +149,7 @@ func (o *Orchestrator) keptSoFar(r *jobs.Run) int {
 // tryLocation builds up to the location's capacity at once, checks them in
 // parallel and returns at most need healthy servers. Every other candidate is
 // deleted afterwards, so a filtered IP is never handed back to us mid-search.
-func (o *Orchestrator) tryLocation(ctx context.Context, r *jobs.Run, loc *models.Location, need int) ([]*models.Server, error) {
+func (o *Orchestrator) tryLocation(ctx context.Context, r *jobs.Run, loc *models.Location, need int, family string) ([]*models.Server, error) {
 	acc := loc.ProviderAccount
 	prov, err := o.Provider(acc)
 	if err != nil {
@@ -172,7 +174,7 @@ func (o *Orchestrator) tryLocation(ctx context.Context, r *jobs.Run, loc *models
 			Image:   firstNonEmpty(loc.Image, acc.DefaultImage, prov.Capabilities().DefaultImage),
 			Country: strings.ToUpper(firstNonEmpty(loc.Country, acc.Country)),
 			Status:  models.ServerCreating, SyncStatus: models.SyncPending, XUIScheme: "http",
-			LocationID: loc.ID,
+			LocationID: loc.ID, IPFamily: models.NormFamily(family),
 		}
 		if loc.DNS.On() {
 			s.DNS = loc.DNS
@@ -220,7 +222,7 @@ func (o *Orchestrator) tryLocation(ctx context.Context, r *jobs.Run, loc *models
 		for _, c := range cands {
 			if len(kept) < need && c.err == nil && c.verdict == want {
 				if want == checker.Unknown {
-					r.Logf("warn", "%s kept without a verdict (no Iranian probe answered)", c.s.IPv4)
+					r.Logf("warn", "%s kept without a verdict (no Iranian probe answered)", c.s.PublicIP())
 				}
 				kept = append(kept, c.s)
 			}
@@ -256,15 +258,18 @@ func (o *Orchestrator) probeCandidate(ctx context.Context, r *jobs.Run, prov pro
 	if err != nil {
 		return "", fmt.Errorf("wait running: %w", err)
 	}
-	s.IPv4, s.IPRef = inst.IPv4, inst.IPRef
+	s.IPv4, s.IPRef, s.IPv6 = inst.IPv4, inst.IPRef, inst.IPv6
 	s.Status = models.ServerChecking
-	o.save(r, s, "ipv4", "ip_ref", "status")
+	o.save(r, s, "ipv4", "ip_ref", "ipv6", "status")
 	o.poolUse(s)
+	if s.PublicIP() == "" {
+		return "", fmt.Errorf("the provider gave the server no public IP%s", s.Family())
+	}
 	if err := o.waitBooted(ctx, r, s); err != nil {
 		return "", err
 	}
 	for attempt := 0; ; attempt++ {
-		res := o.Check(ctx, s.IPv4, o.checkPort(s))
+		res := o.Check(ctx, s.PublicIP(), o.checkPort(s))
 		o.recordCheck(r, s, res)
 		if res.Verdict != checker.Down || attempt >= 3 {
 			return res.Verdict, nil
@@ -290,7 +295,7 @@ func (o *Orchestrator) discardCandidate(ctx context.Context, r *jobs.Run, prov p
 	s.Status = models.ServerDeleted
 	s.LastError = truncate("discarded: "+reason, 500)
 	o.save(r, s, "status", "last_error")
-	r.Info("deleted candidate %s (%s): %s", s.Name, s.IPv4, reason)
+	r.Info("deleted candidate %s (%s): %s", s.Name, s.PublicIP(), reason)
 }
 
 // finishInstall runs after an install job's 3x-ui install: either hand over a

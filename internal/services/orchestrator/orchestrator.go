@@ -141,6 +141,8 @@ func (o *Orchestrator) NewChecker() *checker.Checker {
 			c.Sources = append(c.Sources, checker.NewCheckHost())
 		case "globalping":
 			c.Sources = append(c.Sources, checker.NewGlobalping(o.Settings.Get(settings.GlobalpingToken), o.Settings.Int(settings.GlobalpingLimit)))
+		case "atlas":
+			c.Sources = append(c.Sources, checker.NewAtlas(o.Settings.Get(settings.AtlasKey), o.Settings.Int(settings.AtlasLimit)))
 		}
 	}
 	return c
@@ -274,7 +276,8 @@ func (o *Orchestrator) recordCheck(r *jobs.Run, s *models.Server, res *checker.R
 func (o *Orchestrator) checkPort(s *models.Server) int {
 	if s.AppliedHash != "" {
 		var in models.InboundTemplate
-		if o.DB.Where("enabled = ?", true).Order("id").First(&in).Error == nil {
+		// A CDN inbound may be missing on a server without SSL; prefer the others.
+		if o.DB.Where("enabled = ? AND family IN ?", true, TemplateFamilies(s.Family())).Order("cdn, id").First(&in).Error == nil {
 			return in.Port
 		}
 	}
@@ -399,8 +402,16 @@ func (o *Orchestrator) createRequest(s *models.Server) providers.CreateRequest {
 	}
 }
 
+// ipLabel is the server's addresses for logs: "1.2.3.4", or "2a01::1 (v4 1.2.3.4)".
+func ipLabel(s *models.Server) string {
+	if s.Family() == models.FamilyV6 {
+		return fmt.Sprintf("%s (v4 %s)", s.IPv6, s.IPv4)
+	}
+	return s.IPv4
+}
+
 func instanceOf(s *models.Server) *providers.Instance {
-	return &providers.Instance{Ref: s.ProviderRef, Name: s.Name, IPv4: s.IPv4, IPRef: s.IPRef, Region: s.Region, Status: "running"}
+	return &providers.Instance{Ref: s.ProviderRef, Name: s.Name, IPv4: s.IPv4, IPRef: s.IPRef, IPv6: s.IPv6, Region: s.Region, Status: "running"}
 }
 
 func sleep(ctx context.Context, d time.Duration) error {

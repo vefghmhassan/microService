@@ -88,7 +88,13 @@ export interface Location extends DNSFields {
   capacity: number
   enabled: boolean
   note: string
+  ip_family: IPFamily
 }
+
+/** What a server's configs, DNS and checks use. Every server is dual-stack. */
+export type IPFamily = 'v4' | 'v6'
+/** Which servers an inbound template goes on. */
+export type TemplateFamily = IPFamily | 'both'
 
 export interface Option {
   id: string
@@ -117,6 +123,8 @@ export interface Server extends DNSFields {
   status: ServerStatus
   ipv4: string
   ip_ref: string
+  ipv6: string
+  ip_family: IPFamily
   xui_port: number
   xui_base_path: string
   xui_username: string
@@ -254,20 +262,54 @@ export interface InboundTemplate {
   sniffing: string
   upload: boolean
   upload_json: boolean
+  cdn: boolean
+  family: TemplateFamily
   created_at: string
   updated_at: string
 }
 
 export interface TemplateResponse {
   xray: XrayTemplate
+  /** The IPv6 servers' xray template; unset (xray_v6_set false) means they use xray. */
+  xray_v6: XrayTemplate
+  xray_v6_set: boolean
   inbounds: InboundTemplate[]
   hash: string
-  servers: Pick<Server, 'id' | 'name' | 'ipv4' | 'status' | 'sync_status' | 'applied_hash'>[]
+  hash_v6: string
+  servers: Pick<Server, 'id' | 'name' | 'ipv4' | 'ipv6' | 'ip_family' | 'status' | 'sync_status' | 'applied_hash'>[]
 }
 
 export interface Link {
   email: string
   url: string
+}
+
+export interface CleanIP {
+  id: number
+  address: string
+  operator: string
+  source: string
+  enabled: boolean
+  last_seen: string
+  checked_at: string | null
+  check_ok: boolean | null
+  check_note: string
+}
+
+export interface CleanIPSource {
+  id: number
+  url: string
+  builtin: boolean
+  enabled: boolean
+  last_fetch: string | null
+  last_error: string
+  count: number
+}
+
+export interface CleanIPList {
+  ips: CleanIP[]
+  sources: CleanIPSource[]
+  checking: boolean
 }
 
 export interface Dashboard {

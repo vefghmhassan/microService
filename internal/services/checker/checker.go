@@ -159,6 +159,10 @@ func LocalTCP(ctx context.Context, host string, port int) Probe {
 	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		p.Error = err.Error()
+		if ip := net.ParseIP(host); ip != nil && ip.To4() == nil && unreachableFamily(err.Error()) {
+			// This machine has no IPv6 route: no control, rather than "down".
+			p.NoAnswer = true
+		}
 		return p
 	}
 	_ = conn.Close()

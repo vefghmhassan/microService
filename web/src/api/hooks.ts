@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/
 import { App } from 'antd'
 import { del, get, post, put } from './client'
 import type {
-  Certificate, CheckRun, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, Option, ProviderAccount,
+  Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, Option, ProviderAccount,
   ProviderType, Server, ServerEvent, ServerInbounds, Settings, TemplateResponse,
 } from './types'
 
@@ -24,6 +24,7 @@ export const keys = {
   settings: ['settings'] as const,
   cloudflare: ['cloudflare'] as const,
   certificates: ['cloudflare', 'certificates'] as const,
+  cleanIPs: ['clean-ips'] as const,
 }
 
 export const useDashboard = () => useQuery({ queryKey: keys.dashboard, queryFn: () => get<Dashboard>('/dashboard') })
@@ -34,7 +35,9 @@ export const useServerInbounds = (id: number) =>
 export const useServerChecks = (id: number) =>
   useQuery({ queryKey: keys.serverChecks(id), queryFn: () => get<CheckRun[]>(`/servers/${id}/checks`) })
 export const useServerLinks = (id: number, enabled = true) =>
-  useQuery({ queryKey: keys.serverLinks(id), queryFn: () => get<{ links: Link[]; warning?: string }>(`/servers/${id}/links`), enabled })
+  useQuery({ queryKey: keys.serverLinks(id), queryFn: () => get<{ links: Link[]; clean_links?: Link[] | null; warning?: string }>(`/servers/${id}/links`), enabled })
+export const useCleanIPs = (poll = false) =>
+  useQuery({ queryKey: keys.cleanIPs, queryFn: () => get<CleanIPList>('/clean-ips'), refetchInterval: poll ? 5000 : false })
 export const useServerLive = (id: number, enabled: boolean) =>
   useQuery({ queryKey: ['servers', id, 'live'], queryFn: () => get<LiveStatus>(`/servers/${id}/live`), enabled, retry: false, staleTime: 30_000 })
 export const useProviders = () => useQuery({ queryKey: keys.providers, queryFn: () => get<ProviderAccount[]>('/providers') })

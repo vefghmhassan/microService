@@ -23,6 +23,7 @@ import (
 
 	"microserver/internal/jobs"
 	"microserver/internal/models"
+	"microserver/internal/services/linkgen"
 	"microserver/internal/services/orchestrator"
 	"microserver/internal/services/settings"
 )
@@ -252,7 +253,7 @@ func (m *Manager) cmdServers(ctx context.Context, b *tg.Bot, u *tgm.Update) {
 	var kb [][]tgm.InlineKeyboardButton
 	for _, s := range list {
 		kb = append(kb, []tgm.InlineKeyboardButton{{
-			Text:         fmt.Sprintf("%s %s · %s", statusIcon(s.Status), s.Name, s.IPv4),
+			Text:         fmt.Sprintf("%s %s · %s", statusIcon(s.Status), s.Name, s.PublicIP()),
 			CallbackData: fmt.Sprintf("srv:%d", s.ID),
 		}})
 	}
@@ -328,6 +329,8 @@ func (m *Manager) callback(ctx context.Context, b *tg.Bot, u *tgm.Update) {
 	_, _ = b.AnswerCallbackQuery(ctx, &tg.AnswerCallbackQueryParams{CallbackQueryID: q.ID})
 	chat := chatOf(u)
 	action, arg, _ := strings.Cut(q.Data, ":")
+	// A third part, where present, is the IP family ("new:3:v6").
+	arg, fam, _ := strings.Cut(arg, ":")
 	id64, _ := strconv.ParseUint(arg, 10, 64)
 	id := uint(id64)
 
@@ -387,22 +390,35 @@ func (m *Manager) callback(ctx context.Context, b *tg.Bot, u *tgm.Update) {
 		if m.DB.First(&a, id).Error != nil {
 			return
 		}
-		m.send(ctx, b, chat, fmt.Sprintf("ساخت سرور روی %s در %s با پلن %s؟", html.EscapeString(a.Name), a.DefaultRegion, a.DefaultPlan),
+		m.send(ctx, b, chat, fmt.Sprintf("ساخت سرور روی %s در %s با پلن %s؟\nکانفیگ‌ها روی IPv4 باشند یا IPv6؟", html.EscapeString(a.Name), a.DefaultRegion, a.DefaultPlan),
 			[][]tgm.InlineKeyboardButton{{
-				{Text: "✅ بساز", CallbackData: fmt.Sprintf("newok:%d", id)},
+				{Text: "✅ بساز · IPv4", CallbackData: fmt.Sprintf("newok:%d:v4", id)},
+				{Text: "✅ بساز · IPv6", CallbackData: fmt.Sprintf("newok:%d:v6", id)},
 			}})
 	case "newauto":
-		if _, err := m.Engine.Enqueue(orchestrator.KindProvisionAuto, nil, orchestrator.AutoParams{Count: 1}, "telegram"); err != nil {
+		if fam == "" {
+			m.send(ctx, b, chat, "ساخت خودکار: کانفیگ‌ها روی IPv4 باشند یا IPv6؟", [][]tgm.InlineKeyboardButton{
+				{{Text: "IPv4", CallbackData: "newauto:1:v4"}, {Text: "IPv6", CallbackData: "newauto:1:v6"}},
+				{{Text: "طبق تنظیم هر لوکیشن", CallbackData: "newauto:1:loc"}},
+			})
+			return
+		}
+		p := orchestrator.AutoParams{Count: 1}
+		if fam == models.FamilyV4 || fam == models.FamilyV6 {
+			p.IPFamily = fam
+		}
+		if _, err := m.Engine.Enqueue(orchestrator.KindProvisionAuto, nil, p, "telegram"); err != nil {
 			m.send(ctx, b, chat, "خطا: "+html.EscapeString(err.Error()), nil)
 			return
 		}
 		m.send(ctx, b, chat, "🤖 ساخت خودکار شروع شد: لوکیشن‌ها به ترتیب امتحان می‌شوند و نتیجه را خبر می‌دهم.", nil)
 	case "newok":
-		if _, err := m.Engine.Enqueue(orchestrator.KindProvision, nil, orchestrator.ProvisionParams{AccountID: id}, "telegram"); err != nil {
+		p := orchestrator.ProvisionParams{AccountID: id, IPFamily: models.NormFamily(fam)}
+		if _, err := m.Engine.Enqueue(orchestrator.KindProvision, nil, p, "telegram"); err != nil {
 			m.send(ctx, b, chat, "خطا: "+html.EscapeString(err.Error()), nil)
 			return
 		}
-		m.send(ctx, b, chat, "🚀 ساخت سرور شروع شد؛ وقتی آماده شد خبر می‌دهم.", nil)
+		m.send(ctx, b, chat, fmt.Sprintf("🚀 ساخت سرور IP%s شروع شد؛ وقتی آماده شد خبر می‌دهم.", p.IPFamily), nil)
 	}
 }
 
@@ -426,8 +442,8 @@ func (m *Manager) showServer(ctx context.Context, b *tg.Bot, chat int64, id uint
 			traffic += " از " + humanBytes(lim)
 		}
 	}
-	text := fmt.Sprintf("<b>%s</b>\nوضعیت: %s %s\nIP: <code>%s</code>\nارائه‌دهنده: %s · %s\n3x-ui: %s · xray: %s\nهمگام‌سازی: %s\nآخرین چک: %s\nتعداد تعویض IP: %d\n📈 ترافیک: %s · 👥 آنلاین: %d",
-		html.EscapeString(s.Name), statusIcon(s.Status), statusFa(s.Status), s.IPv4, html.EscapeString(prov), s.Region,
+	text := fmt.Sprintf("<b>%s</b>\nوضعیت: %s %s\nIP: <code>%s</code>%s\nارائه‌دهنده: %s · %s\n3x-ui: %s · xray: %s\nهمگام‌سازی: %s\nآخرین چک: %s\nتعداد تعویض IP: %d\n📈 ترافیک: %s · 👥 آنلاین: %d",
+		html.EscapeString(s.Name), statusIcon(s.Status), statusFa(s.Status), s.PublicIP(), ipv4Note(&s), html.EscapeString(prov), s.Region,
 		orDash(s.PanelVersion), orDash(s.XrayVersion), orDash(s.SyncStatus), check, s.RotateCount, traffic, s.OnlineCount)
 	m.send(ctx, b, chat, text, [][]tgm.InlineKeyboardButton{
 		{{Text: "🔄 تعویض IP", CallbackData: fmt.Sprintf("rot:%d", id)}, {Text: "📡 چک ایران", CallbackData: fmt.Sprintf("chk:%d", id)}},
@@ -446,19 +462,31 @@ func (m *Manager) sendLinks(ctx context.Context, b *tg.Bot, chat int64, id uint)
 	if err != nil {
 		return
 	}
-	links, _ := orchestrator.Links(snap, orchestrator.LinkHost(&s))
-	if len(links) == 0 {
+	links, _ := orchestrator.Links(snap.For(&s), orchestrator.LinkHost(&s))
+	var clean []linkgen.Link
+	if m.Orch != nil {
+		clean, _ = m.Orch.ServerCleanLinks(snap, &s)
+	}
+	if len(links) == 0 && len(clean) == 0 {
 		m.send(ctx, b, chat, "لینکی وجود ندارد", nil)
 		return
 	}
 	var sb strings.Builder
-	for _, l := range links {
-		line := "<code>" + html.EscapeString(l.URL) + "</code>\n\n"
+	write := func(line string) {
 		if sb.Len()+len(line) > 3800 {
 			m.send(ctx, b, chat, sb.String(), nil)
 			sb.Reset()
 		}
 		sb.WriteString(line)
+	}
+	for _, l := range links {
+		write("<code>" + html.EscapeString(l.URL) + "</code>\n\n")
+	}
+	if len(clean) > 0 {
+		write("🌐 <b>لینک‌های IP تمیز کلودفلر</b>\n\n")
+		for _, l := range clean {
+			write("<code>" + html.EscapeString(l.URL) + "</code>\n\n")
+		}
 	}
 	m.send(ctx, b, chat, sb.String(), nil)
 }
@@ -473,7 +501,7 @@ func (m *Manager) sendQRs(ctx context.Context, b *tg.Bot, chat int64, id uint) {
 	if err != nil {
 		return
 	}
-	links, _ := orchestrator.Links(snap, orchestrator.LinkHost(&s))
+	links, _ := orchestrator.Links(snap.For(&s), orchestrator.LinkHost(&s))
 	if len(links) == 0 {
 		m.send(ctx, b, chat, "لینکی وجود ندارد", nil)
 		return
@@ -558,4 +586,12 @@ func truncate(s string, n int) string {
 		return s[:n] + "…"
 	}
 	return s
+}
+
+// ipv4Note shows an IPv6 server's IPv4 (used for SSH) under its address.
+func ipv4Note(s *models.Server) string {
+	if s.Family() != models.FamilyV6 {
+		return ""
+	}
+	return fmt.Sprintf(" (IPv6)\nIPv4: <code>%s</code>", s.IPv4)
 }

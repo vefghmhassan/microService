@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Badge, Button, Drawer, Flex, Grid, Layout, Menu, Tooltip, Typography } from 'antd'
 import {
   CodeOutlined,
-  ApiOutlined, AppstoreOutlined, CloudOutlined, CloudServerOutlined, DashboardOutlined, EnvironmentOutlined, GlobalOutlined,
+  ApiOutlined, AppstoreOutlined, ThunderboltOutlined, CloudOutlined, CloudServerOutlined, DashboardOutlined, EnvironmentOutlined, GlobalOutlined,
   LogoutOutlined, MenuOutlined, MoonOutlined, NodeIndexOutlined, OrderedListOutlined, RadarChartOutlined,
   SettingOutlined, SunOutlined, UnorderedListOutlined,
 } from '@ant-design/icons'
@@ -23,6 +23,7 @@ const items = [
   { key: '/locations', icon: <OrderedListOutlined />, label: 'لوکیشن‌ها' },
   { key: '/providers', icon: <ApiOutlined />, label: 'ارائه‌دهنده‌ها' },
   { key: '/cloudflare', icon: <CloudOutlined />, label: 'دامنه‌ها (کلودفلر)' },
+  { key: '/clean-ips', icon: <ThunderboltOutlined />, label: 'IP تمیز' },
   { key: '/jobs', icon: <UnorderedListOutlined />, label: 'کارها' },
   { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
 ]
