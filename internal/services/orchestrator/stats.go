@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"microserver/internal/models"
+	"microserver/internal/services/providers"
 	"microserver/internal/services/settings"
 )
 
@@ -43,7 +45,6 @@ func (o *Orchestrator) CollectAll(ctx context.Context) {
 			cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 			defer cancel()
 			if err := o.CollectStats(cctx, s); err != nil {
-				o.DB.Model(s).Update("stats_error", truncate(err.Error(), 255))
 				return
 			}
 			o.enforceTrafficCap(s)
@@ -55,15 +56,24 @@ func (o *Orchestrator) CollectAll(ctx context.Context) {
 
 // CollectStats reads one panel's inbounds (cumulative up/down per inbound and
 // client) and who is online, and stores the per-inbound and server totals.
-func (o *Orchestrator) CollectStats(ctx context.Context, s *models.Server) error {
+func (o *Orchestrator) CollectStats(ctx context.Context, s *models.Server) (err error) {
+	defer func() {
+		if err != nil {
+			o.DB.Model(s).Update("stats_error", truncate(err.Error(), 255))
+		}
+	}()
 	remote, _, err := o.Connect(ctx, s)
 	if err != nil {
-		return fmt.Errorf("ssh: %w", err)
+		err = fmt.Errorf("ssh: %w", err)
+		// The GeoIP report shows this note, so say why nothing was collected.
+		o.recordIPCollect(s, "", err)
+		return o.checkGone(ctx, s, err)
 	}
 	defer remote.Close()
 	panel := o.PanelFor(s, remote)
 	inbounds, err := panel.ListInbounds(ctx)
 	if err != nil {
+		o.recordIPCollect(s, "", fmt.Errorf("panel: %w", err))
 		return err
 	}
 	tagRemark := map[string]string{}
@@ -121,6 +131,35 @@ func (o *Orchestrator) CollectStats(ctx context.Context, s *models.Server) error
 	o.DB.Model(s).Select("traffic_up", "traffic_down", "online_count", "stats_at", "stats_error").Updates(s)
 	o.Engine.Broker.Publish(serverEvent(s))
 	return nil
+}
+
+// checkGone asks the provider about a server that does not answer. A server
+// deleted outside the panel (e.g. in the provider's console) is marked as an
+// error so it stops looking active, and the admin is told; otherwise err is
+// returned as is.
+func (o *Orchestrator) checkGone(ctx context.Context, s *models.Server, err error) error {
+	if s.ProviderRef == "" || o.Provider == nil {
+		return err
+	}
+	var acc models.ProviderAccount
+	if o.DB.First(&acc, s.ProviderAccountID).Error != nil {
+		return err
+	}
+	p, perr := o.Provider(&acc)
+	if perr != nil {
+		return err
+	}
+	gctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if _, gerr := p.Get(gctx, s.ProviderRef); !errors.Is(gerr, providers.ErrNotFound) {
+		return err
+	}
+	gone := fmt.Errorf("server %s no longer exists at %s (deleted outside the panel)", s.ProviderRef, acc.Name)
+	s.Status, s.StatsError = models.ServerError, gone.Error()
+	o.DB.Model(s).Select("status", "stats_error").Updates(s)
+	o.Engine.Broker.Publish(serverEvent(s))
+	o.notify("⚠️ سرور %s (%s) دیگر در %s وجود ندارد؛ احتمالاً بیرون از پنل حذف شده است. وضعیتش «خطا» شد.", s.Name, s.IPv4, acc.Name)
+	return gone
 }
 
 // enforceTrafficCap queues a replacement once a server's users have used
