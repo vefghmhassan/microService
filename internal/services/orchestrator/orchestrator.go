@@ -20,6 +20,7 @@ import (
 	"microserver/internal/jobs"
 	"microserver/internal/models"
 	"microserver/internal/services/checker"
+	"microserver/internal/services/cloudflare"
 	"microserver/internal/services/destination"
 	"microserver/internal/services/providers"
 	"microserver/internal/services/settings"
@@ -42,6 +43,8 @@ const (
 	KindCheckAll      = "check_all"
 	KindProvisionAuto = "provision_auto"
 	KindPanelAccess   = "panel_access"
+	KindCertPush      = "cert_push"
+	KindDNSSync       = "dns_sync"
 )
 
 // Remote is the SSH session the orchestrator needs; sshx.Client satisfies it
@@ -85,6 +88,10 @@ type Orchestrator struct {
 	Notify   func(text string)
 	// Geo resolves client addresses for the GeoIP report (nil = skip).
 	Geo GeoLookup
+	// CF is the Cloudflare record API of an account.
+	CF func(acc *models.CloudflareAccount) DNSAPI
+	// Certs issues zone certificates (nil = SSL is skipped).
+	Certs CertSource
 
 	accessLogOK sync.Map // server ID → access log verified on
 	xrayKicks   sync.Map // server ID → *int restarts tried for a missing access log
@@ -118,6 +125,7 @@ func New(db *gorm.DB, st *settings.Store, key *sshx.Keypair, engine *jobs.Engine
 		return xui.New(s.XUIScheme, "127.0.0.1", s.XUIPort, s.XUIBasePath, string(s.XUIToken), r.DialContext)
 	}
 	o.Check = o.defaultCheck
+	o.CF = func(acc *models.CloudflareAccount) DNSAPI { return cloudflare.New(string(acc.Token)) }
 	o.Dests = o.defaultDests
 	return o
 }
@@ -178,6 +186,8 @@ func (o *Orchestrator) Register() {
 	o.Engine.Register(KindCheckAll, o.checkAll)
 	o.Engine.Register(KindProvisionAuto, o.provisionAuto)
 	o.Engine.Register(KindPanelAccess, o.panelAccess)
+	o.Engine.Register(KindCertPush, o.certPush)
+	o.Engine.Register(KindDNSSync, o.dnsSync)
 }
 
 func serverEvent(s *models.Server) jobs.Event {

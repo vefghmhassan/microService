@@ -46,6 +46,7 @@ const (
 	TelegramNotify    = "telegram.notify"
 	GeoIPCityURL      = "geoip.city_url"
 	GeoIPASNURL       = "geoip.asn_url"
+	AcmeStaging       = "acme.staging"
 )
 
 var Defaults = map[string]string{
@@ -81,6 +82,8 @@ var Defaults = map[string]string{
 	// Empty: DB-IP Lite of the current month.
 	GeoIPCityURL: "",
 	GeoIPASNURL:  "",
+	// Let's Encrypt's staging CA: untrusted certificates, no rate limits.
+	AcmeStaging: "false",
 }
 
 // Secret keys are encrypted in the table and masked when listed.

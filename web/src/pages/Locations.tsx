@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Alert, Button, Col, Flex, Form, Input, InputNumber, Modal, Row, Select, Switch, Table, Tag, Typography } from 'antd'
-import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
-import { del, keys, post, put, useAction, useLocations, usePlans, useProviders, useRegions, useSettings } from '../api/hooks'
+import { Alert, Button, Col, Divider, Flex, Form, Input, InputNumber, Modal, Row, Select, Switch, Table, Tag, Tooltip, Typography } from 'antd'
+import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, LockOutlined, PlusOutlined } from '@ant-design/icons'
+import {
+  del, keys, post, put, useAction, useCloudflare, useCloudflareZones, useLocations, usePlans, useProviders, useRegions, useSettings,
+} from '../api/hooks'
 import type { Location } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { ConfirmButton } from '../components/ConfirmButton'
@@ -68,6 +70,15 @@ export function Locations() {
             { title: 'حساب', render: (_, l) => <Tag>{l.provider_account?.name ?? l.provider_account_id}</Tag> },
             { title: 'منطقه', dataIndex: 'region', render: (r: string, l) => <span dir="ltr">{flagEmoji(l.country)} {r}</span> },
             { title: 'پلن', dataIndex: 'plan', render: (p: string) => <span dir="ltr">{p}</span> },
+            {
+              title: 'دامنه', render: (_, l) => (l.cf_account_id ? (
+                <Flex gap={4} align="center">
+                  <span dir="ltr">{l.dns_pattern.replace('{n}', '1')}.{l.cf_zone_name}</span>
+                  {l.ssl && <Tooltip title="SSL"><LockOutlined style={{ color: '#52c41a' }} /></Tooltip>}
+                  {l.dns_proxied && <Tag color="orange" style={{ marginInlineStart: 2 }}>proxied</Tag>}
+                </Flex>
+              ) : <Typography.Text type="secondary">IP</Typography.Text>),
+            },
             { title: 'ظرفیت هم‌زمان', dataIndex: 'capacity', render: (c: number) => (c > 0 ? c : <Typography.Text type="secondary">تا محدودیت ({defaultCap})</Typography.Text>) },
             { title: 'فعال', dataIndex: 'enabled', render: (_, l) => <Switch size="small" checked={l.enabled} onChange={() => toggle.mutate(l)} /> },
             {
@@ -95,6 +106,12 @@ interface FormValues {
   capacity: number
   enabled: boolean
   note?: string
+  cf_account_id?: number
+  cf_zone_id?: string
+  cf_zone_name?: string
+  dns_pattern?: string
+  dns_proxied: boolean
+  ssl: boolean
 }
 
 function LocationModal({ value, onClose }: { value: Location | 'new' | null; onClose: () => void }) {
@@ -105,14 +122,23 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
   const { data: accounts } = useProviders()
   const regions = useRegions(accountId)
   const plans = usePlans(accountId, region)
+  const cfAccountId = Form.useWatch('cf_account_id', form)
+  const zoneName = Form.useWatch('cf_zone_name', form)
+  const pattern = Form.useWatch('dns_pattern', form)
+  const proxied = Form.useWatch('dns_proxied', form)
+  const { data: cfAccounts } = useCloudflare()
+  const zones = useCloudflareZones(cfAccountId || undefined)
 
   useEffect(() => {
     if (!value) return
     form.resetFields()
-    if (existing) form.setFieldsValue(existing)
+    if (existing) form.setFieldsValue({ ...existing, cf_account_id: existing.cf_account_id || undefined })
   }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const save = useAction((v: FormValues) => (existing ? put(`/locations/${existing.id}`, v) : post('/locations', v)), {
+  const save = useAction((f: FormValues) => {
+    const v = { ...f, cf_account_id: f.cf_account_id ?? 0 }
+    return existing ? put(`/locations/${existing.id}`, v) : post('/locations', v)
+  }, {
     success: 'ذخیره شد', invalidate: [keys.locations], onSuccess: onClose,
   })
 
@@ -126,7 +152,7 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
       onOk={() => form.validateFields().then((v) => save.mutate(v))}
       destroyOnHidden
     >
-      <Form form={form} layout="vertical" requiredMark={false} initialValues={{ capacity: 0, enabled: true }}>
+      <Form form={form} layout="vertical" requiredMark={false} initialValues={{ capacity: 0, enabled: true, dns_proxied: false, ssl: true, dns_pattern: '' }}>
         <Form.Item name="provider_account_id" label="حساب ارائه‌دهنده" rules={[{ required: true, message: 'حساب را انتخاب کنید' }]}>
           <Select
             options={accounts?.map((a) => ({ value: a.id, label: `${a.name} (${a.type})` }))}
@@ -168,6 +194,57 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
         </Row>
         <Form.Item name="image" label="ایمیج (اختیاری)"><Input dir="ltr" /></Form.Item>
         <Form.Item name="note" label="یادداشت"><Input /></Form.Item>
+
+        <Divider titlePlacement="start" plain>دامنه و SSL (کلودفلر، اختیاری)</Divider>
+        <Form.Item name="cf_account_id" label="حساب کلودفلر" extra="خالی بماند تا سرورهای این لوکیشن مثل قبل فقط با IP کار کنند.">
+          <Select
+            allowClear placeholder="بدون دامنه"
+            options={cfAccounts?.filter((a) => a.enabled).map((a) => ({ value: a.id, label: a.name }))}
+            onChange={() => form.setFieldsValue({ cf_zone_id: undefined, cf_zone_name: undefined })}
+          />
+        </Form.Item>
+        {!!cfAccountId && (
+          <>
+            <Row gutter={12}>
+              <Col xs={24} sm={12}>
+                <Form.Item name="cf_zone_id" label="دامنه" rules={[{ required: true, message: 'دامنه را انتخاب کنید' }]}
+                  validateStatus={zones.error ? 'error' : undefined} help={zones.error ? (zones.error as Error).message : undefined}>
+                  <Select
+                    showSearch={{ optionFilterProp: 'label' }} loading={zones.isLoading}
+                    options={zones.data?.map((z) => ({ value: z.id, label: z.name }))}
+                    onChange={(id) => form.setFieldsValue({ cf_zone_name: zones.data?.find((z) => z.id === id)?.name })}
+                  />
+                </Form.Item>
+                <Form.Item name="cf_zone_name" hidden><Input /></Form.Item>
+              </Col>
+              <Col xs={24} sm={12}>
+                <Form.Item name="dns_pattern" label="الگوی ساب‌دامین"
+                  rules={[
+                    { required: true, message: 'الگو لازم است' },
+                    { pattern: /^[a-zA-Z0-9-]*\{n\}[a-zA-Z0-9-]*$/, message: 'یک برچسب با {n}، مثل fr{n}' },
+                  ]}
+                  extra={zoneName && pattern?.includes('{n}') ? <span dir="ltr">{pattern.toLowerCase().replace('{n}', '1')}.{zoneName}, {pattern.toLowerCase().replace('{n}', '2')}.{zoneName}, …</span> : 'مثلاً fr{n} → fr1، fr2، …'}>
+                  <Input dir="ltr" placeholder="fr{n}" />
+                </Form.Item>
+              </Col>
+              <Col xs={12}>
+                <Form.Item name="ssl" label="SSL (گواهی wildcard)" valuePropName="checked"
+                  tooltip={`گواهی *.دامنه از Let's Encrypt گرفته و در ${'/root/cert/'} سرور کپی می‌شود؛ پنل 3x-ui هم https می‌شود.`}>
+                  <Switch />
+                </Form.Item>
+              </Col>
+              <Col xs={12}>
+                <Form.Item name="dns_proxied" label="Proxied (ابر نارنجی)" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+              </Col>
+            </Row>
+            {proxied && (
+              <Alert type="warning" showIcon style={{ marginBottom: 12 }} title="با Proxied ترافیک از کلودفلر رد می‌شود"
+                description="فقط اینباندهای ws / grpc / xhttp روی پورت‌های مجاز کلودفلر (مثل 443، 2053، 2083، 2087، 2096، 8443) کار می‌کنند. برای اتصال مستقیم خاموش بماند." />
+            )}
+          </>
+        )}
       </Form>
     </Modal>
   )

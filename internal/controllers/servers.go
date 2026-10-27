@@ -154,7 +154,7 @@ func (a *App) ServerLinks(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	links, lerr := orchestrator.Links(snap, s.IPv4)
+	links, lerr := orchestrator.Links(snap, orchestrator.LinkHost(s))
 	resp := fiber.Map{"links": links}
 	if lerr != nil {
 		resp["warning"] = lerr.Error()

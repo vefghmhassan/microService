@@ -81,7 +81,7 @@ func (o *Orchestrator) provisionAuto(ctx context.Context, r *jobs.Run) error {
 			own := models.Location{
 				ProviderAccountID: old.ProviderAccountID, ProviderAccount: old.ProviderAccount,
 				Region: old.Region, Plan: old.Plan, Image: old.Image, Country: old.Country,
-				Capacity: 1, Enabled: true,
+				Capacity: 1, Enabled: true, DNS: old.DNS,
 			}
 			locs = append([]models.Location{own}, locs...)
 		}
@@ -172,6 +172,10 @@ func (o *Orchestrator) tryLocation(ctx context.Context, r *jobs.Run, loc *models
 			Image:   firstNonEmpty(loc.Image, acc.DefaultImage, prov.Capabilities().DefaultImage),
 			Country: strings.ToUpper(firstNonEmpty(loc.Country, acc.Country)),
 			Status:  models.ServerCreating, SyncStatus: models.SyncPending, XUIScheme: "http",
+			LocationID: loc.ID,
+		}
+		if loc.DNS.On() {
+			s.DNS = loc.DNS
 		}
 		if err := o.DB.Create(s).Error; err != nil {
 			return nil, err
@@ -292,6 +296,10 @@ func (o *Orchestrator) discardCandidate(ctx context.Context, r *jobs.Run, prov p
 // finishInstall runs after an install job's 3x-ui install: either hand over a
 // replaced server's configs in vpn-pannel, or upload fresh links.
 func (o *Orchestrator) finishInstall(ctx context.Context, r *jobs.Run, s *models.Server, p InstallParams) {
+	if s.Hostname != "" {
+		r.Step("DNS " + s.Hostname)
+		_ = o.syncDNS(ctx, r, s)
+	}
 	if p.ReplaceServerID != 0 {
 		var old models.Server
 		if err := o.DB.First(&old, p.ReplaceServerID).Error; err != nil {
@@ -315,7 +323,7 @@ func (o *Orchestrator) finishInstall(ctx context.Context, r *jobs.Run, s *models
 		if _, err := o.Engine.Enqueue(KindDelete, &id, struct{}{}, r.Job.Source); err != nil {
 			r.Logf("warn", "delete %s: %v", old.Name, err)
 		}
-		o.notify("🌍 سرور %s فیلتر بود و با %s (%s) جایگزین شد", old.Name, s.Name, s.IPv4)
+		o.notify("🌍 سرور %s فیلتر بود و با %s (%s) جایگزین شد", old.Name, s.Name, LinkHost(s))
 		return
 	}
 	if p.Upload != nil && *p.Upload {

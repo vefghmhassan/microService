@@ -446,7 +446,7 @@ func (m *Manager) sendLinks(ctx context.Context, b *tg.Bot, chat int64, id uint)
 	if err != nil {
 		return
 	}
-	links, _ := orchestrator.Links(snap, s.IPv4)
+	links, _ := orchestrator.Links(snap, orchestrator.LinkHost(&s))
 	if len(links) == 0 {
 		m.send(ctx, b, chat, "لینکی وجود ندارد", nil)
 		return
@@ -473,7 +473,7 @@ func (m *Manager) sendQRs(ctx context.Context, b *tg.Bot, chat int64, id uint) {
 	if err != nil {
 		return
 	}
-	links, _ := orchestrator.Links(snap, s.IPv4)
+	links, _ := orchestrator.Links(snap, orchestrator.LinkHost(&s))
 	if len(links) == 0 {
 		m.send(ctx, b, chat, "لینکی وجود ندارد", nil)
 		return

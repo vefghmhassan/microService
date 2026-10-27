@@ -64,12 +64,23 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Post("/servers/:id/stats", a.RefreshStats)
 	p.Post("/servers/:id/replace", a.ReplaceServer)
 	p.Post("/servers/:id/panel-access", a.ServerAction(orchestrator.KindPanelAccess))
+	p.Post("/servers/:id/cert", a.ServerAction(orchestrator.KindCertPush))
+	p.Post("/servers/:id/dns", a.ServerAction(orchestrator.KindDNSSync))
 
 	p.Get("/locations", a.ListLocations)
 	p.Post("/locations", a.CreateLocation)
 	p.Post("/locations/reorder", a.ReorderLocations)
 	p.Put("/locations/:id", a.UpdateLocation)
 	p.Delete("/locations/:id", a.DeleteLocation)
+
+	p.Get("/cloudflare", a.ListCloudflare)
+	p.Post("/cloudflare", a.CreateCloudflare)
+	p.Get("/cloudflare/certificates", a.ListCertificates)
+	p.Put("/cloudflare/:id", a.UpdateCloudflare)
+	p.Delete("/cloudflare/:id", a.DeleteCloudflare)
+	p.Post("/cloudflare/:id/test", a.TestCloudflare)
+	p.Get("/cloudflare/:id/zones", a.CloudflareZones)
+	p.Post("/cloudflare/:id/certificate", a.IssueCertificate)
 
 	p.Get("/ips", a.ListIPs)
 	p.Delete("/ips/:id", a.ReleaseIP)

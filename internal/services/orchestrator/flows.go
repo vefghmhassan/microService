@@ -418,6 +418,11 @@ func (o *Orchestrator) rotate(ctx context.Context, r *jobs.Run) error {
 		r.Mark("install")
 	}
 
+	if !r.Done("dns") {
+		_ = o.syncDNS(ctx, r, s)
+		r.Mark("dns")
+	}
+
 	if !r.Done("dest") {
 		r.Step("update vpn-pannel")
 		if err := o.moveDestination(ctx, r, s, oldUploaded); err != nil {
@@ -461,23 +466,36 @@ func (o *Orchestrator) fallbackToNextLocation(r *jobs.Run, s *models.Server) boo
 	return true
 }
 
-// moveDestination points every vpn-pannel's configs at the new IP. A panel
-// that had none on the old address (never uploaded, or removed by hand) gets
-// the links uploaded fresh. It fails only when no panel could be updated.
+// moveDestination points every vpn-pannel's configs at the server's link
+// host. A panel that had none on the old address (never uploaded, or removed
+// by hand) gets the links uploaded fresh. It fails only when no panel could
+// be updated. A hostname that stays the same needs no move: DNS did it.
 func (o *Orchestrator) moveDestination(ctx context.Context, r *jobs.Run, s *models.Server, oldIP string) error {
+	host := LinkHost(s)
+	if oldIP != "" && oldIP == host {
+		if s.UploadedIP != host {
+			now := time.Now()
+			s.UploadedIP, s.UploadedAt = host, &now
+			o.save(r, s, "uploaded_ip", "uploaded_at")
+		}
+		if s.Hostname != "" {
+			r.Info("links point at %s; vpn-pannel needs no change", host)
+		}
+		return nil
+	}
 	dests := o.Dests()
 	if len(dests) == 0 {
 		r.Info("vpn-pannel is not configured; skipped")
 		return nil
 	}
-	if oldIP == "" || oldIP == s.IPv4 {
+	if oldIP == "" {
 		return nil
 	}
 	var fresh []NamedDest
 	var errs []error
 	moved := 0
 	for _, d := range dests {
-		res, err := d.ReplaceAddress(ctx, oldIP, s.IPv4, s.Country)
+		res, err := d.ReplaceAddress(ctx, oldIP, host, s.Country)
 		if errors.Is(err, destination.ErrNoNodes) {
 			r.Info("%s: no configs on %s; uploading", d.Name, oldIP)
 			fresh = append(fresh, d)
@@ -505,7 +523,7 @@ func (o *Orchestrator) moveDestination(ctx context.Context, r *jobs.Run, s *mode
 		return errors.Join(errs...)
 	}
 	now := time.Now()
-	s.UploadedIP, s.UploadedAt = s.IPv4, &now
+	s.UploadedIP, s.UploadedAt = host, &now
 	o.save(r, s, "uploaded_ip", "uploaded_at")
 	return nil
 }
@@ -519,6 +537,7 @@ func (o *Orchestrator) install(ctx context.Context, r *jobs.Run) error {
 	if err != nil {
 		return err
 	}
+	o.assignHostname(r, s, p.ReplaceServerID)
 	if !r.Done("install") {
 		if err := o.installAndApply(ctx, r, s, p.Version); err != nil {
 			return o.fail(r, s, err)
@@ -552,6 +571,10 @@ func (o *Orchestrator) installAndApply(ctx context.Context, r *jobs.Run, s *mode
 	}
 	if err := o.installPanel(ctx, r, s, remote, version); err != nil {
 		return err
+	}
+	// Before the template: TLS inbounds need the files when xray starts.
+	if err := o.pushCert(ctx, r, s, remote); err != nil {
+		r.Logf("warn", "SSL: %v", err)
 	}
 
 	r.Step("apply template")
@@ -649,7 +672,7 @@ func (o *Orchestrator) uploadTo(ctx context.Context, r *jobs.Run, s *models.Serv
 	if err != nil {
 		return err
 	}
-	urls, err := UploadEntries(snap, s.IPv4)
+	urls, err := UploadEntries(snap, LinkHost(s))
 	if err != nil {
 		r.Logf("warn", "some links could not be built: %v", err)
 	}
@@ -682,7 +705,7 @@ func (o *Orchestrator) uploadTo(ctx context.Context, r *jobs.Run, s *models.Serv
 		return errors.Join(errs...)
 	}
 	now := time.Now()
-	s.UploadedIP, s.UploadedAt = s.IPv4, &now
+	s.UploadedIP, s.UploadedAt = LinkHost(s), &now
 	o.save(r, s, "uploaded_ip", "uploaded_at")
 	return nil
 }
@@ -763,6 +786,7 @@ func (o *Orchestrator) delete(ctx context.Context, r *jobs.Run) error {
 	}
 	o.DB.Model(&models.IPAddress{}).Where("server_id = ? AND status = ?", s.ID, models.IPInUse).
 		Updates(map[string]any{"status": models.IPReleased, "server_id": nil})
+	o.removeDNS(ctx, r, s)
 	if s.UploadedIP != "" {
 		for _, d := range o.Dests() {
 			if err := d.SetActive(ctx, s.UploadedIP, false); err != nil {

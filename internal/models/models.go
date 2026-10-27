@@ -60,11 +60,60 @@ type Location struct {
 	Country           string           `gorm:"size:2" json:"country"`
 	// Capacity is how many servers may be tried at once here. 0 means
 	// "until the provider refuses", bounded by the auto.max_per_location setting.
-	Capacity  int       `json:"capacity"`
-	Enabled   bool      `json:"enabled"`
+	Capacity int  `json:"capacity"`
+	Enabled  bool `json:"enabled"`
+	// DNS: when CFAccountID is set, every server built here gets a numbered
+	// subdomain of CFZoneName from DNSPattern ("fr{n}" → fr1.example.com),
+	// and a replacement here takes over its predecessor's name.
+	DNS
 	Note      string    `gorm:"size:255" json:"note"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// DNS is the Cloudflare part of a Location, copied onto each server built
+// there so editing or deleting the location never orphans a record.
+type DNS struct {
+	CFAccountID uint   `gorm:"column:cf_account_id;index" json:"cf_account_id"`
+	CFZoneID    string `gorm:"column:cf_zone_id;size:64" json:"cf_zone_id"`
+	CFZoneName  string `gorm:"column:cf_zone_name;size:255" json:"cf_zone_name"`
+	DNSPattern  string `gorm:"column:dns_pattern;size:63" json:"dns_pattern"`
+	DNSProxied  bool   `gorm:"column:dns_proxied" json:"dns_proxied"`
+	// SSL pushes the zone's wildcard certificate to the server and serves
+	// the 3x-ui panel over https.
+	SSL bool `gorm:"column:ssl" json:"ssl"`
+}
+
+// On reports whether DNS is configured.
+func (d DNS) On() bool { return d.CFAccountID != 0 && d.CFZoneID != "" && d.DNSPattern != "" }
+
+// CloudflareAccount is one Cloudflare API token (Zone:Read + DNS:Edit).
+type CloudflareAccount struct {
+	ID    uint          `gorm:"primaryKey" json:"id"`
+	Name  string        `gorm:"size:100;not null" json:"name"`
+	Token secret.String `json:"-"`
+	// AcmeEmail is the Let's Encrypt contact for this account's certificates.
+	AcmeEmail string    `gorm:"size:255" json:"acme_email"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Certificate is the wildcard certificate of one zone (*.zone and zone),
+// issued centrally over DNS-01 and copied to every server that uses it.
+type Certificate struct {
+	ID          uint          `gorm:"primaryKey" json:"id"`
+	CFAccountID uint          `gorm:"column:cf_account_id;index" json:"cf_account_id"`
+	CFZoneID    string        `gorm:"column:cf_zone_id;size:64" json:"cf_zone_id"`
+	ZoneName    string        `gorm:"size:255;uniqueIndex" json:"zone_name"`
+	CertPEM     string        `gorm:"type:text" json:"-"`
+	KeyPEM      secret.String `json:"-"`
+	AccountKey  secret.String `json:"-"` // the ACME account key (PEM)
+	NotAfter    *time.Time    `json:"not_after"`
+	IssuedAt    *time.Time    `json:"issued_at"`
+	LastError   string        `gorm:"type:text" json:"last_error"`
+	CreatedAt   time.Time     `json:"created_at"`
+	UpdatedAt   time.Time     `json:"updated_at"`
 }
 
 // Server lifecycle states.
@@ -103,6 +152,15 @@ type Server struct {
 	IPv4              string           `gorm:"size:45;index" json:"ipv4"`
 	IPRef             string           `gorm:"size:64" json:"ip_ref"`
 	SSHHostKey        string           `gorm:"type:text" json:"-"`
+	// LocationID is the placement entry the server was built for (0 = manual).
+	LocationID uint `gorm:"index" json:"location_id"`
+	DNS
+	// Hostname is the server's subdomain (empty without DNS); links and
+	// uploads use it instead of the IP.
+	Hostname     string     `gorm:"size:255;index" json:"hostname"`
+	DNSRecordID  string     `gorm:"column:dns_record_id;size:64" json:"dns_record_id"`
+	DNSError     string     `gorm:"column:dns_error;size:255" json:"dns_error"`
+	CertNotAfter *time.Time `json:"cert_not_after"`
 
 	XUIPort     int           `gorm:"column:xui_port" json:"xui_port"`
 	XUIBasePath string        `gorm:"column:xui_base_path;size:64" json:"xui_base_path"`
@@ -112,15 +170,17 @@ type Server struct {
 	XUIScheme   string        `gorm:"column:xui_scheme;size:8" json:"xui_scheme"`
 	// XUIPublic is true when the panel listens on the public IP (reachable in
 	// a browser); otherwise only through the SSH tunnel.
-	XUIPublic     bool       `gorm:"column:xui_public" json:"xui_public"`
-	PanelVersion  string     `gorm:"size:32" json:"panel_version"`
-	XrayVersion   string     `gorm:"size:32" json:"xray_version"`
-	WantPanelVer  string     `gorm:"size:32" json:"want_panel_version"`
-	WantXrayVer   string     `gorm:"size:32" json:"want_xray_version"`
-	AppliedHash   string     `gorm:"size:64" json:"applied_hash"`
-	SyncStatus    string     `gorm:"size:16" json:"sync_status"`
-	UploadedAt    *time.Time `json:"uploaded_at"`
-	UploadedIP    string     `gorm:"size:45" json:"uploaded_ip"`
+	XUIPublic    bool       `gorm:"column:xui_public" json:"xui_public"`
+	PanelVersion string     `gorm:"size:32" json:"panel_version"`
+	XrayVersion  string     `gorm:"size:32" json:"xray_version"`
+	WantPanelVer string     `gorm:"size:32" json:"want_panel_version"`
+	WantXrayVer  string     `gorm:"size:32" json:"want_xray_version"`
+	AppliedHash  string     `gorm:"size:64" json:"applied_hash"`
+	SyncStatus   string     `gorm:"size:16" json:"sync_status"`
+	UploadedAt   *time.Time `json:"uploaded_at"`
+	// UploadedIP is the address the links in vpn-pannel point at: the IP, or
+	// the hostname when the server has one.
+	UploadedIP    string     `gorm:"size:255" json:"uploaded_ip"`
 	LastCheckAt   *time.Time `json:"last_check_at"`
 	LastCheckOK   *bool      `json:"last_check_ok"`
 	LastCheckNote string     `gorm:"size:255" json:"last_check_note"`
@@ -366,5 +426,6 @@ func All() []any {
 		&AdminUser{}, &ProviderAccount{}, &Location{}, &Server{}, &InboundStat{}, &IPAddress{},
 		&CheckRun{}, &CheckProbe{}, &XrayTemplate{}, &InboundTemplate{},
 		&Job{}, &JobLog{}, &Setting{}, &ClientIP{}, &IPGeo{}, &Destination{},
+		&CloudflareAccount{}, &Certificate{},
 	}
 }

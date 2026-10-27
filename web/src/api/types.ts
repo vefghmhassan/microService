@@ -38,7 +38,45 @@ export interface ProviderType {
   docs: string
 }
 
-export interface Location {
+/** DNS is the Cloudflare part of a location, copied onto its servers. */
+export interface DNSFields {
+  cf_account_id: number
+  cf_zone_id: string
+  cf_zone_name: string
+  dns_pattern: string
+  dns_proxied: boolean
+  ssl: boolean
+}
+
+export interface CloudflareAccount {
+  id: number
+  name: string
+  acme_email: string
+  enabled: boolean
+  has_token: boolean
+  location_count: number
+  server_count: number
+  created_at: string
+}
+
+export interface CloudflareZone {
+  id: string
+  name: string
+  status: string
+}
+
+export interface Certificate {
+  id: number
+  cf_account_id: number
+  cf_zone_id: string
+  zone_name: string
+  not_after: string | null
+  issued_at: string | null
+  last_error: string
+  server_count: number
+}
+
+export interface Location extends DNSFields {
   id: number
   priority: number
   provider_account_id: number
@@ -61,8 +99,13 @@ export interface Option {
   price_monthly?: number
 }
 
-export interface Server {
+export interface Server extends DNSFields {
   id: number
+  location_id: number
+  hostname: string
+  dns_record_id: string
+  dns_error: string
+  cert_not_after: string | null
   name: string
   provider_account_id: number
   provider_account?: ProviderAccount

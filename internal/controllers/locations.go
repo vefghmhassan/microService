@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm"
 
 	"microserver/internal/models"
+	"microserver/internal/services/orchestrator"
 )
 
 func (a *App) ListLocations(c *fiber.Ctx) error {
@@ -26,6 +27,12 @@ type locationInput struct {
 	Capacity          int    `json:"capacity"`
 	Enabled           *bool  `json:"enabled"`
 	Note              string `json:"note"`
+	CFAccountID       uint   `json:"cf_account_id"`
+	CFZoneID          string `json:"cf_zone_id"`
+	CFZoneName        string `json:"cf_zone_name"`
+	DNSPattern        string `json:"dns_pattern"`
+	DNSProxied        bool   `json:"dns_proxied"`
+	SSL               bool   `json:"ssl"`
 }
 
 func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
@@ -43,6 +50,24 @@ func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
 	if in.Capacity < 0 || in.Capacity > 50 {
 		return errJSON(c, fiber.StatusBadRequest, "ظرفیت باید بین 0 تا 50 باشد")
 	}
+	dns := models.DNS{}
+	if in.CFAccountID != 0 {
+		var cf models.CloudflareAccount
+		if err := a.DB.First(&cf, in.CFAccountID).Error; err != nil {
+			return errJSON(c, fiber.StatusBadRequest, "حساب کلودفلر پیدا نشد")
+		}
+		if in.CFZoneID == "" || in.CFZoneName == "" {
+			return errJSON(c, fiber.StatusBadRequest, "دامنه کلودفلر را انتخاب کنید")
+		}
+		if err := orchestrator.ValidPattern(in.DNSPattern); err != nil {
+			return errJSON(c, fiber.StatusBadRequest, err.Error())
+		}
+		dns = models.DNS{
+			CFAccountID: cf.ID, CFZoneID: in.CFZoneID,
+			CFZoneName: strings.TrimSuffix(strings.ToLower(strings.TrimSpace(in.CFZoneName)), "."),
+			DNSPattern: strings.ToLower(strings.TrimSpace(in.DNSPattern)), DNSProxied: in.DNSProxied, SSL: in.SSL,
+		}
+	}
 	if l.ID == 0 {
 		// New entries go to the end of the list.
 		var max struct{ M int }
@@ -54,6 +79,7 @@ func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
 	l.Region, l.Plan, l.Image = strings.TrimSpace(in.Region), strings.TrimSpace(in.Plan), strings.TrimSpace(in.Image)
 	l.Country = strings.ToUpper(strings.TrimSpace(in.Country))
 	l.Capacity, l.Note = in.Capacity, in.Note
+	l.DNS = dns
 	if in.Enabled != nil {
 		l.Enabled = *in.Enabled
 	}
