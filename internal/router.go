@@ -87,6 +87,8 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Get("/template/x25519", a.NewX25519)
 	p.Get("/template/xray/base", a.XrayBase)
 	p.Post("/template/outbounds/test", a.TestOutbounds)
+	p.Post("/template/reality/scan", a.ScanReality)
+	p.Post("/template/reality/scan-many", a.ScanRealityMany)
 	p.Post("/template/sync", a.EnqueueGlobal(orchestrator.KindSyncAll))
 
 	p.Get("/jobs", a.ListJobs)

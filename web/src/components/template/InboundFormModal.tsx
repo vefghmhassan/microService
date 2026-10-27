@@ -16,6 +16,7 @@ import {
   xhttpModes, type InboundProtocol, type Obj,
 } from '../../lib/xray'
 import { GB } from '../../lib/format'
+import { RealityCheck, type ScanServers } from './RealityScanner'
 
 interface Model {
   remark: string
@@ -75,7 +76,7 @@ function fromTemplate(t: InboundTemplate | null): Model {
  * dialog does: tabs for basics, protocol, transport, security, sniffing and
  * clients, with an advanced JSON tab only for the rare field not covered.
  */
-export function InboundFormModal({ value, onClose }: { value: InboundTemplate | 'new' | null; onClose: () => void }) {
+export function InboundFormModal({ value, servers, onClose }: { value: InboundTemplate | 'new' | null; servers?: ScanServers; onClose: () => void }) {
   const existing = value && value !== 'new' ? value : null
   const [m, setM] = useState<Model>(() => fromTemplate(null))
   const [tab, setTab] = useState('basic')
@@ -180,7 +181,7 @@ export function InboundFormModal({ value, onClose }: { value: InboundTemplate | 
                     options={['none', 'tls', 'reality'].map((v) => ({ value: v, label: v, disabled: !modes.includes(v) }))} />
                 </F>
                 {security === 'tls' && <TLSFields s={s} set={set} />}
-                {security === 'reality' && <RealityFields s={s} set={set} onKeys={genKeys} />}
+                {security === 'reality' && <RealityFields s={s} set={set} onKeys={genKeys} servers={servers} />}
                 {security === 'none' && <Typography.Text type="secondary">بدون TLS؛ ترافیک فقط با رمزنگاری خود پروتکل محافظت می‌شود.</Typography.Text>}
               </>
             ),
@@ -396,7 +397,7 @@ function TLSFields({ s, set }: { s: Obj; set: Setter }) {
   )
 }
 
-function RealityFields({ s, set, onKeys }: { s: Obj; set: Setter; onKeys: () => void }) {
+function RealityFields({ s, set, onKeys, servers }: { s: Obj; set: Setter; onKeys: () => void; servers?: ScanServers }) {
   const r = s.realitySettings ?? {}
   const p = (...path: string[]) => ['stream', 'realitySettings', ...path]
   return (
@@ -413,6 +414,13 @@ function RealityFields({ s, set, onKeys }: { s: Obj; set: Setter; onKeys: () => 
       </F>
       <F label="SNI (serverNames)">
         <Select mode="tags" value={r.serverNames ?? []} onChange={(v) => set(p('serverNames'), v)} style={{ width: '100%' }} tokenSeparators={[',']} />
+      </F>
+      <F label="تست هدف" tip="از 3x-ui یکی از سرورها بررسی می‌کند هدف TLS 1.3، h2، X25519 و گواهی معتبر دارد (3x-ui نسخه 3.7 به بعد)">
+        <RealityCheck target={r.target ?? ''} serverNames={r.serverNames ?? []} xver={r.xver ?? 0} servers={servers}
+          onApply={(target, names) => {
+            set(p('target'), target)
+            if (names.length) set(p('serverNames'), names)
+          }} />
       </F>
       <F label="Fingerprint">
         <Select value={r.settings?.fingerprint ?? 'chrome'} onChange={(v) => set(p('settings', 'fingerprint'), v)} options={fingerprints.map((v) => ({ value: v, label: v }))} style={{ width: '100%' }} />

@@ -307,6 +307,50 @@ func (c *Client) InstallXray(ctx context.Context, version string) error {
 	return c.call(ctx, http.MethodPost, "/panel/api/server/installXray/"+url.PathEscape(version), nil, nil)
 }
 
+// RealityScan is one 3x-ui (v3.7+) Reality target probe, run from the server.
+type RealityScan struct {
+	Target         string   `json:"target"`
+	Host           string   `json:"host"`
+	IP             string   `json:"ip"`
+	Port           int      `json:"port"`
+	Feasible       bool     `json:"feasible"`
+	PrivateTarget  bool     `json:"privateTarget"`
+	TLS13          bool     `json:"tls13"`
+	TLSVersion     string   `json:"tlsVersion"`
+	H2             bool     `json:"h2"`
+	ALPN           string   `json:"alpn"`
+	X25519         bool     `json:"x25519"`
+	CurveID        string   `json:"curveID"`
+	CertValid      bool     `json:"certValid"`
+	CertChainValid bool     `json:"certChainValid"`
+	CertSubject    string   `json:"certSubject"`
+	CertIssuer     string   `json:"certIssuer"`
+	NotAfter       string   `json:"notAfter"`
+	ServerNames    []string `json:"serverNames"`
+	LatencyMs      int      `json:"latencyMs"`
+	Reason         string   `json:"reason"`
+}
+
+// ScanRealityTarget checks one target with the given SNI (empty = target host).
+func (c *Client) ScanRealityTarget(ctx context.Context, target, sni string, xver int) (*RealityScan, error) {
+	var out RealityScan
+	form := url.Values{"target": {target}, "sni": {sni}, "xver": {strconv.Itoa(xver)}}
+	err := c.call(ctx, http.MethodPost, "/panel/api/server/scanRealityTarget", form, &out)
+	return &out, err
+}
+
+// ScanRealityTargets checks a comma-separated list of hosts, IPs or CIDRs;
+// empty means 3x-ui's built-in candidates. Results come best first.
+func (c *Client) ScanRealityTargets(ctx context.Context, targets string) ([]RealityScan, error) {
+	var out []RealityScan
+	form := url.Values{}
+	if targets != "" {
+		form.Set("targets", targets)
+	}
+	err := c.call(ctx, http.MethodPost, "/panel/api/server/scanRealityTargets", form, &out)
+	return out, err
+}
+
 type Status struct {
 	Xray struct {
 		State   string `json:"state"`

@@ -326,6 +326,30 @@ export interface GeoReport {
   collect: { id: number; name: string; ipv4: string; ip_collect_at: string | null; ip_collect_note: string }[]
 }
 
+// RealityScan is one 3x-ui Reality target probe, run from a server.
+export interface RealityScan {
+  target: string
+  host: string
+  ip: string
+  port: number
+  feasible: boolean
+  privateTarget: boolean
+  tls13: boolean
+  tlsVersion: string
+  h2: boolean
+  alpn: string
+  x25519: boolean
+  curveID: string
+  certValid: boolean
+  certChainValid: boolean
+  certSubject: string
+  certIssuer: string
+  notAfter: string
+  serverNames: string[] | null
+  latencyMs: number
+  reason: string
+}
+
 export interface OutboundTestResult {
   tag: string
   ok: boolean

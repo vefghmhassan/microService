@@ -36,7 +36,7 @@ export function Templates() {
       {data.xray.full && <Alert type="info" showIcon style={{ marginBottom: 16 }} title="حالت پیشرفته فعال است: کل تمپلیت Xray از تب «پیشرفته» روی پنل‌ها نوشته می‌شود؛ تغییرات تب‌های خروجی/روتینگ/DNS هم داخل همان ذخیره می‌شود." />}
       {drift > 0 && <Alert type="warning" showIcon style={{ marginBottom: 16 }} title={`${drift} سرور با تمپلیت فعلی همگام نیستند.`} />}
       <Tabs items={[
-        { key: 'inbounds', label: `ورودی‌ها (${data.inbounds.length})`, children: <Inbounds list={data.inbounds} /> },
+        { key: 'inbounds', label: `ورودی‌ها (${data.inbounds.length})`, children: <Inbounds list={data.inbounds} servers={data.servers} /> },
         { key: 'outbounds', label: 'خروجی‌ها', children: <XrayForm xray={data.xray} part="outbounds" inboundTags={inboundTags} servers={data.servers} /> },
         { key: 'routing', label: 'روتینگ و بالانسر', children: <XrayForm xray={data.xray} part="routing" inboundTags={inboundTags} /> },
         { key: 'dns', label: 'DNS', children: <DNSPart xray={data.xray} /> },
@@ -131,7 +131,7 @@ function DNSPart({ xray }: { xray: XrayTemplate }) {
   )
 }
 
-function Inbounds({ list }: { list: InboundTemplate[] }) {
+function Inbounds({ list, servers }: { list: InboundTemplate[]; servers: TemplateResponse['servers'] }) {
   const [editing, setEditing] = useState<InboundTemplate | 'new' | null>(null)
   const [links, setLinks] = useState<Link[] | null>(null)
   const remove = useAction((id: number) => del(`/template/inbounds/${id}`), { success: 'حذف شد', invalidate: [keys.template, keys.servers] })
@@ -162,7 +162,7 @@ function Inbounds({ list }: { list: InboundTemplate[] }) {
           },
         ]}
       />
-      <InboundFormModal value={editing} onClose={() => setEditing(null)} />
+      <InboundFormModal value={editing} servers={servers} onClose={() => setEditing(null)} />
       <Modal open={!!links} onCancel={() => setLinks(null)} footer={null} title="نمونه لینک‌ها (IP نمونه 1.2.3.4)" width={720}>
         <Flex vertical gap={8}>{links?.map((l) => <CopyText key={l.url} text={l.url} maxWidth="100%" />)}</Flex>
       </Modal>
