@@ -209,3 +209,32 @@ func TestRunFallsThroughDeadSources(t *testing.T) {
 		t.Errorf("all dead should fail the IP, got %s (%s)", res.Verdict, res.Summary)
 	}
 }
+
+func TestCheckHostCCParsesResults(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/tcp":
+			io.WriteString(w, `{"success":true,"uuid":"u1"}`)
+		case r.URL.Path == "/report/u1":
+			io.WriteString(w, `{"data":{
+				"IR-TEH-A":{"countryCode":"IR","city":"Tehran","asn":"AS1","checks":[{"status":1,"connectiontime":88}]},
+				"IR-TEH-B":{"countryCode":"IR","asn":"AS1","checks":[{"status":0,"errortext":"timeout"}]},
+				"DE-X":{"countryCode":"DE","checks":[{"status":1,"connectiontime":9}]},
+				"NL-Y":{"countryCode":"NL","checks":[]}}}`)
+		}
+	}))
+	defer srv.Close()
+	c := NewCheckHostCC("")
+	c.BaseURL, c.PollEvery, c.Wait = srv.URL, time.Millisecond, 20*time.Millisecond
+	probes, err := c.Check(context.Background(), "1.2.3.4", 22)
+	if err != nil || len(probes) != 4 {
+		t.Fatalf("%v %v", err, probes)
+	}
+	got := map[string]Probe{}
+	for _, p := range probes {
+		got[p.Node] = p
+	}
+	if !got["IR-TEH-A"].OK || got["IR-TEH-A"].LatencyMs != 88 || got["IR-TEH-B"].OK || got["IR-TEH-B"].Error != "timeout" || !got["NL-Y"].NoAnswer {
+		t.Errorf("unexpected probes: %+v", got)
+	}
+}

@@ -139,6 +139,8 @@ func (o *Orchestrator) NewChecker() *checker.Checker {
 		switch s {
 		case "checkhost":
 			c.Sources = append(c.Sources, checker.NewCheckHost())
+		case "checkhostcc":
+			c.Sources = append(c.Sources, checker.NewCheckHostCC(o.Settings.Get(settings.CheckHostCCKey)))
 		case "globalping":
 			c.Sources = append(c.Sources, checker.NewGlobalping(o.Settings.Get(settings.GlobalpingToken), o.Settings.Int(settings.GlobalpingLimit)))
 		case "atlas":

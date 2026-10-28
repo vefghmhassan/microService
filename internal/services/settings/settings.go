@@ -27,6 +27,7 @@ const (
 	GlobalpingToken   = "check.globalping_token"
 	GlobalpingLimit   = "check.globalping_limit"
 	AtlasKey          = "check.atlas_key"
+	CheckHostCCKey    = "check.checkhostcc_key"
 	AtlasLimit        = "check.atlas_limit"
 	RotateMaxAttempts = "rotate.max_attempts"
 	RotateKeepOld     = "rotate.keep_filtered_ip"
@@ -68,6 +69,7 @@ var Defaults = map[string]string{
 	GlobalpingLimit:  "8",
 	// RIPE Atlas has Iranian probes with IPv6; add "atlas" to check.sources.
 	AtlasKey:          "",
+	CheckHostCCKey:    "",
 	AtlasLimit:        "8",
 	RotateMaxAttempts: "5",
 	RotateKeepOld:     "false",
@@ -103,6 +105,7 @@ var Defaults = map[string]string{
 var Secret = map[string]bool{
 	GlobalpingToken:  true,
 	AtlasKey:         true,
+	CheckHostCCKey:   true,
 	VPNPanelPassword: true,
 	TelegramToken:    true,
 }
