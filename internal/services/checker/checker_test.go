@@ -238,3 +238,13 @@ func TestCheckHostCCParsesResults(t *testing.T) {
 		t.Errorf("unexpected probes: %+v", got)
 	}
 }
+
+func TestRunIPv6NeedsOnlyOneNetwork(t *testing.T) {
+	var calls []string
+	src := fakeSource{name: "a", calls: &calls, probes: []Probe{
+		{Source: "a", Country: "IR", ASN: "AS1", OK: true}, {Source: "a", Country: "IR", ASN: "AS1", OK: true}}}
+	c := &Checker{Sources: []Source{src}, Policy: Policy{MinOK: 2, MinASN: 2}}
+	if res := c.Run(context.Background(), "::1", 1); res.Verdict != Healthy {
+		t.Errorf("got %s (%s)", res.Verdict, res.Summary)
+	}
+}

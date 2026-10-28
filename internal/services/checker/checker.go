@@ -70,6 +70,12 @@ type Checker struct {
 // this machine (outside Iran) runs alongside.
 func (c *Checker) Run(ctx context.Context, host string, port int) *Result {
 	res := &Result{Host: host, Port: port}
+	pol := c.Policy
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		// Few Iranian vantage points speak IPv6 and they sit on one or two
+		// networks; asking for more diversity than exists fails every server.
+		pol.MinASN = 1
+	}
 	control := LocalTCP(ctx, host, port)
 
 	var gathered []Probe
@@ -85,13 +91,13 @@ func (c *Checker) Run(ctx context.Context, host string, port int) *Result {
 		}
 		gathered = append(gathered, probes...)
 		res.Probes = append(append([]Probe{}, gathered...), control)
-		Decide(res, c.Policy)
+		Decide(res, pol)
 		if res.Verdict != Unknown {
 			return res
 		}
 	}
 	res.Probes = append(append([]Probe{}, gathered...), control)
-	Decide(res, c.Policy)
+	Decide(res, pol)
 	if !answered(gathered) {
 		res.Verdict, res.OK = Filtered, false
 		res.Summary = "filtered: no check source could probe from Iran (" + strings.Join(dead, ", ") + ")"
@@ -165,11 +171,14 @@ func Decide(res *Result, p Policy) {
 	}
 	res.OK = res.Verdict == Healthy
 	res.Summary = fmt.Sprintf("%s: %d/%d Iranian probes connected across %d networks (need %d across %d); outside control %s",
-		res.Verdict, irOK, irTotal, len(asns), p.MinOK, p.MinASN, okWord(controlOK))
+		res.Verdict, irOK, irTotal, len(asns), p.MinOK, p.MinASN, controlWord(haveControl, controlOK))
 }
 
-func okWord(ok bool) string {
-	if ok {
+func controlWord(have, ok bool) string {
+	switch {
+	case !have:
+		return "unavailable"
+	case ok:
 		return "ok"
 	}
 	return "failed"
