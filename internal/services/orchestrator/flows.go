@@ -313,6 +313,14 @@ func (o *Orchestrator) rotateOnce(ctx context.Context, r *jobs.Run, prov provide
 		keep = *keepOld
 	}
 	caps := prov.Capabilities()
+	if o.prefixRotation(r, prov, s) {
+		// Another address of the server's own /64: no rebuild, no new server.
+		res, err := o.rotateInPrefix(ctx, r, s)
+		if err == nil {
+			return res, nil
+		}
+		r.Logf("warn", "rotating inside the /64 failed (%v); rotating through the provider", err)
+	}
 	opts := providers.RotateOptions{KeepOld: keep && caps.CanKeepOldIP, Create: o.createRequest(s), IPv6: s.Family() == models.FamilyV6}
 	if opts.IPv6 {
 		// A kept IPv4 would not change the address clients use.

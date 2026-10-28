@@ -31,6 +31,7 @@ const (
 	AtlasLimit        = "check.atlas_limit"
 	RotateMaxAttempts = "rotate.max_attempts"
 	RotateKeepOld     = "rotate.keep_filtered_ip"
+	RotateV6InPrefix  = "rotate.v6_in_prefix"
 	RotateRetryHours  = "rotate.retry_kept_after_hours"
 	AutoRotate        = "rotate.auto"
 	RotateFallback    = "rotate.fallback_location"
@@ -73,6 +74,7 @@ var Defaults = map[string]string{
 	AtlasLimit:        "8",
 	RotateMaxAttempts: "5",
 	RotateKeepOld:     "false",
+	RotateV6InPrefix:  "true",
 	RotateRetryHours:  "24",
 	AutoRotate:        "false",
 	RotateFallback:    "true",
