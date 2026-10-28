@@ -311,6 +311,11 @@ func (o *Orchestrator) finishInstall(ctx context.Context, r *jobs.Run, s *models
 			r.Logf("warn", "server to replace (%d): %v", p.ReplaceServerID, err)
 			return
 		}
+		if old.PanelName != "" && s.PanelName == "" {
+			// The configs keep their names in vpn-pannel; so does the server.
+			s.PanelName = old.PanelName
+			o.save(r, s, "panel_name")
+		}
 		if old.UploadedIP != "" {
 			r.Step("move vpn-pannel configs from " + old.Name)
 			if err := o.moveDestination(ctx, r, s, old.UploadedIP); err != nil {

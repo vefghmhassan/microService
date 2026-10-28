@@ -68,9 +68,12 @@ type Location struct {
 	// subdomain of CFZoneName from DNSPattern ("fr{n}" → fr1.example.com),
 	// and a replacement here takes over its predecessor's name.
 	DNS
-	Note      string    `gorm:"size:255" json:"note"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	// NamePrefix names the configs servers built here get in vpn-pannel:
+	// "sama" gives sama-1, sama-2, … Empty keeps the default name.
+	NamePrefix string    `gorm:"size:40" json:"name_prefix"`
+	Note       string    `gorm:"size:255" json:"note"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // DNS is the Cloudflare part of a Location, copied onto each server built
@@ -162,6 +165,9 @@ type Server struct {
 	SSHHostKey string `gorm:"type:text" json:"-"`
 	// LocationID is the placement entry the server was built for (0 = manual).
 	LocationID uint `gorm:"index" json:"location_id"`
+	// PanelName is the base name this server's configs carry in vpn-pannel
+	// when it came from a location with a name prefix ("sama-3").
+	PanelName string `gorm:"size:80;index" json:"panel_name"`
 	DNS
 	// Hostname is the server's subdomain (empty without DNS); links and
 	// uploads use it instead of the IP.

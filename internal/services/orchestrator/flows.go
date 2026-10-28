@@ -703,6 +703,9 @@ func (o *Orchestrator) uploadTo(ctx context.Context, r *jobs.Run, s *models.Serv
 		return errors.New("no inbound is marked for upload")
 	}
 	if baseName == "" {
+		baseName = o.panelBaseName(s)
+	}
+	if baseName == "" {
 		baseName = strings.ToLower(firstNonEmpty(s.Country, "xx")) + "-" + s.Name
 	}
 	var errs []error

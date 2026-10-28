@@ -37,6 +37,7 @@ type locationInput struct {
 	DNSProxied        bool   `json:"dns_proxied"`
 	SSL               bool   `json:"ssl"`
 	IPFamily          string `json:"ip_family"`
+	NamePrefix        string `json:"name_prefix"`
 }
 
 func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
@@ -53,6 +54,10 @@ func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
 	}
 	if in.Capacity < 0 || in.Capacity > 50 {
 		return errJSON(c, fiber.StatusBadRequest, "ظرفیت باید بین 0 تا 50 باشد")
+	}
+	prefix := strings.ToLower(strings.TrimSpace(in.NamePrefix))
+	if err := orchestrator.ValidNamePrefix(prefix); err != nil {
+		return errJSON(c, fiber.StatusBadRequest, err.Error())
 	}
 	dns := models.DNS{}
 	if in.CFAccountID != 0 {
@@ -82,7 +87,7 @@ func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
 	l.ProviderAccountID = acc.ID
 	l.Region, l.Plan, l.Image = strings.TrimSpace(in.Region), strings.TrimSpace(in.Plan), strings.TrimSpace(in.Image)
 	l.Country = strings.ToUpper(strings.TrimSpace(in.Country))
-	l.Capacity, l.Note = in.Capacity, in.Note
+	l.Capacity, l.Note, l.NamePrefix = in.Capacity, in.Note, prefix
 	if err := checkFamily(c, in.IPFamily); err != nil {
 		return err
 	}

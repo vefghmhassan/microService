@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState, type HTMLAttributes } from 'react'
 import { Alert, Button, Col, Divider, Flex, Form, Input, InputNumber, Modal, Row, Select, Switch, Table, Tag, Tooltip, Typography } from 'antd'
-import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, LockOutlined, PlusOutlined } from '@ant-design/icons'
+import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, HolderOutlined, LockOutlined, PlusOutlined } from '@ant-design/icons'
+import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import {
   del, keys, post, put, useAction, useCloudflare, useCloudflareZones, useLocations, usePlans, useProviders, useRegions, useSettings,
 } from '../api/hooks'
@@ -9,6 +12,30 @@ import { PageHeader } from '../components/PageHeader'
 import { ConfirmButton } from '../components/ConfirmButton'
 import { EmptyState } from '../components/EmptyState'
 import { flagEmoji, money } from '../lib/format'
+
+type DragHandle = Pick<ReturnType<typeof useSortable>, 'attributes' | 'listeners' | 'setActivatorNodeRef'>
+const HandleContext = createContext<DragHandle | null>(null)
+
+function DragHandleButton() {
+  const h = useContext(HandleContext)
+  return (
+    <Button
+      size="small" type="text" icon={<HolderOutlined />} aria-label="بکشید تا جابه‌جا شود"
+      style={{ cursor: 'grab', touchAction: 'none' }}
+      ref={h?.setActivatorNodeRef as never} {...h?.attributes} {...h?.listeners}
+    />
+  )
+}
+
+function SortableRow(props: HTMLAttributes<HTMLTableRowElement> & { 'data-row-key'?: number }) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: props['data-row-key'] ?? 0 })
+  const style = { ...props.style, transform: CSS.Translate.toString(transform), transition, ...(isDragging ? { position: 'relative' as const, zIndex: 9, background: 'rgba(22,119,255,.08)' } : {}) }
+  return (
+    <HandleContext.Provider value={{ attributes, listeners, setActivatorNodeRef }}>
+      <tr {...props} ref={setNodeRef} style={style} />
+    </HandleContext.Provider>
+  )
+}
 
 /**
  * Locations is the automatic placement list. A new server (or a replacement
@@ -25,15 +52,27 @@ export function Locations() {
   const reorder = useAction((ids: number[]) => post('/locations/reorder', { ids }), { invalidate: inv })
   const remove = useAction((id: number) => del(`/locations/${id}`), { success: 'حذف شد', invalidate: inv })
   const toggle = useAction((l: Location) => put(`/locations/${l.id}`, { ...l, enabled: !l.enabled }), { invalidate: inv })
-  const list = data ?? []
+  // The dragged order shows at once; the server's answer replaces it.
+  const [dragged, setDragged] = useState<Location[] | null>(null)
+  const list = dragged ?? data ?? []
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
+  const apply = (next: Location[]) => {
+    setDragged(next)
+    reorder.mutate(next.map((l) => l.id), { onSettled: () => setDragged(null) })
+  }
+  const onDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return
+    const from = list.findIndex((l) => l.id === active.id)
+    const to = list.findIndex((l) => l.id === over.id)
+    if (from < 0 || to < 0) return
+    apply(arrayMove(list, from, to))
+  }
   const defaultCap = settings?.['auto.max_per_location'] ?? '5'
 
   const move = (i: number, dir: -1 | 1) => {
-    const ids = list.map((l) => l.id)
     const j = i + dir
-    if (j < 0 || j >= ids.length) return
-    ;[ids[i], ids[j]] = [ids[j], ids[i]]
-    reorder.mutate(ids)
+    if (j < 0 || j >= list.length) return
+    apply(arrayMove(list, i, j))
   }
 
   return (
@@ -54,13 +93,17 @@ export function Locations() {
       {!isLoading && list.length === 0 ? (
         <EmptyState text="هنوز لوکیشنی اضافه نشده" action={<Button type="primary" onClick={() => setEditing('new')}>افزودن لوکیشن</Button>} />
       ) : (
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <SortableContext items={list.map((l) => l.id)} strategy={verticalListSortingStrategy}>
         <Table<Location>
-          loading={isLoading || reorder.isPending} rowKey="id" size="small" dataSource={list} pagination={false} scroll={{ x: 760 }}
+          loading={isLoading} rowKey="id" size="small" dataSource={list} pagination={false} scroll={{ x: 760 }}
+          components={{ body: { row: SortableRow } }}
           columns={[
             {
-              title: 'اولویت', width: 110,
+              title: 'اولویت', width: 150,
               render: (_, _l, i) => (
                 <Flex gap={4} align="center">
+                  <DragHandleButton />
                   <Typography.Text strong style={{ width: 20 }}>{i + 1}</Typography.Text>
                   <Button size="small" type="text" icon={<ArrowUpOutlined />} disabled={i === 0} onClick={() => move(i, -1)} aria-label="بالاتر" />
                   <Button size="small" type="text" icon={<ArrowDownOutlined />} disabled={i === list.length - 1} onClick={() => move(i, 1)} aria-label="پایین‌تر" />
@@ -80,6 +123,7 @@ export function Locations() {
                 </Flex>
               ) : <Typography.Text type="secondary">IP</Typography.Text>),
             },
+            { title: 'پیشوند نام', dataIndex: 'name_prefix', render: (p: string) => (p ? <span dir="ltr">{p}-1</span> : <Typography.Text type="secondary">پیش‌فرض</Typography.Text>) },
             { title: 'ظرفیت هم‌زمان', dataIndex: 'capacity', render: (c: number) => (c > 0 ? c : <Typography.Text type="secondary">تا محدودیت ({defaultCap})</Typography.Text>) },
             { title: 'فعال', dataIndex: 'enabled', render: (_, l) => <Switch size="small" checked={l.enabled} onChange={() => toggle.mutate(l)} /> },
             {
@@ -92,6 +136,8 @@ export function Locations() {
             },
           ]}
         />
+        </SortableContext>
+        </DndContext>
       )}
       <LocationModal value={editing} onClose={() => setEditing(null)} />
     </>
@@ -114,6 +160,7 @@ interface FormValues {
   dns_proxied: boolean
   ssl: boolean
   ip_family: 'v4' | 'v6'
+  name_prefix?: string
 }
 
 function LocationModal({ value, onClose }: { value: Location | 'new' | null; onClose: () => void }) {
@@ -189,6 +236,12 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
           </Col>
           <Col xs={12} sm={8}>
             <Form.Item name="country" label="کد کشور"><Input maxLength={2} dir="ltr" placeholder="SG" /></Form.Item>
+          </Col>
+          <Col xs={24} sm={12}>
+            <Form.Item name="name_prefix" label="پیشوند نام در vpn-pannel" tooltip="کانفیگ‌های سرورهای این لوکیشن sama-1، sama-2، … نام می‌گیرند. خالی = نام پیش‌فرض"
+              rules={[{ pattern: /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/, message: 'فقط حروف انگلیسی، عدد، - و _' }]}>
+              <Input dir="ltr" maxLength={30} placeholder="sama" />
+            </Form.Item>
           </Col>
           <Col xs={12} sm={4}>
             <Form.Item name="enabled" label="فعال" valuePropName="checked"><Switch /></Form.Item>

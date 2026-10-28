@@ -89,6 +89,7 @@ export interface Location extends DNSFields {
   enabled: boolean
   note: string
   ip_family: IPFamily
+  name_prefix: string
 }
 
 /** What a server's configs, DNS and checks use. Every server is dual-stack. */

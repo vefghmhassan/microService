@@ -79,6 +79,8 @@ type Orchestrator struct {
 	Key      *sshx.Keypair
 	Engine   *jobs.Engine
 
+	nameMu sync.Mutex // serialises panelBaseName number picks
+
 	// Seams, replaced in tests.
 	Provider func(acc *models.ProviderAccount) (providers.Provider, error)
 	Connect  func(ctx context.Context, s *models.Server) (Remote, string, error) // returns the host key seen
