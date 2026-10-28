@@ -22,6 +22,7 @@ func TestDecide(t *testing.T) {
 	}{
 		{"healthy", []Probe{ir("AS1", true), ir("AS2", true), local(true)}, Healthy},
 		{"same network twice is not enough", []Probe{ir("AS1", true), ir("AS1", true), ir("AS2", false), local(true)}, Filtered},
+		{"all answering probes connected on one network is thin coverage", []Probe{ir("AS1", true), ir("AS1", true), local(false)}, Unknown},
 		{"filtered", []Probe{ir("AS1", false), ir("AS2", false), local(true)}, Filtered},
 		{"down everywhere", []Probe{ir("AS1", false), ir("AS2", false), local(false)}, Down},
 		{"too few probes", []Probe{ir("AS1", false), local(true)}, Unknown},
@@ -161,5 +162,50 @@ func TestGlobalpingProbeWithoutIPv6IsNoAnswer(t *testing.T) {
 	probes, err := g.Check(context.Background(), "2a01:4f8::1", 443)
 	if err != nil || len(probes) != 1 || !probes[0].NoAnswer {
 		t.Fatalf("%+v %v", probes, err)
+	}
+}
+
+type fakeSource struct {
+	name   string
+	probes []Probe
+	err    error
+	calls  *[]string
+}
+
+func (f fakeSource) Name() string { return f.name }
+func (f fakeSource) Check(context.Context, string, int) ([]Probe, error) {
+	*f.calls = append(*f.calls, f.name)
+	return f.probes, f.err
+}
+
+func TestRunFallsThroughDeadSources(t *testing.T) {
+	ir := func(asn string, ok bool) Probe { return Probe{Source: "x", Country: "IR", ASN: asn, OK: ok} }
+	pol := Policy{MinOK: 2, MinASN: 2}
+	run := func(srcs func(calls *[]string) []Source) (*Result, []string) {
+		var calls []string
+		c := &Checker{Sources: srcs(&calls), Policy: pol}
+		return c.Run(context.Background(), "127.0.0.1", 1), calls
+	}
+
+	res, calls := run(func(c *[]string) []Source {
+		return []Source{
+			fakeSource{name: "a", err: io.EOF, calls: c},
+			fakeSource{name: "b", probes: []Probe{ir("AS1", true), ir("AS2", true)}, calls: c},
+			fakeSource{name: "c", calls: c},
+		}
+	})
+	if res.Verdict != Healthy || len(calls) != 2 {
+		t.Errorf("want healthy after b without calling c, got %s calls=%v", res.Verdict, calls)
+	}
+
+	res, calls = run(func(c *[]string) []Source {
+		return []Source{
+			fakeSource{name: "a", err: io.EOF, calls: c},
+			fakeSource{name: "b", calls: c},
+			fakeSource{name: "c", probes: []Probe{{Source: "c", Country: "IR", NoAnswer: true}}, calls: c},
+		}
+	})
+	if res.Verdict != Filtered || len(calls) != 3 {
+		t.Errorf("all dead should fail the IP, got %s (%s)", res.Verdict, res.Summary)
 	}
 }
