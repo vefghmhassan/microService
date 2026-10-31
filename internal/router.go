@@ -64,12 +64,34 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Post("/servers/:id/stats", a.RefreshStats)
 	p.Post("/servers/:id/replace", a.ReplaceServer)
 	p.Post("/servers/:id/panel-access", a.ServerAction(orchestrator.KindPanelAccess))
+	p.Post("/servers/:id/cert", a.ServerAction(orchestrator.KindCertPush))
+	p.Post("/servers/:id/dns", a.ServerAction(orchestrator.KindDNSSync))
 
 	p.Get("/locations", a.ListLocations)
 	p.Post("/locations", a.CreateLocation)
 	p.Post("/locations/reorder", a.ReorderLocations)
 	p.Put("/locations/:id", a.UpdateLocation)
 	p.Delete("/locations/:id", a.DeleteLocation)
+
+	p.Get("/cloudflare", a.ListCloudflare)
+	p.Post("/cloudflare", a.CreateCloudflare)
+	p.Get("/cloudflare/certificates", a.ListCertificates)
+	p.Put("/cloudflare/:id", a.UpdateCloudflare)
+	p.Delete("/cloudflare/:id", a.DeleteCloudflare)
+	p.Post("/cloudflare/:id/test", a.TestCloudflare)
+	p.Get("/cloudflare/:id/zones", a.CloudflareZones)
+	p.Post("/cloudflare/:id/certificate", a.IssueCertificate)
+	p.Post("/cloudflare/:id/cdn", a.SetupZoneCDN)
+	p.Get("/clean-ips", a.ListCleanIPs)
+	p.Post("/clean-ips", a.AddCleanIPs)
+	p.Post("/clean-ips/sync", a.SyncCleanIPs)
+	p.Post("/clean-ips/check", a.CheckCleanIPs)
+	p.Post("/clean-ips/delete", a.DeleteCleanIPs)
+	p.Post("/clean-ips/sources", a.AddCleanIPSource)
+	p.Put("/clean-ips/sources/:id", a.UpdateCleanIPSource)
+	p.Delete("/clean-ips/sources/:id", a.DeleteCleanIPSource)
+	p.Put("/clean-ips/:id", a.UpdateCleanIP)
+	p.Delete("/clean-ips/:id", a.DeleteCleanIP)
 
 	p.Get("/ips", a.ListIPs)
 	p.Delete("/ips/:id", a.ReleaseIP)
@@ -87,6 +109,8 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Get("/template/x25519", a.NewX25519)
 	p.Get("/template/xray/base", a.XrayBase)
 	p.Post("/template/outbounds/test", a.TestOutbounds)
+	p.Post("/template/reality/scan", a.ScanReality)
+	p.Post("/template/reality/scan-many", a.ScanRealityMany)
 	p.Post("/template/sync", a.EnqueueGlobal(orchestrator.KindSyncAll))
 
 	p.Get("/jobs", a.ListJobs)
@@ -103,12 +127,17 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Post("/settings/test/telegram", a.TestTelegramHandler)
 	p.Post("/destination/upload", a.UploadConfigs)
 
+	p.Get("/sub", a.GetSub)
+	p.Post("/sub/token", a.RenewSubToken)
 	p.Get("/geo/report", a.GeoReport)
 	p.Post("/geo/update", a.UpdateGeoIP)
 
 	api.Use(func(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "not found"})
 	})
+
+	// The all-servers subscription, public but behind its secret token.
+	app.Get("/sub/:token", a.Sub)
 
 	// The SPA: real files are served as-is; every other path falls back to
 	// index.html so client-side routes survive a reload.

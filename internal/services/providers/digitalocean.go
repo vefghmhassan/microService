@@ -50,6 +50,10 @@ type doDroplet struct {
 			IP   string `json:"ip_address"`
 			Type string `json:"type"`
 		} `json:"v4"`
+		V6 []struct {
+			IP   string `json:"ip_address"`
+			Type string `json:"type"`
+		} `json:"v6"`
 	} `json:"networks"`
 	Region struct {
 		Slug string `json:"slug"`
@@ -65,6 +69,12 @@ func (s *doDroplet) instance() *Instance {
 	for _, n := range s.Networks.V4 {
 		if n.Type == "public" {
 			inst.IPv4 = n.IP
+			break
+		}
+	}
+	for _, n := range s.Networks.V6 {
+		if n.Type == "public" {
+			inst.IPv6 = hostIPv6(n.IP)
 			break
 		}
 	}
@@ -218,6 +228,12 @@ func (d *DigitalOcean) ipAction(ctx context.Context, ip string, body map[string]
 // droplet was created with stays as its anchor; clients only ever see the
 // reserved one.
 func (d *DigitalOcean) RotateIP(ctx context.Context, inst *Instance, opts RotateOptions) (*RotateResult, error) {
+	if opts.IPv6 {
+		// Reserved IPs are IPv4 only; the droplet's IPv6 changes with the droplet.
+		opts.KeepOld = false
+		opts.ReuseIPRef = ""
+		return recreate(ctx, d, inst, opts, nil)
+	}
 	// Once the swap starts it has to finish: a cancel between unassigning the
 	// old IP and assigning the new one would leave the server without an IPv4.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Minute)

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -79,7 +80,11 @@ func PanelURL(s *models.Server) string {
 	if bp != "" {
 		bp += "/"
 	}
-	return fmt.Sprintf("%s://%s:%d/%s", scheme, s.IPv4, s.XUIPort, bp)
+	host := s.IPv4
+	if scheme == "https" && s.Hostname != "" && !s.DNSProxied {
+		host = s.Hostname
+	}
+	return fmt.Sprintf("%s://%s/%s", scheme, net.JoinHostPort(host, strconv.Itoa(s.XUIPort)), bp)
 }
 
 // panelAccess switches an installed server's panel between public and local.

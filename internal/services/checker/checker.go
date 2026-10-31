@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"sync"
+	"strings"
 	"time"
 )
 
@@ -63,30 +63,56 @@ type Checker struct {
 	Policy  Policy
 }
 
-// Run queries every source in parallel plus a local control probe from this
-// machine (which sits outside Iran).
+// Run asks the sources one after another, in order. A source that errors or
+// gets no Iranian probe to answer is dropped and the next one is tried; the
+// first moment the probes gathered so far give a firm verdict, it stops. If
+// every source is dead the IP counts as failed. The local control probe from
+// this machine (outside Iran) runs alongside.
 func (c *Checker) Run(ctx context.Context, host string, port int) *Result {
 	res := &Result{Host: host, Port: port}
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	for _, s := range c.Sources {
-		wg.Add(1)
-		go func(s Source) {
-			defer wg.Done()
-			probes, err := s.Check(ctx, host, port)
-			mu.Lock()
-			defer mu.Unlock()
-			res.Probes = append(res.Probes, probes...)
-			if err != nil {
-				res.Errors = append(res.Errors, s.Name()+": "+err.Error())
-			}
-		}(s)
+	pol := c.Policy
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		// Few Iranian vantage points speak IPv6 and they sit on one or two
+		// networks; asking for more diversity than exists fails every server.
+		pol.MinASN = 1
 	}
 	control := LocalTCP(ctx, host, port)
-	wg.Wait()
-	res.Probes = append(res.Probes, control)
-	Decide(res, c.Policy)
+
+	var gathered []Probe
+	var dead []string
+	for _, s := range c.Sources {
+		probes, err := s.Check(ctx, host, port)
+		if err != nil {
+			res.Errors = append(res.Errors, s.Name()+": "+err.Error())
+		}
+		if !answered(probes) {
+			dead = append(dead, s.Name())
+			continue
+		}
+		gathered = append(gathered, probes...)
+		res.Probes = append(append([]Probe{}, gathered...), control)
+		Decide(res, pol)
+		if res.Verdict != Unknown {
+			return res
+		}
+	}
+	res.Probes = append(append([]Probe{}, gathered...), control)
+	Decide(res, pol)
+	if !answered(gathered) {
+		res.Verdict, res.OK = Filtered, false
+		res.Summary = "filtered: no check source could probe from Iran (" + strings.Join(dead, ", ") + ")"
+	}
 	return res
+}
+
+// answered reports whether any Iranian probe actually reported back.
+func answered(probes []Probe) bool {
+	for _, p := range probes {
+		if p.Country == "IR" && !p.NoAnswer {
+			return true
+		}
+	}
+	return false
 }
 
 // Decide fills Verdict/OK/Summary from the probes.
@@ -136,16 +162,23 @@ func Decide(res *Result, p Policy) {
 		res.Verdict = Down
 	case irTotal < p.MinOK:
 		res.Verdict = Unknown
+	case irOK == irTotal:
+		// Every probe that answered connected; there were just too few
+		// networks to satisfy the policy. That is thin coverage, not filtering.
+		res.Verdict = Unknown
 	default:
 		res.Verdict = Filtered
 	}
 	res.OK = res.Verdict == Healthy
 	res.Summary = fmt.Sprintf("%s: %d/%d Iranian probes connected across %d networks (need %d across %d); outside control %s",
-		res.Verdict, irOK, irTotal, len(asns), p.MinOK, p.MinASN, okWord(controlOK))
+		res.Verdict, irOK, irTotal, len(asns), p.MinOK, p.MinASN, controlWord(haveControl, controlOK))
 }
 
-func okWord(ok bool) string {
-	if ok {
+func controlWord(have, ok bool) string {
+	switch {
+	case !have:
+		return "unavailable"
+	case ok:
 		return "ok"
 	}
 	return "failed"
@@ -159,6 +192,10 @@ func LocalTCP(ctx context.Context, host string, port int) Probe {
 	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		p.Error = err.Error()
+		if ip := net.ParseIP(host); ip != nil && ip.To4() == nil && unreachableFamily(err.Error()) {
+			// This machine has no IPv6 route: no control, rather than "down".
+			p.NoAnswer = true
+		}
 		return p
 	}
 	_ = conn.Close()

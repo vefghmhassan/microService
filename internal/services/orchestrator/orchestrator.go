@@ -20,6 +20,7 @@ import (
 	"microserver/internal/jobs"
 	"microserver/internal/models"
 	"microserver/internal/services/checker"
+	"microserver/internal/services/cloudflare"
 	"microserver/internal/services/destination"
 	"microserver/internal/services/providers"
 	"microserver/internal/services/settings"
@@ -42,6 +43,8 @@ const (
 	KindCheckAll      = "check_all"
 	KindProvisionAuto = "provision_auto"
 	KindPanelAccess   = "panel_access"
+	KindCertPush      = "cert_push"
+	KindDNSSync       = "dns_sync"
 )
 
 // Remote is the SSH session the orchestrator needs; sshx.Client satisfies it
@@ -76,6 +79,8 @@ type Orchestrator struct {
 	Key      *sshx.Keypair
 	Engine   *jobs.Engine
 
+	nameMu sync.Mutex // serialises panelBaseName number picks
+
 	// Seams, replaced in tests.
 	Provider func(acc *models.ProviderAccount) (providers.Provider, error)
 	Connect  func(ctx context.Context, s *models.Server) (Remote, string, error) // returns the host key seen
@@ -83,8 +88,14 @@ type Orchestrator struct {
 	Check    func(ctx context.Context, host string, port int) *checker.Result
 	Dests    func() []NamedDest // every enabled vpn-pannel
 	Notify   func(text string)
+	// Alert is a notification about one server, shown with its action buttons.
+	Alert func(s *models.Server, text string)
 	// Geo resolves client addresses for the GeoIP report (nil = skip).
 	Geo GeoLookup
+	// CF is the Cloudflare record API of an account.
+	CF func(acc *models.CloudflareAccount) DNSAPI
+	// Certs issues zone certificates (nil = SSL is skipped).
+	Certs CertSource
 
 	accessLogOK sync.Map // server ID → access log verified on
 	xrayKicks   sync.Map // server ID → *int restarts tried for a missing access log
@@ -118,6 +129,7 @@ func New(db *gorm.DB, st *settings.Store, key *sshx.Keypair, engine *jobs.Engine
 		return xui.New(s.XUIScheme, "127.0.0.1", s.XUIPort, s.XUIBasePath, string(s.XUIToken), r.DialContext)
 	}
 	o.Check = o.defaultCheck
+	o.CF = func(acc *models.CloudflareAccount) DNSAPI { return cloudflare.New(string(acc.Token)) }
 	o.Dests = o.defaultDests
 	return o
 }
@@ -131,8 +143,12 @@ func (o *Orchestrator) NewChecker() *checker.Checker {
 		switch s {
 		case "checkhost":
 			c.Sources = append(c.Sources, checker.NewCheckHost())
+		case "checkhostcc":
+			c.Sources = append(c.Sources, checker.NewCheckHostCC(o.Settings.Get(settings.CheckHostCCKey)))
 		case "globalping":
 			c.Sources = append(c.Sources, checker.NewGlobalping(o.Settings.Get(settings.GlobalpingToken), o.Settings.Int(settings.GlobalpingLimit)))
+		case "atlas":
+			c.Sources = append(c.Sources, checker.NewAtlas(o.Settings.Get(settings.AtlasKey), o.Settings.Int(settings.AtlasLimit)))
 		}
 	}
 	return c
@@ -178,6 +194,8 @@ func (o *Orchestrator) Register() {
 	o.Engine.Register(KindCheckAll, o.checkAll)
 	o.Engine.Register(KindProvisionAuto, o.provisionAuto)
 	o.Engine.Register(KindPanelAccess, o.panelAccess)
+	o.Engine.Register(KindCertPush, o.certPush)
+	o.Engine.Register(KindDNSSync, o.dnsSync)
 }
 
 func serverEvent(s *models.Server) jobs.Event {
@@ -264,7 +282,8 @@ func (o *Orchestrator) recordCheck(r *jobs.Run, s *models.Server, res *checker.R
 func (o *Orchestrator) checkPort(s *models.Server) int {
 	if s.AppliedHash != "" {
 		var in models.InboundTemplate
-		if o.DB.Where("enabled = ?", true).Order("id").First(&in).Error == nil {
+		// A CDN inbound may be missing on a server without SSL; prefer the others.
+		if o.DB.Where("enabled = ? AND family IN ?", true, TemplateFamilies(s.Family())).Order("cdn, id").First(&in).Error == nil {
 			return in.Port
 		}
 	}
@@ -389,8 +408,16 @@ func (o *Orchestrator) createRequest(s *models.Server) providers.CreateRequest {
 	}
 }
 
+// ipLabel is the server's addresses for logs: "1.2.3.4", or "2a01::1 (v4 1.2.3.4)".
+func ipLabel(s *models.Server) string {
+	if s.Family() == models.FamilyV6 {
+		return fmt.Sprintf("%s (v4 %s)", s.IPv6, s.IPv4)
+	}
+	return s.IPv4
+}
+
 func instanceOf(s *models.Server) *providers.Instance {
-	return &providers.Instance{Ref: s.ProviderRef, Name: s.Name, IPv4: s.IPv4, IPRef: s.IPRef, Region: s.Region, Status: "running"}
+	return &providers.Instance{Ref: s.ProviderRef, Name: s.Name, IPv4: s.IPv4, IPRef: s.IPRef, IPv6: s.IPv6, Region: s.Region, Status: "running"}
 }
 
 func sleep(ctx context.Context, d time.Duration) error {

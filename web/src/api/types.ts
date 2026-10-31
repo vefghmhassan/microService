@@ -38,7 +38,45 @@ export interface ProviderType {
   docs: string
 }
 
-export interface Location {
+/** DNS is the Cloudflare part of a location, copied onto its servers. */
+export interface DNSFields {
+  cf_account_id: number
+  cf_zone_id: string
+  cf_zone_name: string
+  dns_pattern: string
+  dns_proxied: boolean
+  ssl: boolean
+}
+
+export interface CloudflareAccount {
+  id: number
+  name: string
+  acme_email: string
+  enabled: boolean
+  has_token: boolean
+  location_count: number
+  server_count: number
+  created_at: string
+}
+
+export interface CloudflareZone {
+  id: string
+  name: string
+  status: string
+}
+
+export interface Certificate {
+  id: number
+  cf_account_id: number
+  cf_zone_id: string
+  zone_name: string
+  not_after: string | null
+  issued_at: string | null
+  last_error: string
+  server_count: number
+}
+
+export interface Location extends DNSFields {
   id: number
   priority: number
   provider_account_id: number
@@ -48,9 +86,17 @@ export interface Location {
   image: string
   country: string
   capacity: number
+  traffic_limit_gb: number
   enabled: boolean
   note: string
+  ip_family: IPFamily
+  name_prefix: string
 }
+
+/** What a server's configs, DNS and checks use. Every server is dual-stack. */
+export type IPFamily = 'v4' | 'v6'
+/** Which servers an inbound template goes on. */
+export type TemplateFamily = IPFamily | 'both'
 
 export interface Option {
   id: string
@@ -61,8 +107,13 @@ export interface Option {
   price_monthly?: number
 }
 
-export interface Server {
+export interface Server extends DNSFields {
   id: number
+  location_id: number
+  hostname: string
+  dns_record_id: string
+  dns_error: string
+  cert_not_after: string | null
   name: string
   provider_account_id: number
   provider_account?: ProviderAccount
@@ -74,6 +125,8 @@ export interface Server {
   status: ServerStatus
   ipv4: string
   ip_ref: string
+  ipv6: string
+  ip_family: IPFamily
   xui_port: number
   xui_base_path: string
   xui_username: string
@@ -211,20 +264,54 @@ export interface InboundTemplate {
   sniffing: string
   upload: boolean
   upload_json: boolean
+  cdn: boolean
+  family: TemplateFamily
   created_at: string
   updated_at: string
 }
 
 export interface TemplateResponse {
   xray: XrayTemplate
+  /** The IPv6 servers' xray template; unset (xray_v6_set false) means they use xray. */
+  xray_v6: XrayTemplate
+  xray_v6_set: boolean
   inbounds: InboundTemplate[]
   hash: string
-  servers: Pick<Server, 'id' | 'name' | 'ipv4' | 'status' | 'sync_status' | 'applied_hash'>[]
+  hash_v6: string
+  servers: Pick<Server, 'id' | 'name' | 'ipv4' | 'ipv6' | 'ip_family' | 'status' | 'sync_status' | 'applied_hash'>[]
 }
 
 export interface Link {
   email: string
   url: string
+}
+
+export interface CleanIP {
+  id: number
+  address: string
+  operator: string
+  source: string
+  enabled: boolean
+  last_seen: string
+  checked_at: string | null
+  check_ok: boolean | null
+  check_note: string
+}
+
+export interface CleanIPSource {
+  id: number
+  url: string
+  builtin: boolean
+  enabled: boolean
+  last_fetch: string | null
+  last_error: string
+  count: number
+}
+
+export interface CleanIPList {
+  ips: CleanIP[]
+  sources: CleanIPSource[]
+  checking: boolean
 }
 
 export interface Dashboard {
@@ -324,6 +411,30 @@ export interface GeoReport {
   geoip: GeoIPStatus | null
   online_window_min: number
   collect: { id: number; name: string; ipv4: string; ip_collect_at: string | null; ip_collect_note: string }[]
+}
+
+// RealityScan is one 3x-ui Reality target probe, run from a server.
+export interface RealityScan {
+  target: string
+  host: string
+  ip: string
+  port: number
+  feasible: boolean
+  privateTarget: boolean
+  tls13: boolean
+  tlsVersion: string
+  h2: boolean
+  alpn: string
+  x25519: boolean
+  curveID: string
+  certValid: boolean
+  certChainValid: boolean
+  certSubject: string
+  certIssuer: string
+  notAfter: string
+  serverNames: string[] | null
+  latencyMs: number
+  reason: string
 }
 
 export interface OutboundTestResult {

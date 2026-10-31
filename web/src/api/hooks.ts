@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/
 import { App } from 'antd'
 import { del, get, post, put } from './client'
 import type {
-  CheckRun, Dashboard, IPAddress, Job, Link, LiveStatus, Location, Option, ProviderAccount,
+  Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, Option, ProviderAccount,
   ProviderType, Server, ServerEvent, ServerInbounds, Settings, TemplateResponse,
 } from './types'
 
@@ -22,6 +22,10 @@ export const keys = {
   checks: ['checks'] as const,
   template: ['template'] as const,
   settings: ['settings'] as const,
+  cloudflare: ['cloudflare'] as const,
+  certificates: ['cloudflare', 'certificates'] as const,
+  cleanIPs: ['clean-ips'] as const,
+  sub: ['sub'] as const,
 }
 
 export const useDashboard = () => useQuery({ queryKey: keys.dashboard, queryFn: () => get<Dashboard>('/dashboard') })
@@ -32,7 +36,9 @@ export const useServerInbounds = (id: number) =>
 export const useServerChecks = (id: number) =>
   useQuery({ queryKey: keys.serverChecks(id), queryFn: () => get<CheckRun[]>(`/servers/${id}/checks`) })
 export const useServerLinks = (id: number, enabled = true) =>
-  useQuery({ queryKey: keys.serverLinks(id), queryFn: () => get<{ links: Link[]; warning?: string }>(`/servers/${id}/links`), enabled })
+  useQuery({ queryKey: keys.serverLinks(id), queryFn: () => get<{ links: Link[]; clean_links?: Link[] | null; warning?: string }>(`/servers/${id}/links`), enabled })
+export const useCleanIPs = (poll = false) =>
+  useQuery({ queryKey: keys.cleanIPs, queryFn: () => get<CleanIPList>('/clean-ips'), refetchInterval: poll ? 5000 : false })
 export const useServerLive = (id: number, enabled: boolean) =>
   useQuery({ queryKey: ['servers', id, 'live'], queryFn: () => get<LiveStatus>(`/servers/${id}/live`), enabled, retry: false, staleTime: 30_000 })
 export const useProviders = () => useQuery({ queryKey: keys.providers, queryFn: () => get<ProviderAccount[]>('/providers') })
@@ -50,6 +56,13 @@ export const useJobs = (q = '') => useQuery({ queryKey: keys.jobs(q), queryFn: (
 export const useJob = (id: number | null) =>
   useQuery({ queryKey: keys.job(id ?? 0), queryFn: () => get<Job>(`/jobs/${id}`), enabled: !!id })
 export const useLocations = () => useQuery({ queryKey: keys.locations, queryFn: () => get<Location[]>('/locations') })
+export const useCloudflare = () => useQuery({ queryKey: keys.cloudflare, queryFn: () => get<CloudflareAccount[]>('/cloudflare') })
+export const useCloudflareZones = (accountId?: number) =>
+  useQuery({
+    queryKey: ['cloudflare', accountId, 'zones'], queryFn: () => get<CloudflareZone[]>(`/cloudflare/${accountId}/zones`),
+    enabled: !!accountId, staleTime: 300_000, retry: false,
+  })
+export const useCertificates = () => useQuery({ queryKey: keys.certificates, queryFn: () => get<Certificate[]>('/cloudflare/certificates') })
 export const useIPs = () => useQuery({ queryKey: keys.ips, queryFn: () => get<IPAddress[]>('/ips') })
 export const useChecks = () => useQuery({ queryKey: keys.checks, queryFn: () => get<CheckRun[]>('/checks') })
 export const useTemplate = () => useQuery({ queryKey: keys.template, queryFn: () => get<TemplateResponse>('/template') })

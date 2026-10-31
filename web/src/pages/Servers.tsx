@@ -2,12 +2,12 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Button, Col, Flex, Grid, Input, Row, Segmented, Skeleton, Table, Tag, Typography } from 'antd'
 import { PlusOutlined, SearchOutlined } from '@ant-design/icons'
-import { useServers, useSettings } from '../api/hooks'
+import { useLocations, useServers, useSettings } from '../api/hooks'
 import { TrafficBar } from '../components/TrafficBar'
 import type { Server } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { StatusTag } from '../components/StatusTag'
-import { CopyText } from '../components/CopyText'
+import { HostBadge } from '../components/HostBadge'
 import { CheckBadge, ServerCard } from '../components/ServerCard'
 import { ServerActions } from '../components/ServerActions'
 import { NewServerModal } from '../components/NewServerModal'
@@ -15,6 +15,7 @@ import { EmptyState } from '../components/EmptyState'
 import { useOpenJob } from '../components/JobViewer'
 import { serverStatus, syncStatus } from '../lib/labels'
 import { flagEmoji, trafficLimit } from '../lib/format'
+import { ServerIP } from '../components/ServerIP'
 
 const filters = [
   { label: 'همه', value: '' },
@@ -28,7 +29,8 @@ const busy = new Set(['creating', 'checking', 'installing', 'configuring', 'rota
 export function Servers() {
   const { data, isLoading } = useServers()
   const { data: settings } = useSettings()
-  const limitOf = (s: Server) => trafficLimit(s.traffic_limit_gb, settings?.['traffic.limit_gb'])
+  const { data: locations } = useLocations()
+  const limitOf = (s: Server) => trafficLimit(s.traffic_limit_gb, locations?.find((l) => l.id === s.location_id)?.traffic_limit_gb, settings?.['traffic.limit_gb'])
   const [params, setParams] = useSearchParams()
   const [q, setQ] = useState('')
   const [newOpen, setNewOpen] = useState(false)
@@ -40,7 +42,7 @@ export function Servers() {
   const list = useMemo(() => (data ?? []).filter((s) => {
     if (status === 'busy' ? !busy.has(s.status) : status && s.status !== status) return false
     const t = q.trim().toLowerCase()
-    return !t || s.name.toLowerCase().includes(t) || s.ipv4.includes(t) || s.region.toLowerCase().includes(t)
+    return !t || s.name.toLowerCase().includes(t) || s.ipv4.includes(t) || (s.ipv6 ?? '').includes(t) || (s.hostname ?? '').includes(t) || s.region.toLowerCase().includes(t)
   }), [data, status, q])
 
   return (
@@ -72,7 +74,11 @@ export function Servers() {
               title: 'نام', dataIndex: 'name', sorter: (a, b) => a.name.localeCompare(b.name),
               render: (n: string, s) => <Typography.Link onClick={() => nav(`/servers/${s.id}`)}>{flagEmoji(s.country)} {n}</Typography.Link>,
             },
-            { title: 'IP', dataIndex: 'ipv4', render: (ip: string) => <CopyText text={ip} /> },
+            {
+              title: 'IP / دامنه', dataIndex: 'ipv4', render: (_: string, s) => (
+                <Flex vertical gap={2}><ServerIP server={s} /><HostBadge server={s} /></Flex>
+              ),
+            },
             { title: 'وضعیت', dataIndex: 'status', render: (st: string) => <StatusTag map={serverStatus} value={st} /> },
             { title: 'ایران', render: (_, s) => <CheckBadge server={s} /> },
             { title: 'آنلاین', dataIndex: 'online_count', width: 70, sorter: (a, b) => a.online_count - b.online_count },

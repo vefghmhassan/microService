@@ -31,7 +31,8 @@ func TestAccessLogScript(t *testing.T) {
 	if err := os.WriteFile(log, []byte(sampleAccessLog), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	script := strings.Replace(accessLogScript, "F="+AccessLogPath, "F="+log, 1)
+	// sh on Windows (Git Bash) wants forward slashes.
+	script := strings.Replace(accessLogScript, "F="+AccessLogPath, "F="+filepath.ToSlash(log), 1)
 	out, err := exec.Command("sh", "-c", script).Output()
 	if err != nil {
 		t.Fatal(err)
@@ -83,6 +84,12 @@ func TestStoreClientIPsUpsertsAndResolves(t *testing.T) {
 	if err := database.Migrate(db); err != nil {
 		t.Fatal(err)
 	}
+	// Close before TempDir cleanup; Windows cannot remove an open file.
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			sqlDB.Close()
+		}
+	})
 	geo := fakeGeo{"5.112.3.4": {Country: "IR", Region: "Tehran", City: "Tehran", ASN: 197207, ISP: "MCI"}}
 	at := time.Date(2026, 10, 26, 10, 0, 0, 0, time.UTC)
 	row := seenIP{IP: "5.112.3.4", Email: "alice", Tag: "inbound-2007", Conns: 3, First: at, Last: at}

@@ -28,6 +28,8 @@ type ProvisionParams struct {
 	Country   string `json:"country"`
 	Upload    *bool  `json:"upload"`
 	BaseName  string `json:"base_name"`
+	// IPFamily is "v4" (default) or "v6": what the server's configs use.
+	IPFamily string `json:"ip_family"`
 }
 
 type RotateParams struct {
@@ -74,6 +76,7 @@ func (o *Orchestrator) provision(ctx context.Context, r *jobs.Run) error {
 			Image:   firstNonEmpty(p.Image, acc.DefaultImage, prov.Capabilities().DefaultImage),
 			Country: strings.ToUpper(firstNonEmpty(p.Country, acc.Country)),
 			Status:  models.ServerCreating, SyncStatus: models.SyncPending, XUIScheme: "http",
+			IPFamily: models.NormFamily(p.IPFamily),
 		}
 		if s.Region == "" || s.Plan == "" {
 			return errors.New("region and plan are required (set them on the request or as account defaults)")
@@ -84,12 +87,12 @@ func (o *Orchestrator) provision(ctx context.Context, r *jobs.Run) error {
 		r.SetServer(s.ID)
 		s.ProviderAccount = &acc
 	}
-	r.Info("server %s (#%d) at %s %s/%s", s.Name, s.ID, acc.Type, s.Region, s.Plan)
+	r.Info("server %s (#%d) at %s %s/%s, IP%s", s.Name, s.ID, acc.Type, s.Region, s.Plan, s.Family())
 
 	if !r.Done("create") {
 		r.Step("create server")
 		req := o.createRequest(&s)
-		if ip := o.pickReusable(acc.ID, s.Region); ip != nil && prov.Capabilities().CanKeepOldIP {
+		if ip := o.pickReusable(acc.ID, s.Region); ip != nil && prov.Capabilities().CanKeepOldIP && s.Family() == models.FamilyV4 {
 			req.ReuseIPRef = ip.Ref
 			r.Info("retrying kept IP %s (filtered since %v)", ip.Address, ip.FilteredAt)
 		}
@@ -108,14 +111,17 @@ func (o *Orchestrator) provision(ctx context.Context, r *jobs.Run) error {
 		if err != nil {
 			return o.fail(r, &s, fmt.Errorf("wait running: %w", err))
 		}
-		s.IPv4, s.IPRef = inst.IPv4, inst.IPRef
+		s.IPv4, s.IPRef, s.IPv6 = inst.IPv4, inst.IPRef, inst.IPv6
 		if inst.Region != "" {
 			s.Region = inst.Region
 		}
 		s.Status = models.ServerChecking
-		o.save(r, &s, "ipv4", "ip_ref", "region", "status")
+		o.save(r, &s, "ipv4", "ip_ref", "ipv6", "region", "status")
 		o.poolUse(&s)
-		r.Info("running at %s", s.IPv4)
+		if s.PublicIP() == "" {
+			return o.fail(r, &s, fmt.Errorf("the provider gave the server no public IP%s", s.Family()))
+		}
+		r.Info("running at %s", ipLabel(&s))
 		r.Mark("running")
 	}
 
@@ -158,7 +164,8 @@ func (o *Orchestrator) provision(ctx context.Context, r *jobs.Run) error {
 	s.Status = models.ServerActive
 	s.LastError = ""
 	o.save(r, &s, "status", "last_error")
-	o.notify("✅ سرور %s آماده شد\nIP: %s\n%s", s.Name, s.IPv4, s.LastCheckNote)
+	o.startWatch(&s)
+	o.notify("✅ سرور %s آماده شد\nIP: %s\n%s", s.Name, s.PublicIP(), s.LastCheckNote)
 	return nil
 }
 
@@ -234,7 +241,7 @@ func (o *Orchestrator) ensureReachable(ctx context.Context, r *jobs.Run, prov pr
 	canHold := prov.Capabilities().CanKeepOldIP
 	downRetries, unknownRetries := 0, 0
 	for attempt := 1; ; {
-		res := o.Check(ctx, s.IPv4, o.checkPort(s))
+		res := o.Check(ctx, s.PublicIP(), o.checkPort(s))
 		o.recordCheck(r, s, res)
 		switch res.Verdict {
 		case checker.Healthy:
@@ -242,7 +249,7 @@ func (o *Orchestrator) ensureReachable(ctx context.Context, r *jobs.Run, prov pr
 		case checker.Down:
 			// Usually sshd is still starting; nothing to do with filtering.
 			if downRetries++; downRetries > 6 {
-				return fmt.Errorf("%s does not answer from outside Iran either; giving up", s.IPv4)
+				return fmt.Errorf("%s does not answer from outside Iran either; giving up", s.PublicIP())
 			}
 			if err := sleep(ctx, o.RetryDelay); err != nil {
 				return err
@@ -263,7 +270,7 @@ func (o *Orchestrator) ensureReachable(ctx context.Context, r *jobs.Run, prov pr
 			return fmt.Errorf("%w after %d IPs", errStillFiltered, attempt)
 		}
 		attempt++
-		r.Info("%s is filtered; getting a new IP (attempt %d/%d)", s.IPv4, attempt, maxAttempts)
+		r.Info("%s is filtered; getting a new IP (attempt %d/%d)", s.PublicIP(), attempt, maxAttempts)
 		keep := canHold
 		rot, err := o.rotateOnce(ctx, r, prov, s, &keep, 0, true)
 		if err != nil {
@@ -307,14 +314,26 @@ func (o *Orchestrator) rotateOnce(ctx context.Context, r *jobs.Run, prov provide
 		keep = *keepOld
 	}
 	caps := prov.Capabilities()
-	opts := providers.RotateOptions{KeepOld: keep && caps.CanKeepOldIP, Create: o.createRequest(s)}
+	if o.prefixRotation(r, prov, s) {
+		// Another address of the server's own /64: no rebuild, no new server.
+		res, err := o.rotateInPrefix(ctx, r, s)
+		if err == nil {
+			return res, nil
+		}
+		r.Logf("warn", "rotating inside the /64 failed (%v); rotating through the provider", err)
+	}
+	opts := providers.RotateOptions{KeepOld: keep && caps.CanKeepOldIP, Create: o.createRequest(s), IPv6: s.Family() == models.FamilyV6}
+	if opts.IPv6 {
+		// A kept IPv4 would not change the address clients use.
+		reuseIPID = 0
+	}
 	if reuseIPID != 0 {
 		var ip models.IPAddress
 		if err := o.DB.First(&ip, reuseIPID).Error; err != nil {
 			return nil, fmt.Errorf("ip %d: %w", reuseIPID, err)
 		}
 		opts.ReuseIPRef = ip.Ref
-	} else if caps.CanKeepOldIP {
+	} else if caps.CanKeepOldIP && !opts.IPv6 {
 		if ip := o.pickReusable(s.ProviderAccountID, s.Region); ip != nil {
 			opts.ReuseIPRef = ip.Ref
 			r.Info("retrying kept IP %s", ip.Address)
@@ -332,7 +351,8 @@ func (o *Orchestrator) rotateOnce(ctx context.Context, r *jobs.Run, prov provide
 	}
 	o.poolRetire(s, res.OldIP, res.OldIPRef, res.OldKept, oldFiltered, caps.CanKeepOldIP, "rotated away")
 
-	s.IPv4, s.IPRef = res.Instance.IPv4, res.Instance.IPRef
+	oldPublic := s.PublicIP()
+	s.IPv4, s.IPRef, s.IPv6 = res.Instance.IPv4, res.Instance.IPRef, res.Instance.IPv6
 	if res.Recreated {
 		s.ProviderRef = res.Instance.Ref
 		s.SSHHostKey = ""
@@ -345,7 +365,11 @@ func (o *Orchestrator) rotateOnce(ctx context.Context, r *jobs.Run, prov provide
 	s.Status = prevStatus
 	o.save(r, s)
 	o.poolUse(s)
-	r.Info("new IP %s (old %s %s)", s.IPv4, res.OldIP, map[bool]string{true: "kept", false: "released"}[res.OldKept])
+	if s.Family() == models.FamilyV6 {
+		r.Info("new IPv6 %s (old %s)", s.IPv6, oldPublic)
+	} else {
+		r.Info("new IP %s (old %s %s)", s.IPv4, res.OldIP, map[bool]string{true: "kept", false: "released"}[res.OldKept])
+	}
 	return res, nil
 }
 
@@ -364,7 +388,7 @@ func (o *Orchestrator) rotate(ctx context.Context, r *jobs.Run) error {
 	if err != nil {
 		return err
 	}
-	oldUploaded := firstNonEmpty(s.UploadedIP, s.IPv4)
+	oldUploaded := firstNonEmpty(s.UploadedIP, s.PublicIP())
 	if p.Reason != "" {
 		r.Info("reason: %s", p.Reason)
 	}
@@ -418,6 +442,11 @@ func (o *Orchestrator) rotate(ctx context.Context, r *jobs.Run) error {
 		r.Mark("install")
 	}
 
+	if !r.Done("dns") {
+		_ = o.syncDNS(ctx, r, s)
+		r.Mark("dns")
+	}
+
 	if !r.Done("dest") {
 		r.Step("update vpn-pannel")
 		if err := o.moveDestination(ctx, r, s, oldUploaded); err != nil {
@@ -429,7 +458,8 @@ func (o *Orchestrator) rotate(ctx context.Context, r *jobs.Run) error {
 	s.Status = models.ServerActive
 	s.LastError = ""
 	o.save(r, s, "status", "last_error")
-	o.notify("🔄 IP سرور %s عوض شد\n%s → %s", s.Name, oldUploaded, s.IPv4)
+	o.startWatch(s)
+	o.notify("🔄 IP سرور %s عوض شد\n%s → %s", s.Name, oldUploaded, s.PublicIP())
 	return nil
 }
 
@@ -448,7 +478,7 @@ func (o *Orchestrator) fallbackToNextLocation(r *jobs.Run, s *models.Server) boo
 	}
 	up := o.Settings.Bool(settings.VPNPanelAuto)
 	j, err := o.Engine.Enqueue(KindProvisionAuto, nil, AutoParams{
-		Count: 1, Upload: &up, ReplaceServerID: s.ID,
+		Count: 1, Upload: &up, ReplaceServerID: s.ID, IPFamily: s.Family(),
 		ExcludeAccountID: s.ProviderAccountID, ExcludeRegion: s.Region,
 	}, r.Job.Source)
 	if err != nil {
@@ -461,23 +491,36 @@ func (o *Orchestrator) fallbackToNextLocation(r *jobs.Run, s *models.Server) boo
 	return true
 }
 
-// moveDestination points every vpn-pannel's configs at the new IP. A panel
-// that had none on the old address (never uploaded, or removed by hand) gets
-// the links uploaded fresh. It fails only when no panel could be updated.
+// moveDestination points every vpn-pannel's configs at the server's link
+// host. A panel that had none on the old address (never uploaded, or removed
+// by hand) gets the links uploaded fresh. It fails only when no panel could
+// be updated. A hostname that stays the same needs no move: DNS did it.
 func (o *Orchestrator) moveDestination(ctx context.Context, r *jobs.Run, s *models.Server, oldIP string) error {
+	host := LinkHost(s)
+	if oldIP != "" && oldIP == host {
+		if s.UploadedIP != host {
+			now := time.Now()
+			s.UploadedIP, s.UploadedAt = host, &now
+			o.save(r, s, "uploaded_ip", "uploaded_at")
+		}
+		if s.Hostname != "" {
+			r.Info("links point at %s; vpn-pannel needs no change", host)
+		}
+		return nil
+	}
 	dests := o.Dests()
 	if len(dests) == 0 {
 		r.Info("vpn-pannel is not configured; skipped")
 		return nil
 	}
-	if oldIP == "" || oldIP == s.IPv4 {
+	if oldIP == "" {
 		return nil
 	}
 	var fresh []NamedDest
 	var errs []error
 	moved := 0
 	for _, d := range dests {
-		res, err := d.ReplaceAddress(ctx, oldIP, s.IPv4, s.Country)
+		res, err := d.ReplaceAddress(ctx, oldIP, host, s.Country)
 		if errors.Is(err, destination.ErrNoNodes) {
 			r.Info("%s: no configs on %s; uploading", d.Name, oldIP)
 			fresh = append(fresh, d)
@@ -505,7 +548,7 @@ func (o *Orchestrator) moveDestination(ctx context.Context, r *jobs.Run, s *mode
 		return errors.Join(errs...)
 	}
 	now := time.Now()
-	s.UploadedIP, s.UploadedAt = s.IPv4, &now
+	s.UploadedIP, s.UploadedAt = host, &now
 	o.save(r, s, "uploaded_ip", "uploaded_at")
 	return nil
 }
@@ -519,6 +562,7 @@ func (o *Orchestrator) install(ctx context.Context, r *jobs.Run) error {
 	if err != nil {
 		return err
 	}
+	o.assignHostname(r, s, p.ReplaceServerID)
 	if !r.Done("install") {
 		if err := o.installAndApply(ctx, r, s, p.Version); err != nil {
 			return o.fail(r, s, err)
@@ -532,8 +576,9 @@ func (o *Orchestrator) install(ctx context.Context, r *jobs.Run) error {
 	s.Status = models.ServerActive
 	s.LastError = ""
 	o.save(r, s, "status", "last_error")
+	o.startWatch(s)
 	if p.ReplaceServerID == 0 && p.Upload != nil {
-		o.notify("✅ سرور %s آماده شد\nIP: %s\n%s", s.Name, s.IPv4, s.LastCheckNote)
+		o.notify("✅ سرور %s آماده شد\nIP: %s\n%s", s.Name, s.PublicIP(), s.LastCheckNote)
 	}
 	return nil
 }
@@ -553,6 +598,10 @@ func (o *Orchestrator) installAndApply(ctx context.Context, r *jobs.Run, s *mode
 	if err := o.installPanel(ctx, r, s, remote, version); err != nil {
 		return err
 	}
+	// Before the template: TLS inbounds need the files when xray starts.
+	if err := o.pushCert(ctx, r, s, remote); err != nil {
+		r.Logf("warn", "SSL: %v", err)
+	}
 
 	r.Step("apply template")
 	o.setStatus(r, s, models.ServerConfiguring)
@@ -565,7 +614,7 @@ func (o *Orchestrator) applyWith(ctx context.Context, r *jobs.Run, s *models.Ser
 		return err
 	}
 	panel := o.PanelFor(s, remote)
-	if err := Apply(ctx, panel, snap, r.Info); err != nil {
+	if err := Apply(ctx, panel, snap.For(s), r.Info); err != nil {
 		s.SyncStatus = models.SyncFailed
 		o.save(r, s, "sync_status")
 		return err
@@ -573,7 +622,7 @@ func (o *Orchestrator) applyWith(ctx context.Context, r *jobs.Run, s *models.Ser
 	if st, err := panel.Status(ctx); err == nil && st.Xray.Version != "" {
 		s.XrayVersion = st.Xray.Version
 	}
-	s.AppliedHash = snap.Hash
+	s.AppliedHash = snap.HashFor(s.Family())
 	s.SyncStatus = models.SyncSynced
 	o.save(r, s, "applied_hash", "sync_status", "xray_version")
 	return nil
@@ -649,12 +698,15 @@ func (o *Orchestrator) uploadTo(ctx context.Context, r *jobs.Run, s *models.Serv
 	if err != nil {
 		return err
 	}
-	urls, err := UploadEntries(snap, s.IPv4)
+	urls, err := UploadEntries(snap.For(s), LinkHost(s))
 	if err != nil {
 		r.Logf("warn", "some links could not be built: %v", err)
 	}
 	if len(urls) == 0 {
 		return errors.New("no inbound is marked for upload")
+	}
+	if baseName == "" {
+		baseName = o.panelBaseName(s)
 	}
 	if baseName == "" {
 		baseName = strings.ToLower(firstNonEmpty(s.Country, "xx")) + "-" + s.Name
@@ -682,7 +734,7 @@ func (o *Orchestrator) uploadTo(ctx context.Context, r *jobs.Run, s *models.Serv
 		return errors.Join(errs...)
 	}
 	now := time.Now()
-	s.UploadedIP, s.UploadedAt = s.IPv4, &now
+	s.UploadedIP, s.UploadedAt = LinkHost(s), &now
 	o.save(r, s, "uploaded_ip", "uploaded_at")
 	return nil
 }
@@ -694,17 +746,17 @@ func (o *Orchestrator) check(ctx context.Context, r *jobs.Run) error {
 	if err != nil {
 		return err
 	}
-	if s.IPv4 == "" {
-		return errors.New("server has no IP")
+	if s.PublicIP() == "" {
+		return fmt.Errorf("server has no IP%s", s.Family())
 	}
 	r.Step("check reachability from Iran")
-	res := o.Check(ctx, s.IPv4, o.checkPort(s))
+	res := o.Check(ctx, s.PublicIP(), o.checkPort(s))
 	o.recordCheck(r, s, res)
 	switch res.Verdict {
 	case checker.Filtered:
 		if s.Status != models.ServerFiltered {
 			o.setStatus(r, s, models.ServerFiltered)
-			o.notify("⛔️ سرور %s (%s) فیلتر شده است\n%s", s.Name, s.IPv4, res.Summary)
+			o.notify("⛔️ سرور %s (%s) فیلتر شده است\n%s", s.Name, s.PublicIP(), res.Summary)
 		}
 		if o.Settings.Bool(settings.AutoRotate) {
 			id := s.ID
@@ -716,7 +768,7 @@ func (o *Orchestrator) check(ctx context.Context, r *jobs.Run) error {
 	case checker.Healthy:
 		if s.Status == models.ServerFiltered {
 			o.setStatus(r, s, models.ServerActive)
-			o.notify("✅ سرور %s (%s) دوباره در دسترس است", s.Name, s.IPv4)
+			o.notify("✅ سرور %s (%s) دوباره در دسترس است", s.Name, s.PublicIP())
 		}
 	}
 	return nil
@@ -763,6 +815,7 @@ func (o *Orchestrator) delete(ctx context.Context, r *jobs.Run) error {
 	}
 	o.DB.Model(&models.IPAddress{}).Where("server_id = ? AND status = ?", s.ID, models.IPInUse).
 		Updates(map[string]any{"status": models.IPReleased, "server_id": nil})
+	o.removeDNS(ctx, r, s)
 	if s.UploadedIP != "" {
 		for _, d := range o.Dests() {
 			if err := d.SetActive(ctx, s.UploadedIP, false); err != nil {

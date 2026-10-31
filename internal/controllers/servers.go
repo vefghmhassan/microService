@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -54,6 +55,9 @@ func (a *App) CreateServer(c *fiber.Ctx) error {
 	var p orchestrator.ProvisionParams
 	if err := c.BodyParser(&p); err != nil {
 		return errJSON(c, fiber.StatusBadRequest, "invalid body")
+	}
+	if err := checkFamily(c, p.IPFamily); err != nil {
+		return err
 	}
 	var acc models.ProviderAccount
 	if err := a.DB.First(&acc, p.AccountID).Error; err != nil {
@@ -154,10 +158,11 @@ func (a *App) ServerLinks(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	links, lerr := orchestrator.Links(snap, s.IPv4)
-	resp := fiber.Map{"links": links}
-	if lerr != nil {
-		resp["warning"] = lerr.Error()
+	links, lerr := orchestrator.Links(snap.For(s), orchestrator.LinkHost(s))
+	clean, cerr := a.Orch.ServerCleanLinks(snap, s)
+	resp := fiber.Map{"links": links, "clean_links": clean}
+	if err := errors.Join(lerr, cerr); err != nil {
+		resp["warning"] = err.Error()
 	}
 	return c.JSON(resp)
 }
@@ -229,6 +234,9 @@ func (a *App) createServerAuto(c *fiber.Ctx) error {
 	if err := c.BodyParser(&p); err != nil {
 		return errJSON(c, fiber.StatusBadRequest, "invalid body")
 	}
+	if err := checkFamily(c, p.IPFamily); err != nil {
+		return err
+	}
 	if p.Count < 1 || p.Count > 20 {
 		return errJSON(c, fiber.StatusBadRequest, "count must be 1-20")
 	}
@@ -287,4 +295,13 @@ func (a *App) ReplaceServer(c *fiber.Ctx) error {
 		return errJSON(c, fiber.StatusConflict, err.Error())
 	}
 	return c.Status(fiber.StatusAccepted).JSON(j)
+}
+
+// checkFamily accepts "", "v4" or "v6" as a requested IP family.
+func checkFamily(c *fiber.Ctx, f string) error {
+	switch f {
+	case "", models.FamilyV4, models.FamilyV6:
+		return nil
+	}
+	return errJSON(c, fiber.StatusBadRequest, "ip_family must be v4 or v6")
 }

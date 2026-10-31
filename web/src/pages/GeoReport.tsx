@@ -60,7 +60,7 @@ export function GeoReport() {
     refetchInterval: 60_000,
   })
   const t = data?.totals
-  const iran = useMemo(() => data?.by_region.filter((r) => r.country === 'IR'), [data])
+  const iran = useMemo(() => data?.by_region?.filter((r) => r.country === 'IR'), [data])
   const loading = isLoading || isFetching
 
   const place = (r: { country: string; region: string; city: string }) => (
@@ -80,7 +80,7 @@ export function GeoReport() {
           <Select allowClear placeholder="همه سرورها" style={{ minWidth: 180 }} value={serverId} onChange={setServerId}
             options={servers?.map((s) => ({ value: s.id, label: `${s.name} · ${s.ipv4}` }))} />
           <Select allowClear placeholder="همه اینباندها" style={{ minWidth: 160 }} value={inbound} onChange={setInbound}
-            options={data?.inbounds.map((i) => ({ value: i, label: i }))} />
+            options={data?.inbounds?.map((i) => ({ value: i, label: i }))} />
           <Input.Search allowClear placeholder="جستجو: IP، کاربر، شهر، ISP" style={{ maxWidth: 280 }} onSearch={setQ} />
         </Flex>
       </Card>
@@ -96,7 +96,7 @@ export function GeoReport() {
         <Alert type="error" showIcon style={{ marginBottom: 16 }} title="جمع‌آوری IP روی بعضی سرورها خطا دارد"
           description={data.collect.filter((c) => c.ip_collect_note.startsWith('error')).map((c) => <div key={c.id} dir="auto">{c.name}: {c.ip_collect_note}</div>)} />
       )}
-      {data && !data.ips.length && !loading ? (
+      {data && !data.ips?.length && !loading ? (
         <Card>
           <Empty description="هنوز IPی ثبت نشده. لاگ دسترسی Xray روی سرورها فعال می‌شود و با هر دور خواندن آمار، IPها اینجا می‌آیند." />
           <CollectTable rows={data.collect} />
@@ -129,7 +129,7 @@ export function GeoReport() {
               ),
             },
             {
-              key: 'users', label: `کاربران (${num(data?.users.length ?? 0)})`,
+              key: 'users', label: `کاربران (${num(data?.users?.length ?? 0)})`,
               children: (
                 <Table<GeoUser>
                   size="small" loading={loading} dataSource={data?.users} rowKey="email" scroll={{ x: 900 }}
@@ -137,7 +137,7 @@ export function GeoReport() {
                   expandable={{
                     expandedRowRender: (u) => (
                       <Table<GeoIPRow> size="small" pagination={false} rowKey="ip"
-                        dataSource={data?.ips.filter((i) => i.emails.split(',').includes(u.email))}
+                        dataSource={data?.ips?.filter((i) => i.emails.split(',').includes(u.email))}
                         columns={[
                           { title: 'IP', dataIndex: 'ip', render: (ip: string) => <CopyText text={ip} /> },
                           { title: 'موقعیت', render: (_, r) => place(r) },
@@ -162,7 +162,7 @@ export function GeoReport() {
             },
             { key: 'collect', label: 'وضعیت جمع‌آوری', children: <CollectTable rows={data?.collect} /> },
             {
-              key: 'ips', label: `IPها (${num(data?.ips.length ?? 0)})`,
+              key: 'ips', label: `IPها (${num(data?.ips?.length ?? 0)})`,
               children: (
                 <Table<GeoIPRow>
                   size="small" loading={loading} dataSource={data?.ips} rowKey="ip" scroll={{ x: 1000 }}

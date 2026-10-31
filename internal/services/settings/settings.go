@@ -26,14 +26,21 @@ const (
 	CheckIntervalMin  = "check.interval_min"
 	GlobalpingToken   = "check.globalping_token"
 	GlobalpingLimit   = "check.globalping_limit"
+	AtlasKey          = "check.atlas_key"
+	CheckHostCCKey    = "check.checkhostcc_key"
+	AtlasLimit        = "check.atlas_limit"
 	RotateMaxAttempts = "rotate.max_attempts"
 	RotateKeepOld     = "rotate.keep_filtered_ip"
+	RotateV6InPrefix  = "rotate.v6_in_prefix"
 	RotateRetryHours  = "rotate.retry_kept_after_hours"
 	AutoRotate        = "rotate.auto"
 	RotateFallback    = "rotate.fallback_location"
 	AutoMaxPerLoc     = "auto.max_per_location"
 	TrafficLimitGB    = "traffic.limit_gb"
 	TrafficAuto       = "traffic.auto_replace"
+	WatchLowUsage     = "watch.low_usage"
+	WatchMinutes      = "watch.minutes"
+	WatchMinMB        = "watch.min_mb"
 	StatsIntervalMin  = "stats.interval_min"
 	VPNPanelURL       = "vpnpannel.url"
 	VPNPanelEmail     = "vpnpannel.email"
@@ -46,28 +53,42 @@ const (
 	TelegramNotify    = "telegram.notify"
 	GeoIPCityURL      = "geoip.city_url"
 	GeoIPASNURL       = "geoip.asn_url"
+	AcmeStaging       = "acme.staging"
+	CleanIPOperators  = "cleanip.operators"
+	CleanIPInterval   = "cleanip.interval_hours"
+	CleanIPPerLink    = "cleanip.per_link"
+	SubEnabled        = "sub.enabled"
+	SubToken          = "sub.token"
 )
 
 var Defaults = map[string]string{
-	XUIVersion:        "v3.7.0",
-	XUIInstallURL:     "https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh",
-	XUIPublic:         "true",
-	XrayVersion:       "",
-	CheckSources:      "checkhost,globalping",
-	CheckMinOK:        "2",
-	CheckMinASN:       "2",
-	CheckPreInstall:   "22",
-	CheckIntervalMin:  "30",
-	GlobalpingToken:   "",
-	GlobalpingLimit:   "8",
+	XUIVersion:       "v3.7.0",
+	XUIInstallURL:    "https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh",
+	XUIPublic:        "true",
+	XrayVersion:      "",
+	CheckSources:     "checkhost,globalping",
+	CheckMinOK:       "2",
+	CheckMinASN:      "2",
+	CheckPreInstall:  "22",
+	CheckIntervalMin: "30",
+	GlobalpingToken:  "",
+	GlobalpingLimit:  "8",
+	// RIPE Atlas has Iranian probes with IPv6; add "atlas" to check.sources.
+	AtlasKey:          "",
+	CheckHostCCKey:    "",
+	AtlasLimit:        "8",
 	RotateMaxAttempts: "5",
 	RotateKeepOld:     "false",
+	RotateV6InPrefix:  "true",
 	RotateRetryHours:  "24",
 	AutoRotate:        "false",
 	RotateFallback:    "true",
 	AutoMaxPerLoc:     "5",
 	TrafficLimitGB:    "0",
 	TrafficAuto:       "false",
+	WatchLowUsage:     "false",
+	WatchMinutes:      "30",
+	WatchMinMB:        "1024",
 	StatsIntervalMin:  "5",
 	VPNPanelURL:       "",
 	VPNPanelEmail:     "",
@@ -81,11 +102,23 @@ var Defaults = map[string]string{
 	// Empty: DB-IP Lite of the current month.
 	GeoIPCityURL: "",
 	GeoIPASNURL:  "",
+	// Let's Encrypt's staging CA: untrusted certificates, no rate limits.
+	AcmeStaging: "false",
+	// Operators taken from the built-in clean-IP list (empty: all).
+	CleanIPOperators: "MCI,MTN",
+	CleanIPInterval:  "6",
+	// How many clean IPs a proxied server's CDN links are built with.
+	CleanIPPerLink: "5",
+	// The all-servers subscription at /sub/<token>.
+	SubEnabled: "false",
+	SubToken:   "",
 }
 
 // Secret keys are encrypted in the table and masked when listed.
 var Secret = map[string]bool{
 	GlobalpingToken:  true,
+	AtlasKey:         true,
+	CheckHostCCKey:   true,
 	VPNPanelPassword: true,
 	TelegramToken:    true,
 }
