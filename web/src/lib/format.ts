@@ -53,8 +53,13 @@ export function flagEmoji(cc?: string): string {
 
 export const GB = 1024 ** 3
 
-/** trafficLimit is the cap for a server in bytes: its own, else the global setting. */
-export function trafficLimit(serverGB: number | undefined, globalGB: string | undefined): number {
-  const g = serverGB && serverGB > 0 ? serverGB : Number(globalGB || 0)
+/** trafficLimit is the cap for a server in bytes: its own, else its location's, else the global setting. */
+export function trafficLimit(serverGB: number | undefined, locationGB: number | undefined, globalGB: string | undefined): number {
+  const g = serverGB && serverGB > 0 ? serverGB : locationGB && locationGB > 0 ? locationGB : Number(globalGB || 0)
   return g > 0 ? g * GB : 0
+}
+
+/** formatGB shows a cap given in GB, in TB when it is a whole number of them. */
+export function formatGB(g: number): string {
+  return g >= 1024 && g % 1024 === 0 ? `${g / 1024} TB` : `${g} GB`
 }

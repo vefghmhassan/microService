@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Button, Col, Flex, Grid, Input, Row, Segmented, Skeleton, Table, Tag, Typography } from 'antd'
 import { PlusOutlined, SearchOutlined } from '@ant-design/icons'
-import { useServers, useSettings } from '../api/hooks'
+import { useLocations, useServers, useSettings } from '../api/hooks'
 import { TrafficBar } from '../components/TrafficBar'
 import type { Server } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
@@ -29,7 +29,8 @@ const busy = new Set(['creating', 'checking', 'installing', 'configuring', 'rota
 export function Servers() {
   const { data, isLoading } = useServers()
   const { data: settings } = useSettings()
-  const limitOf = (s: Server) => trafficLimit(s.traffic_limit_gb, settings?.['traffic.limit_gb'])
+  const { data: locations } = useLocations()
+  const limitOf = (s: Server) => trafficLimit(s.traffic_limit_gb, locations?.find((l) => l.id === s.location_id)?.traffic_limit_gb, settings?.['traffic.limit_gb'])
   const [params, setParams] = useSearchParams()
   const [q, setQ] = useState('')
   const [newOpen, setNewOpen] = useState(false)

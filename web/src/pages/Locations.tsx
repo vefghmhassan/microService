@@ -8,7 +8,7 @@ import type { Location } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { ConfirmButton } from '../components/ConfirmButton'
 import { EmptyState } from '../components/EmptyState'
-import { flagEmoji, money } from '../lib/format'
+import { flagEmoji, formatGB, money } from '../lib/format'
 
 /**
  * Locations is the automatic placement list. A new server (or a replacement
@@ -80,6 +80,10 @@ export function Locations() {
               ) : <Typography.Text type="secondary">IP</Typography.Text>),
             },
             { title: 'ظرفیت هم‌زمان', dataIndex: 'capacity', render: (c: number) => (c > 0 ? c : <Typography.Text type="secondary">تا محدودیت ({defaultCap})</Typography.Text>) },
+            {
+              title: 'سقف ترافیک هر سرور', dataIndex: 'traffic_limit_gb',
+              render: (g: number) => (g > 0 ? <span dir="ltr">{formatGB(g)}</span> : <Typography.Text type="secondary">سراسری</Typography.Text>),
+            },
             { title: 'فعال', dataIndex: 'enabled', render: (_, l) => <Switch size="small" checked={l.enabled} onChange={() => toggle.mutate(l)} /> },
             {
               title: '', width: 90, render: (_, l) => (
@@ -104,6 +108,7 @@ interface FormValues {
   image?: string
   country?: string
   capacity: number
+  traffic_limit_gb: number
   enabled: boolean
   note?: string
   cf_account_id?: number
@@ -112,6 +117,24 @@ interface FormValues {
   dns_pattern?: string
   dns_proxied: boolean
   ssl: boolean
+}
+
+/** CapInput edits a cap stored in GB, typed in GB or TB (1 TB = 1024 GB). */
+function CapInput({ value, onChange }: { value?: number; onChange?: (v: number) => void }) {
+  const [unit, setUnit] = useState<1 | 1024>(value && value >= 1024 && value % 1024 === 0 ? 1024 : 1)
+  const shown = value ? value / unit : 0
+  return (
+    <Flex gap={8} wrap>
+      <InputNumber
+        min={0} step={unit === 1024 ? 0.5 : 10} value={shown} style={{ width: 200 }}
+        onChange={(v) => onChange?.(Math.round(Number(v || 0) * unit))}
+        addonAfter={<Select<1 | 1024> value={unit} onChange={setUnit} style={{ width: 70 }} options={[{ value: 1, label: 'GB' }, { value: 1024, label: 'TB' }]} />}
+      />
+      <Button onClick={() => { setUnit(1); onChange?.(200) }}>200 GB</Button>
+      <Button onClick={() => { setUnit(1024); onChange?.(9 * 1024) }}>9 TB</Button>
+      <Button type="text" onClick={() => onChange?.(0)}>سراسری</Button>
+    </Flex>
+  )
 }
 
 function LocationModal({ value, onClose }: { value: Location | 'new' | null; onClose: () => void }) {
@@ -152,7 +175,7 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
       onOk={() => form.validateFields().then((v) => save.mutate(v))}
       destroyOnHidden
     >
-      <Form form={form} layout="vertical" requiredMark={false} initialValues={{ capacity: 0, enabled: true, dns_proxied: false, ssl: true, dns_pattern: '' }}>
+      <Form form={form} layout="vertical" requiredMark={false} initialValues={{ capacity: 0, traffic_limit_gb: 0, enabled: true, dns_proxied: false, ssl: true, dns_pattern: '' }}>
         <Form.Item name="provider_account_id" label="حساب ارائه‌دهنده" rules={[{ required: true, message: 'حساب را انتخاب کنید' }]}>
           <Select
             options={accounts?.map((a) => ({ value: a.id, label: `${a.name} (${a.type})` }))}
@@ -192,6 +215,10 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
             <Form.Item name="enabled" label="فعال" valuePropName="checked"><Switch /></Form.Item>
           </Col>
         </Row>
+        <Form.Item name="traffic_limit_gb" label="سقف ترافیک هر سرور"
+          tooltip="جمع آپلود و دانلود همه اینباندهای هر سرور این لوکیشن؛ با رسیدن به آن مثل سقف سراسری عمل می‌شود. 0 = سقف سراسری تنظیمات. سقف خود سرور بر این مقدم است">
+          <CapInput />
+        </Form.Item>
         <Form.Item name="image" label="ایمیج (اختیاری)"><Input dir="ltr" /></Form.Item>
         <Form.Item name="note" label="یادداشت"><Input /></Form.Item>
 

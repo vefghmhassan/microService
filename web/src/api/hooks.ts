@@ -24,6 +24,7 @@ export const keys = {
   settings: ['settings'] as const,
   cloudflare: ['cloudflare'] as const,
   certificates: ['cloudflare', 'certificates'] as const,
+  sub: ['sub'] as const,
 }
 
 export const useDashboard = () => useQuery({ queryKey: keys.dashboard, queryFn: () => get<Dashboard>('/dashboard') })

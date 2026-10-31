@@ -62,6 +62,9 @@ type Location struct {
 	// "until the provider refuses", bounded by the auto.max_per_location setting.
 	Capacity int  `json:"capacity"`
 	Enabled  bool `json:"enabled"`
+	// TrafficLimitGB is the cap of every server built here, unless the
+	// server has its own (0 = use the global setting).
+	TrafficLimitGB int `json:"traffic_limit_gb"`
 	// DNS: when CFAccountID is set, every server built here gets a numbered
 	// subdomain of CFZoneName from DNSPattern ("fr{n}" → fr1.example.com),
 	// and a replacement here takes over its predecessor's name.
@@ -194,8 +197,12 @@ type Server struct {
 	// How the last client-address collection for the GeoIP report went.
 	IPCollectAt   *time.Time `json:"ip_collect_at"`
 	IPCollectNote string     `gorm:"size:255" json:"ip_collect_note"`
-	// TrafficLimitGB overrides the global cap (0 = use the setting).
+	// TrafficLimitGB overrides the location's and the global cap (0 = use those).
 	TrafficLimitGB int `json:"traffic_limit_gb"`
+	// WatchFrom starts the low-usage window after the server went live on a
+	// new IP (nil = not watched); WatchBase is its traffic at that moment.
+	WatchFrom *time.Time `json:"watch_from"`
+	WatchBase int64      `json:"-"`
 	// ReplacingAt is set once a replacement was queued, so the cap fires once.
 	ReplacingAt *time.Time `json:"replacing_at"`
 	LastError   string     `gorm:"type:text" json:"last_error"`

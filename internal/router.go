@@ -116,12 +116,17 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Post("/settings/test/telegram", a.TestTelegramHandler)
 	p.Post("/destination/upload", a.UploadConfigs)
 
+	p.Get("/sub", a.GetSub)
+	p.Post("/sub/token", a.RenewSubToken)
 	p.Get("/geo/report", a.GeoReport)
 	p.Post("/geo/update", a.UpdateGeoIP)
 
 	api.Use(func(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "not found"})
 	})
+
+	// The all-servers subscription, public but behind its secret token.
+	app.Get("/sub/:token", a.Sub)
 
 	// The SPA: real files are served as-is; every other path falls back to
 	// index.html so client-side routes survive a reload.

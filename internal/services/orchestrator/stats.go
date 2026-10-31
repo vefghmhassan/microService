@@ -17,9 +17,16 @@ import (
 
 const gb = int64(1) << 30
 
-// TrafficLimit is the cap that applies to a server, in bytes (0 = none).
+// TrafficLimit is the cap that applies to a server, in bytes (0 = none): its
+// own, else its location's, else the global setting.
 func (o *Orchestrator) TrafficLimit(s *models.Server) int64 {
 	g := s.TrafficLimitGB
+	if g <= 0 && s.LocationID != 0 {
+		var loc models.Location
+		if o.DB.Select("traffic_limit_gb").First(&loc, s.LocationID).Error == nil {
+			g = loc.TrafficLimitGB
+		}
+	}
 	if g <= 0 {
 		g = o.Settings.Int(settings.TrafficLimitGB)
 	}
@@ -48,6 +55,7 @@ func (o *Orchestrator) CollectAll(ctx context.Context) {
 				return
 			}
 			o.enforceTrafficCap(s)
+			o.checkLowUsage(s)
 		}(&servers[i])
 	}
 	wg.Wait()
@@ -175,6 +183,58 @@ func (o *Orchestrator) enforceTrafficCap(s *models.Server) {
 	if _, err := o.QueueReplace(s, fmt.Sprintf("traffic cap: %s of %s used", humanBytes(s.TrafficUp+s.TrafficDown), humanBytes(limit)), "auto"); err != nil {
 		return
 	}
+}
+
+// watchWindow is how long a server is watched after going live, clamped to
+// 10–60 minutes.
+func (o *Orchestrator) watchWindow() time.Duration {
+	m := o.Settings.Int(settings.WatchMinutes)
+	m = max(10, min(60, m))
+	return time.Duration(m) * time.Minute
+}
+
+// startWatch opens the low-usage window of a server that just went live on
+// a new IP.
+func (o *Orchestrator) startWatch(s *models.Server) {
+	now := time.Now()
+	s.WatchFrom, s.WatchBase = &now, s.TrafficUp+s.TrafficDown
+	o.DB.Model(s).Select("watch_from", "watch_base").Updates(s)
+}
+
+// checkLowUsage closes a server's low-usage window once it has passed and,
+// if its users moved less than the threshold over all inbounds, warns that
+// the IP may be blocked, with buttons to change the IP, replace or delete.
+func (o *Orchestrator) checkLowUsage(s *models.Server) {
+	if s.WatchFrom == nil || time.Since(*s.WatchFrom) < o.watchWindow() {
+		return
+	}
+	from := *s.WatchFrom
+	s.WatchFrom = nil
+	o.DB.Model(s).Update("watch_from", nil)
+	if !o.Settings.Bool(settings.WatchLowUsage) || s.Status != models.ServerActive || s.ReplacingAt != nil {
+		return
+	}
+	total := s.TrafficUp + s.TrafficDown
+	used := total - s.WatchBase
+	if used < 0 {
+		// 3x-ui's counters were reset (e.g. an inbound was recreated).
+		used = total
+	}
+	threshold := int64(o.Settings.Int(settings.WatchMinMB)) << 20
+	if used >= threshold {
+		return
+	}
+	host := s.IPv4
+	if s.Hostname != "" {
+		host += " · " + s.Hostname
+	}
+	text := fmt.Sprintf("⚠️ احتمال مشکل IP در سرور %s\nIP: %s\nدر %d دقیقه پس از راه‌اندازی فقط %s مصرف شد (کمتر از %s) · 👥 آنلاین: %d\nممکن است IP فیلتر شده باشد.",
+		s.Name, host, int(time.Since(from).Round(time.Minute).Minutes()), humanBytes(used), humanBytes(threshold), s.OnlineCount)
+	if o.Alert != nil {
+		o.Alert(s, text)
+		return
+	}
+	o.notify("%s", text)
 }
 
 // QueueReplace builds a replacement for s (same location first, then the

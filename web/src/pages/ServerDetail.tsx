@@ -185,13 +185,13 @@ function Usage({ id, installed }: { id: number; installed: boolean }) {
             {s.replacing_at && <Tag color="processing">جایگزینی در جریان است ({timeAgo(s.replacing_at)})</Tag>}
           </Flex>
           <Space.Compact>
-            <InputNumber min={0} placeholder={s.traffic_limit_gb ? String(s.traffic_limit_gb) : 'سراسری'} value={limit} onChange={(v) => setLimit(v)} addonAfter="GB" style={{ width: 170 }} />
+            <InputNumber min={0} placeholder={s.traffic_limit_gb ? String(s.traffic_limit_gb) : 'لوکیشن/سراسری'} value={limit} onChange={(v) => setLimit(v)} addonAfter="GB" style={{ width: 170 }} />
             <Button loading={saveLimit.isPending} disabled={limit === null} onClick={() => limit !== null && saveLimit.mutate(limit)}>ذخیره</Button>
           </Space.Compact>
           <Button icon={<ReloadOutlined />} loading={refresh.isPending} onClick={() => refresh.mutate()}>خواندن الان</Button>
         </Flex>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          آخرین خواندن: {timeAgo(s.stats_at)}{s.stats_error ? ` — خطا: ${s.stats_error}` : ''} · 0 یعنی استفاده از سقف سراسری تنظیمات
+          آخرین خواندن: {timeAgo(s.stats_at)}{s.stats_error ? ` — خطا: ${s.stats_error}` : ''} · 0 یعنی استفاده از سقف لوکیشن، و اگر آن هم نبود سقف سراسری تنظیمات
         </Typography.Text>
       </Card>
       <Table<InboundStat>

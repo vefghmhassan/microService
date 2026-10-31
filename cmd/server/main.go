@@ -85,6 +85,7 @@ func main() {
 		log.Printf("telegram: %v", err)
 	}
 	orch.Notify = tgBot.Notify
+	orch.Alert = tgBot.NotifyServer
 	engine.OnFinish(tgBot.OnJobFinish)
 	st.OnChange(func(changed []string) {
 		for _, k := range changed {

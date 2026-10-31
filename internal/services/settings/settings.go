@@ -34,6 +34,9 @@ const (
 	AutoMaxPerLoc     = "auto.max_per_location"
 	TrafficLimitGB    = "traffic.limit_gb"
 	TrafficAuto       = "traffic.auto_replace"
+	WatchLowUsage     = "watch.low_usage"
+	WatchMinutes      = "watch.minutes"
+	WatchMinMB        = "watch.min_mb"
 	StatsIntervalMin  = "stats.interval_min"
 	VPNPanelURL       = "vpnpannel.url"
 	VPNPanelEmail     = "vpnpannel.email"
@@ -47,6 +50,8 @@ const (
 	GeoIPCityURL      = "geoip.city_url"
 	GeoIPASNURL       = "geoip.asn_url"
 	AcmeStaging       = "acme.staging"
+	SubEnabled        = "sub.enabled"
+	SubToken          = "sub.token"
 )
 
 var Defaults = map[string]string{
@@ -69,6 +74,9 @@ var Defaults = map[string]string{
 	AutoMaxPerLoc:     "5",
 	TrafficLimitGB:    "0",
 	TrafficAuto:       "false",
+	WatchLowUsage:     "false",
+	WatchMinutes:      "30",
+	WatchMinMB:        "1024",
 	StatsIntervalMin:  "5",
 	VPNPanelURL:       "",
 	VPNPanelEmail:     "",
@@ -84,6 +92,9 @@ var Defaults = map[string]string{
 	GeoIPASNURL:  "",
 	// Let's Encrypt's staging CA: untrusted certificates, no rate limits.
 	AcmeStaging: "false",
+	// The all-servers subscription at /sub/<token>.
+	SubEnabled: "false",
+	SubToken:   "",
 }
 
 // Secret keys are encrypted in the table and masked when listed.

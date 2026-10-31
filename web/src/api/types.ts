@@ -86,6 +86,7 @@ export interface Location extends DNSFields {
   image: string
   country: string
   capacity: number
+  traffic_limit_gb: number
   enabled: boolean
   note: string
 }

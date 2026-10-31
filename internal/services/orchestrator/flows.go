@@ -158,6 +158,7 @@ func (o *Orchestrator) provision(ctx context.Context, r *jobs.Run) error {
 	s.Status = models.ServerActive
 	s.LastError = ""
 	o.save(r, &s, "status", "last_error")
+	o.startWatch(&s)
 	o.notify("✅ سرور %s آماده شد\nIP: %s\n%s", s.Name, s.IPv4, s.LastCheckNote)
 	return nil
 }
@@ -434,6 +435,7 @@ func (o *Orchestrator) rotate(ctx context.Context, r *jobs.Run) error {
 	s.Status = models.ServerActive
 	s.LastError = ""
 	o.save(r, s, "status", "last_error")
+	o.startWatch(s)
 	o.notify("🔄 IP سرور %s عوض شد\n%s → %s", s.Name, oldUploaded, s.IPv4)
 	return nil
 }
@@ -551,6 +553,7 @@ func (o *Orchestrator) install(ctx context.Context, r *jobs.Run) error {
 	s.Status = models.ServerActive
 	s.LastError = ""
 	o.save(r, s, "status", "last_error")
+	o.startWatch(s)
 	if p.ReplaceServerID == 0 && p.Upload != nil {
 		o.notify("✅ سرور %s آماده شد\nIP: %s\n%s", s.Name, s.IPv4, s.LastCheckNote)
 	}

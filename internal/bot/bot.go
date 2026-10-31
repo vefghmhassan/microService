@@ -151,6 +151,36 @@ func (m *Manager) Notify(text string) {
 	}
 }
 
+// NotifyServer sends text about one server to every allowed chat, with
+// buttons to change its IP, replace it, delete it or open it. The buttons go
+// through the same confirmations as the server menu.
+func (m *Manager) NotifyServer(s *models.Server, text string) {
+	if !m.Settings.Bool(settings.TelegramNotify) {
+		return
+	}
+	m.mu.Lock()
+	b := m.b
+	chats := make([]int64, 0, len(m.chats))
+	for id := range m.chats {
+		chats = append(chats, id)
+	}
+	m.mu.Unlock()
+	if b == nil {
+		return
+	}
+	kb := &tgm.InlineKeyboardMarkup{InlineKeyboard: [][]tgm.InlineKeyboardButton{
+		{{Text: "🔄 تعویض IP", CallbackData: fmt.Sprintf("rot:%d", s.ID)}, {Text: "♻️ جایگزینی سرور", CallbackData: fmt.Sprintf("rpl:%d", s.ID)}},
+		{{Text: "🗑 حذف", CallbackData: fmt.Sprintf("del:%d", s.ID)}, {Text: "🖥 جزئیات", CallbackData: fmt.Sprintf("srv:%d", s.ID)}},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for _, id := range chats {
+		if _, err := b.SendMessage(ctx, &tg.SendMessageParams{ChatID: id, Text: text, ReplyMarkup: kb}); err != nil {
+			log.Printf("telegram notify %d: %v", id, err)
+		}
+	}
+}
+
 // Test sends a message to every allowed chat and reports the first failure.
 func (m *Manager) Test() error {
 	m.mu.Lock()

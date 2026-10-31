@@ -25,6 +25,7 @@ type locationInput struct {
 	Image             string `json:"image"`
 	Country           string `json:"country"`
 	Capacity          int    `json:"capacity"`
+	TrafficLimitGB    int    `json:"traffic_limit_gb"`
 	Enabled           *bool  `json:"enabled"`
 	Note              string `json:"note"`
 	CFAccountID       uint   `json:"cf_account_id"`
@@ -49,6 +50,9 @@ func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
 	}
 	if in.Capacity < 0 || in.Capacity > 50 {
 		return errJSON(c, fiber.StatusBadRequest, "ظرفیت باید بین 0 تا 50 باشد")
+	}
+	if in.TrafficLimitGB < 0 {
+		return errJSON(c, fiber.StatusBadRequest, "سقف ترافیک نمی‌تواند منفی باشد")
 	}
 	dns := models.DNS{}
 	if in.CFAccountID != 0 {
@@ -78,7 +82,7 @@ func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
 	l.ProviderAccountID = acc.ID
 	l.Region, l.Plan, l.Image = strings.TrimSpace(in.Region), strings.TrimSpace(in.Plan), strings.TrimSpace(in.Image)
 	l.Country = strings.ToUpper(strings.TrimSpace(in.Country))
-	l.Capacity, l.Note = in.Capacity, in.Note
+	l.Capacity, l.TrafficLimitGB, l.Note = in.Capacity, in.TrafficLimitGB, in.Note
 	l.DNS = dns
 	if in.Enabled != nil {
 		l.Enabled = *in.Enabled

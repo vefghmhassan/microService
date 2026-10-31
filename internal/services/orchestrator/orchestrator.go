@@ -86,6 +86,8 @@ type Orchestrator struct {
 	Check    func(ctx context.Context, host string, port int) *checker.Result
 	Dests    func() []NamedDest // every enabled vpn-pannel
 	Notify   func(text string)
+	// Alert is a notification about one server, shown with its action buttons.
+	Alert func(s *models.Server, text string)
 	// Geo resolves client addresses for the GeoIP report (nil = skip).
 	Geo GeoLookup
 	// CF is the Cloudflare record API of an account.

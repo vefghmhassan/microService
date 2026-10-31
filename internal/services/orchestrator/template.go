@@ -208,13 +208,24 @@ func UploadEntries(snap *Snapshot, host string) ([]string, error) {
 // Links builds the share links of every enabled inbound marked for upload,
 // pointing at host.
 func Links(snap *Snapshot, host string) ([]linkgen.Link, error) {
+	return buildLinks(snap, host, "", true)
+}
+
+// SubLinks builds the share links of every enabled inbound, uploaded or not,
+// for the all-servers subscription; prefix goes in front of each label so
+// the client shows which server a config belongs to.
+func SubLinks(snap *Snapshot, host, prefix string) ([]linkgen.Link, error) {
+	return buildLinks(snap, host, prefix, false)
+}
+
+func buildLinks(snap *Snapshot, host, prefix string, onlyUpload bool) ([]linkgen.Link, error) {
 	var out []linkgen.Link
 	var errs []error
 	for _, t := range snap.Inbounds {
-		if !t.Enabled || !t.Upload {
+		if !t.Enabled || (onlyUpload && !t.Upload) {
 			continue
 		}
-		ls, err := linkgen.Links(t.Protocol, t.Settings, t.StreamSettings, host, t.Port, t.Remark)
+		ls, err := linkgen.Links(t.Protocol, t.Settings, t.StreamSettings, host, t.Port, prefix+t.Remark)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", t.Remark, err))
 			continue
