@@ -2,10 +2,13 @@ package providers
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +48,7 @@ type vultrInstance struct {
 	ID          string `json:"id"`
 	Label       string `json:"label"`
 	MainIP      string `json:"main_ip"`
+	V6MainIP    string `json:"v6_main_ip"`
 	Status      string `json:"status"`
 	PowerStatus string `json:"power_status"`
 	Region      string `json:"region"`
@@ -59,7 +63,7 @@ func (s *vultrInstance) instance() *Instance {
 	if ip == "0.0.0.0" {
 		ip = ""
 	}
-	return &Instance{Ref: s.ID, Name: s.Label, Status: status, IPv4: ip, Region: s.Region}
+	return &Instance{Ref: s.ID, Name: s.Label, Status: status, IPv4: ip, IPv6: hostIPv6(s.V6MainIP), Region: s.Region}
 }
 
 func (v *Vultr) Validate(ctx context.Context) error {
@@ -220,6 +224,9 @@ func recreate(ctx context.Context, p Provider, inst *Instance, opts RotateOption
 	if req.Name == "" {
 		req.Name = inst.Name
 	}
+	// The old machine still exists while the replacement is created, and
+	// Hetzner and Linode refuse duplicate names.
+	req.Name = replacementName(req.Name)
 	if req.Region == "" {
 		req.Region = inst.Region
 	}
@@ -253,6 +260,20 @@ func recreate(ctx context.Context, p Provider, inst *Instance, opts RotateOption
 		res.Instance.IPRef = opts.ReuseIPRef
 	}
 	return res, nil
+}
+
+var rotationSuffix = regexp.MustCompile(`-r[0-9a-f]{4}$`)
+
+// replacementName gives a recreated server a name of its own, replacing the
+// suffix of an earlier rotation instead of stacking another one.
+func replacementName(name string) string {
+	base := rotationSuffix.ReplaceAllString(name, "")
+	if len(base) > 50 {
+		base = base[:50]
+	}
+	b := make([]byte, 2)
+	_, _ = rand.Read(b)
+	return base + "-r" + hex.EncodeToString(b)
 }
 
 // WaitRunning polls until the server is running with a public IPv4.

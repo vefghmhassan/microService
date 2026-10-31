@@ -14,8 +14,8 @@ import { ConfirmButton } from '../components/ConfirmButton'
 // encoded for the form and decoded on save.
 const enc = (k: string) => k.replace(/\./g, '__')
 const dec = (k: string) => k.replace(/__/g, '.')
-const bools = ['xui.public_panel', 'rotate.keep_filtered_ip', 'rotate.auto', 'rotate.fallback_location', 'traffic.auto_replace', 'watch.low_usage', 'vpnpannel.ads', 'vpnpannel.auto_upload', 'telegram.notify', 'acme.staging', 'sub.enabled']
-const nums = ['check.min_ok', 'check.min_asn', 'check.pre_install_port', 'check.interval_min', 'check.globalping_limit', 'rotate.max_attempts', 'rotate.retry_kept_after_hours', 'auto.max_per_location', 'traffic.limit_gb', 'stats.interval_min', 'watch.minutes', 'watch.min_mb']
+const bools = ['xui.public_panel', 'rotate.keep_filtered_ip', 'rotate.v6_in_prefix', 'rotate.auto', 'rotate.fallback_location', 'traffic.auto_replace', 'watch.low_usage', 'vpnpannel.ads', 'vpnpannel.auto_upload', 'telegram.notify', 'acme.staging', 'sub.enabled']
+const nums = ['check.min_ok', 'check.min_asn', 'check.pre_install_port', 'check.interval_min', 'check.globalping_limit', 'check.atlas_limit', 'rotate.max_attempts', 'rotate.retry_kept_after_hours', 'auto.max_per_location', 'traffic.limit_gb', 'stats.interval_min', 'watch.minutes', 'watch.min_mb']
 
 function toForm(s: S) {
   const out: Record<string, unknown> = {}
@@ -72,7 +72,7 @@ export function Settings() {
           <Col xs={24} xl={12}>
             <Card size="small" title="چک از ایران">
               <F k="check.sources" label="منابع">
-                <Select mode="multiple" options={[{ value: 'checkhost', label: 'check-host.net' }, { value: 'globalping', label: 'Globalping' }]} />
+                <Select mode="multiple" options={[{ value: 'checkhost', label: 'check-host.net' }, { value: 'checkhostcc', label: 'check-host.cc' }, { value: 'globalping', label: 'Globalping' }, { value: 'atlas', label: 'RIPE Atlas (IPv6 هم دارد)' }]} />
               </F>
               <Row gutter={12}>
                 <Col span={12}><F k="check.min_ok" label="حداقل نود موفق ایرانی"><InputNumber min={1} max={20} style={{ width: '100%' }} /></F></Col>
@@ -81,6 +81,9 @@ export function Settings() {
                 <Col span={12}><F k="check.interval_min" label="فاصله چک خودکار (دقیقه)" tip="0 = غیرفعال"><InputNumber min={0} style={{ width: '100%' }} /></F></Col>
                 <Col span={12}><F k="check.globalping_limit" label="تعداد پراب Globalping"><InputNumber min={1} max={50} style={{ width: '100%' }} /></F></Col>
                 <Col span={12}><F k="check.globalping_token" label="توکن Globalping (اختیاری)"><Input.Password dir="ltr" /></F></Col>
+                <Col span={12}><F k="check.atlas_limit" label="تعداد پراب RIPE Atlas"><InputNumber min={1} max={50} style={{ width: '100%' }} /></F></Col>
+                <Col span={12}><F k="check.checkhostcc_key" label="کلید API چک‌هاست cc (اختیاری)"><Input.Password dir="ltr" /></F></Col>
+                <Col span={12}><F k="check.atlas_key" label="کلید API ریپ اطلس (برای منبع atlas لازم است)"><Input.Password dir="ltr" /></F></Col>
               </Row>
             </Card>
           </Col>
@@ -89,6 +92,7 @@ export function Settings() {
               <Row gutter={12}>
                 <Col span={12}><F k="rotate.max_attempts" label="حداکثر تلاش برای IP سالم"><InputNumber min={1} max={20} style={{ width: '100%' }} /></F></Col>
                 <Col span={12}><F k="rotate.retry_kept_after_hours" label="استفاده مجدد IP نگه‌داری شده بعد از (ساعت)"><InputNumber min={1} style={{ width: '100%' }} /></F></Col>
+                <Col span={12}><F k="rotate.v6_in_prefix" label="چرخش IPv6 داخل /64 همان سرور (Hetzner)" bool><Switch /></F></Col>
                 <Col span={12}><F k="rotate.keep_filtered_ip" label="نگه‌داری IP فیلتر شده" bool><Switch /></F></Col>
                 <Col span={12}><F k="rotate.auto" label="تعویض خودکار هنگام فیلتر" bool><Switch /></F></Col>
                 <Col span={12}><F k="rotate.fallback_location" label="رفتن به لوکیشن بعدی اگر IP سالم نبود" bool><Switch /></F></Col>

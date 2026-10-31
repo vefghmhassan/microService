@@ -205,18 +205,46 @@ func clients(settings obj) []obj {
 	return out
 }
 
+// Security is an inbound's stream security ("none", "tls", "reality").
+func Security(streamJSON string) string {
+	return firstNonEmpty(str(parse(streamJSON), "security"), "none")
+}
+
 // Links builds one share link per enabled client. remark is the visible name;
 // each link gets "remark-email" so configs stay distinguishable.
 func Links(protocol, settingsJSON, streamJSON, host string, port int, remark string) ([]Link, error) {
+	return LinksVia(protocol, settingsJSON, streamJSON, host, "", port, remark)
+}
+
+// LinksVia is Links for an inbound reached through a CDN: the address may be
+// any edge IP, and sniHost (the server's hostname, when not empty) fills the
+// SNI, the ws/httpupgrade/xhttp Host and the gRPC authority the inbound does
+// not set itself, since the CDN routes by those.
+func LinksVia(protocol, settingsJSON, streamJSON, host, sniHost string, port int, remark string) ([]Link, error) {
 	settings := parse(settingsJSON)
 	stream := parse(streamJSON)
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	// A TLS inbound without its own serverName is reached by the hostname
 	// the link points at; with a bare IP there is nothing to send.
+	if sniHost == "" && host != "" && net.ParseIP(host) == nil {
+		sniHost = host
+	}
 	params := func() url.Values {
 		q := streamParams(stream)
-		if q.Get("security") == "tls" && q.Get("sni") == "" && host != "" && net.ParseIP(host) == nil {
-			q.Set("sni", host)
+		if q.Get("security") == "tls" && q.Get("sni") == "" && sniHost != "" {
+			q.Set("sni", sniHost)
+		}
+		if sniHost != "" && sniHost != host {
+			switch q.Get("type") {
+			case "ws", "httpupgrade", "xhttp":
+				if q.Get("host") == "" {
+					q.Set("host", sniHost)
+				}
+			case "grpc":
+				if q.Get("authority") == "" {
+					q.Set("authority", sniHost)
+				}
+			}
 		}
 		return q
 	}

@@ -5,10 +5,10 @@ import type { Job, Server } from '../api/types'
 import { serverStatus, syncStatus } from '../lib/labels'
 import { flagEmoji, timeAgo } from '../lib/format'
 import { StatusTag } from './StatusTag'
-import { CopyText } from './CopyText'
 import { HostBadge } from './HostBadge'
 import { ServerActions } from './ServerActions'
 import { TrafficBar } from './TrafficBar'
+import { ServerIP } from './ServerIP'
 
 export function CheckBadge({ server }: { server: Pick<Server, 'last_check_ok' | 'last_check_at' | 'last_check_note'> }) {
   const icon = server.last_check_ok === null
@@ -39,7 +39,7 @@ export function ServerCard({ server, limit = 0, onJob }: { server: Server; limit
           <StatusTag map={serverStatus} value={server.status} />
         </Flex>
         <Flex justify="space-between" align="center" wrap gap={8}>
-          <CopyText text={server.ipv4} />
+          <ServerIP server={server} />
           <CheckBadge server={server} />
         </Flex>
         <HostBadge server={server} />

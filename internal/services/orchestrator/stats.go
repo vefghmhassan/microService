@@ -166,7 +166,7 @@ func (o *Orchestrator) checkGone(ctx context.Context, s *models.Server, err erro
 	s.Status, s.StatsError = models.ServerError, gone.Error()
 	o.DB.Model(s).Select("status", "stats_error").Updates(s)
 	o.Engine.Broker.Publish(serverEvent(s))
-	o.notify("⚠️ سرور %s (%s) دیگر در %s وجود ندارد؛ احتمالاً بیرون از پنل حذف شده است. وضعیتش «خطا» شد.", s.Name, s.IPv4, acc.Name)
+	o.notify("⚠️ سرور %s (%s) دیگر در %s وجود ندارد؛ احتمالاً بیرون از پنل حذف شده است. وضعیتش «خطا» شد.", s.Name, s.PublicIP(), acc.Name)
 	return gone
 }
 
@@ -224,7 +224,7 @@ func (o *Orchestrator) checkLowUsage(s *models.Server) {
 	if used >= threshold {
 		return
 	}
-	host := s.IPv4
+	host := s.PublicIP()
 	if s.Hostname != "" {
 		host += " · " + s.Hostname
 	}
@@ -246,6 +246,7 @@ func (o *Orchestrator) QueueReplace(s *models.Server, reason, source string) (*m
 	up := o.Settings.Bool(settings.VPNPanelAuto)
 	j, err := o.Engine.Enqueue(KindProvisionAuto, nil, AutoParams{
 		Count: 1, Upload: &up, ReplaceServerID: s.ID, PreferServerLocation: true, Reason: reason,
+		IPFamily: s.Family(),
 	}, source)
 	if err != nil {
 		return nil, err

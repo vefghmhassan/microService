@@ -6,7 +6,7 @@ import {
 import { DeleteOutlined, EditOutlined, KeyOutlined, PlusOutlined, ReloadOutlined, UsergroupAddOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { get, keys, post, put, useAction } from '../../api/hooks'
-import type { InboundTemplate, Job } from '../../api/types'
+import type { InboundTemplate, Job, TemplateFamily } from '../../api/types'
 import { useOpenJob } from '../JobViewer'
 import { JsonEditor } from '../JsonEditor'
 import {
@@ -16,6 +16,7 @@ import {
   xhttpModes, type InboundProtocol, type Obj,
 } from '../../lib/xray'
 import { GB } from '../../lib/format'
+import { cdnProblem } from '../../lib/cdnPresets'
 import { RealityCheck, type ScanServers } from './RealityScanner'
 
 interface Model {
@@ -25,6 +26,8 @@ interface Model {
   enabled: boolean
   upload: boolean
   uploadJSON: boolean
+  cdn: boolean
+  family: TemplateFamily
   sync: boolean
   settings: Obj
   stream: Obj
@@ -50,10 +53,10 @@ function setIn(obj: Obj, path: string[], v: unknown): Obj {
   return { ...cur, [k]: rest.length ? setIn(cur[k] ?? {}, rest, v) : v }
 }
 
-function fromTemplate(t: InboundTemplate | null): Model {
+function fromTemplate(t: Partial<InboundTemplate> | null, family: TemplateFamily): Model {
   if (!t) {
     return {
-      remark: '', protocol: 'vless', port: randomPort(), enabled: true, upload: true, uploadJSON: false, sync: true,
+      remark: '', protocol: 'vless', port: randomPort(), enabled: true, upload: true, uploadJSON: false, cdn: false, family, sync: true,
       settings: defaultSettings('vless'), stream: { network: 'tcp', security: 'none', ...defaultNetwork('tcp') },
       sniffing: { ...defaultSniffing },
     }
@@ -65,7 +68,8 @@ function fromTemplate(t: InboundTemplate | null): Model {
     delete stream.realitySettings.dest
   }
   return {
-    remark: t.remark, protocol: t.protocol, port: t.port, enabled: t.enabled, upload: t.upload, uploadJSON: !!t.upload_json, sync: true,
+    remark: t.remark ?? '', protocol: t.protocol ?? 'vless', port: t.port ?? randomPort(), enabled: t.enabled ?? true, upload: t.upload ?? true,
+    uploadJSON: !!t.upload_json, cdn: !!t.cdn, family: t.family || family, sync: true,
     settings: parse(t.settings), stream: { network: 'tcp', security: 'none', ...stream },
     sniffing: Object.keys(parse(t.sniffing)).length ? parse(t.sniffing) : { ...defaultSniffing },
   }
@@ -76,15 +80,23 @@ function fromTemplate(t: InboundTemplate | null): Model {
  * dialog does: tabs for basics, protocol, transport, security, sniffing and
  * clients, with an advanced JSON tab only for the rare field not covered.
  */
-export function InboundFormModal({ value, servers, onClose }: { value: InboundTemplate | 'new' | null; servers?: ScanServers; onClose: () => void }) {
+export function InboundFormModal({ value, initial, servers, family = 'both', onClose }: {
+  value: InboundTemplate | 'new' | null
+  /** initial fills a new inbound (a CDN preset) instead of the blank default. */
+  initial?: Partial<InboundTemplate>
+  servers?: ScanServers
+  /** family is what a new inbound is for (the Templates page's IPv4/IPv6 view). */
+  family?: TemplateFamily
+  onClose: () => void
+}) {
   const existing = value && value !== 'new' ? value : null
-  const [m, setM] = useState<Model>(() => fromTemplate(null))
+  const [m, setM] = useState<Model>(() => fromTemplate(null, family))
   const [tab, setTab] = useState('basic')
   const openJob = useOpenJob()
 
   useEffect(() => {
     if (value) {
-      setM(fromTemplate(existing))
+      setM(fromTemplate(existing ?? initial ?? null, family))
       setTab('basic')
     }
   }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -97,7 +109,7 @@ export function InboundFormModal({ value, servers, onClose }: { value: InboundTe
 
   const save = useAction(() => {
     const body = {
-      remark: m.remark.trim(), protocol: m.protocol, port: m.port, enabled: m.enabled, upload: m.upload, upload_json: m.upload && m.uploadJSON, sync: m.sync,
+      remark: m.remark.trim(), protocol: m.protocol, port: m.port, enabled: m.enabled, upload: m.upload, upload_json: m.upload && m.uploadJSON, cdn: m.cdn, family: m.family, sync: m.sync,
       client_count: 0,
       settings: JSON.stringify(m.settings), stream_settings: JSON.stringify(m.stream), sniffing: JSON.stringify(m.sniffing),
     }
@@ -163,10 +175,20 @@ export function InboundFormModal({ value, servers, onClose }: { value: InboundTe
                     <Tooltip title="پورت تصادفی"><Button icon={<ReloadOutlined />} onClick={() => set(['port'], randomPort())} /></Tooltip>
                   </Space.Compact>
                 </F>
+                <F label="روی سرورهای" tip="IPv4: فقط سرورهایی که کانفیگ‌هایشان روی IPv4 است. IPv6: فقط سرورهای IPv6. هر دو: روی همه. یک پورت برای یک نوع IP فقط یک بار.">
+                  <Segmented value={m.family} onChange={(v) => set(['family'], v)}
+                    options={[{ value: 'v4', label: 'IPv4' }, { value: 'v6', label: 'IPv6' }, { value: 'both', label: 'هر دو' }]} />
+                </F>
                 <F label="بارگذاری لینک‌ها در vpn-pannel"><Switch checked={m.upload} onChange={(v) => set(['upload'], v)} /></F>
                 <F label="ارسال به‌صورت کانفیگ JSON" tip="به‌جای لینک عادی، برای هر کاربر کانفیگ کامل کلاینت (مثل صفحه «ساخت کانفیگ JSON») ساخته و در پنل مقصد ذخیره می‌شود">
                   <Switch checked={m.upload && m.uploadJSON} disabled={!m.upload} onChange={(v) => set(['uploadJSON'], v)} />
                 </F>
+                <F label="اینباند CDN (پشت کلودفلر)" tip="لینک‌هایش ساب‌دامین سرور را در SNI/Host می‌فرستند تا با IP تمیز کلودفلر هم کار کنند. با TLS فقط روی سرورهایی ساخته می‌شود که SSL دارند.">
+                  <Switch checked={m.cdn} onChange={(v) => set(['cdn'], v)} />
+                </F>
+                {m.cdn && cdnProblem(m.port, network, security) && (
+                  <Alert type="warning" showIcon style={{ marginBottom: 12 }} title={cdnProblem(m.port, network, security)} />
+                )}
                 <F label="اعمال فوری روی همه سرورها"><Switch checked={m.sync} onChange={(v) => set(['sync'], v)} /></F>
               </>
             ),

@@ -45,7 +45,7 @@ func (a *App) Sub(c *fiber.Ctx) error {
 // total traffic.
 func BuildSub(db *gorm.DB) (body string, up, down int64, err error) {
 	var servers []models.Server
-	if err := db.Where("status IN ? AND ipv4 <> ''", []string{models.ServerActive, models.ServerFiltered}).
+	if err := db.Where("status IN ? AND (ipv4 <> '' OR ipv6 <> '')", []string{models.ServerActive, models.ServerFiltered}).
 		Order("location_id, id").Find(&servers).Error; err != nil {
 		return "", 0, 0, err
 	}

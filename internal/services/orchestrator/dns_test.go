@@ -19,18 +19,18 @@ type fakeCF struct {
 	upserts []string
 }
 
-func (f *fakeCF) UpsertA(_ context.Context, _, name, ip string, _ bool) (string, error) {
+func (f *fakeCF) UpsertAddr(_ context.Context, _, name, ip string, _ bool) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.records[name] = ip
 	f.upserts = append(f.upserts, name+"="+ip)
 	return "rec-" + name, nil
 }
-func (f *fakeCF) Records(_ context.Context, _, _, name string) ([]cloudflare.Record, error) {
+func (f *fakeCF) Records(_ context.Context, _, typ, name string) ([]cloudflare.Record, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if ip, ok := f.records[name]; ok {
-		return []cloudflare.Record{{ID: "rec-" + name, Name: name, Content: ip, Type: "A"}}, nil
+	if ip, ok := f.records[name]; ok && cloudflare.AddrType(ip) == typ {
+		return []cloudflare.Record{{ID: "rec-" + name, Name: name, Content: ip, Type: typ}}, nil
 	}
 	return nil, nil
 }

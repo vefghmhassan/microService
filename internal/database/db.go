@@ -40,6 +40,12 @@ func Open(path string) (*gorm.DB, error) {
 }
 
 func Migrate(db *gorm.DB) error {
+	// The inbound port became unique per IP family; drop the old index.
+	if m := db.Migrator(); m.HasIndex(&models.InboundTemplate{}, "idx_inbound_templates_port") {
+		if err := m.DropIndex(&models.InboundTemplate{}, "idx_inbound_templates_port"); err != nil {
+			return err
+		}
+	}
 	return db.AutoMigrate(models.All()...)
 }
 

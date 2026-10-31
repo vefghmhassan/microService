@@ -1,7 +1,10 @@
 package controllers
 
 import (
+	"context"
+	"log"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
@@ -34,6 +37,8 @@ type locationInput struct {
 	DNSPattern        string `json:"dns_pattern"`
 	DNSProxied        bool   `json:"dns_proxied"`
 	SSL               bool   `json:"ssl"`
+	IPFamily          string `json:"ip_family"`
+	NamePrefix        string `json:"name_prefix"`
 }
 
 func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
@@ -53,6 +58,10 @@ func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
 	}
 	if in.TrafficLimitGB < 0 {
 		return errJSON(c, fiber.StatusBadRequest, "سقف ترافیک نمی‌تواند منفی باشد")
+	}
+	prefix := strings.ToLower(strings.TrimSpace(in.NamePrefix))
+	if err := orchestrator.ValidNamePrefix(prefix); err != nil {
+		return errJSON(c, fiber.StatusBadRequest, err.Error())
 	}
 	dns := models.DNS{}
 	if in.CFAccountID != 0 {
@@ -82,13 +91,31 @@ func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
 	l.ProviderAccountID = acc.ID
 	l.Region, l.Plan, l.Image = strings.TrimSpace(in.Region), strings.TrimSpace(in.Plan), strings.TrimSpace(in.Image)
 	l.Country = strings.ToUpper(strings.TrimSpace(in.Country))
-	l.Capacity, l.TrafficLimitGB, l.Note = in.Capacity, in.TrafficLimitGB, in.Note
+	l.Capacity, l.TrafficLimitGB, l.Note, l.NamePrefix = in.Capacity, in.TrafficLimitGB, in.Note, prefix
+	if err := checkFamily(c, in.IPFamily); err != nil {
+		return err
+	}
+	l.IPFamily = models.NormFamily(in.IPFamily)
 	l.DNS = dns
 	if in.Enabled != nil {
 		l.Enabled = *in.Enabled
 	}
 	if err := a.DB.Save(l).Error; err != nil {
 		return err
+	}
+	if dns.DNSProxied {
+		// Proxied servers serve CDN inbounds; get the zone ready in the background.
+		go func(cfID uint, zoneID string) {
+			var cf models.CloudflareAccount
+			if a.DB.First(&cf, cfID).Error != nil {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := a.zoneCDN(ctx, &cf, zoneID); err != nil {
+				log.Printf("cloudflare: zone %s CDN settings: %v", zoneID, err)
+			}
+		}(dns.CFAccountID, dns.CFZoneID)
 	}
 	l.ProviderAccount = &acc
 	return c.JSON(l)

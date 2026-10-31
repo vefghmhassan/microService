@@ -65,13 +65,18 @@ type Location struct {
 	// TrafficLimitGB is the cap of every server built here, unless the
 	// server has its own (0 = use the global setting).
 	TrafficLimitGB int `json:"traffic_limit_gb"`
+	// IPFamily is what servers built here are used over: "v4" or "v6".
+	IPFamily string `gorm:"size:2;default:v4" json:"ip_family"`
 	// DNS: when CFAccountID is set, every server built here gets a numbered
 	// subdomain of CFZoneName from DNSPattern ("fr{n}" → fr1.example.com),
 	// and a replacement here takes over its predecessor's name.
 	DNS
-	Note      string    `gorm:"size:255" json:"note"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	// NamePrefix names the configs servers built here get in vpn-pannel:
+	// "sama" gives sama-1, sama-2, … Empty keeps the default name.
+	NamePrefix string    `gorm:"size:40" json:"name_prefix"`
+	Note       string    `gorm:"size:255" json:"note"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // DNS is the Cloudflare part of a Location, copied onto each server built
@@ -154,9 +159,18 @@ type Server struct {
 	Status            string           `gorm:"size:20;index" json:"status"`
 	IPv4              string           `gorm:"size:45;index" json:"ipv4"`
 	IPRef             string           `gorm:"size:64" json:"ip_ref"`
-	SSHHostKey        string           `gorm:"type:text" json:"-"`
+	// IPv6 is the server's public IPv6 (every server is dual-stack).
+	IPv6 string `gorm:"size:45;index" json:"ipv6"`
+	// IPFamily is what clients use: "v4", or "v6" for links, DNS (AAAA),
+	// reachability checks and the v6 templates. SSH and installs always go
+	// over IPv4.
+	IPFamily   string `gorm:"size:2;default:v4" json:"ip_family"`
+	SSHHostKey string `gorm:"type:text" json:"-"`
 	// LocationID is the placement entry the server was built for (0 = manual).
 	LocationID uint `gorm:"index" json:"location_id"`
+	// PanelName is the base name this server's configs carry in vpn-pannel
+	// when it came from a location with a name prefix ("sama-3").
+	PanelName string `gorm:"size:80;index" json:"panel_name"`
 	DNS
 	// Hostname is the server's subdomain (empty without DNS); links and
 	// uploads use it instead of the IP.
@@ -208,6 +222,32 @@ type Server struct {
 	LastError   string     `gorm:"type:text" json:"last_error"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+// IP families.
+const (
+	FamilyV4   = "v4"
+	FamilyV6   = "v6"
+	FamilyBoth = "both" // templates only: on v4 and v6 servers
+)
+
+// NormFamily returns "v6" for "v6" and "v4" for anything else.
+func NormFamily(f string) string {
+	if f == FamilyV6 {
+		return FamilyV6
+	}
+	return FamilyV4
+}
+
+// Family is the server's IP family ("v4" when unset).
+func (s *Server) Family() string { return NormFamily(s.IPFamily) }
+
+// PublicIP is the address clients use: the IPv6 on a v6 server, else the IPv4.
+func (s *Server) PublicIP() string {
+	if s.Family() == FamilyV6 {
+		return s.IPv6
+	}
+	return s.IPv4
 }
 
 // InboundStat is the latest traffic/online reading of one inbound on a server.
@@ -353,7 +393,22 @@ type CheckProbe struct {
 	Error      string  `gorm:"size:255" json:"error"`
 }
 
-// XrayTemplate is the singleton (ID=1) holding the xray parts every panel shares.
+// Template IDs of the xray rows.
+const (
+	XrayV4ID = 1
+	XrayV6ID = 2
+)
+
+// XrayID is the xray template row for an IP family.
+func XrayID(family string) uint {
+	if NormFamily(family) == FamilyV6 {
+		return XrayV6ID
+	}
+	return XrayV4ID
+}
+
+// XrayTemplate holds the xray parts every panel shares: ID=1 for IPv4
+// servers, ID=2 for IPv6 ones (empty means v6 servers use ID=1).
 type XrayTemplate struct {
 	ID        uint   `gorm:"primaryKey" json:"id"`
 	Outbounds string `gorm:"type:text" json:"outbounds"`
@@ -372,19 +427,63 @@ type XrayTemplate struct {
 // InboundTemplate is one inbound created identically on every panel. Settings
 // already carries its clients so links are the same on every server.
 type InboundTemplate struct {
-	ID             uint   `gorm:"primaryKey" json:"id"`
-	Remark         string `gorm:"size:100;not null" json:"remark"`
-	Protocol       string `gorm:"size:16;not null" json:"protocol"`
-	Port           int    `gorm:"uniqueIndex;not null" json:"port"`
+	ID       uint   `gorm:"primaryKey" json:"id"`
+	Remark   string `gorm:"size:100;not null" json:"remark"`
+	Protocol string `gorm:"size:16;not null" json:"protocol"`
+	// Port is unique per family; "both" may not share a port with either.
+	Port int `gorm:"uniqueIndex:idx_inbound_port_family;not null" json:"port"`
+	// Family is "v4", "v6" or "both": which servers get this inbound.
+	Family         string `gorm:"size:4;default:both;uniqueIndex:idx_inbound_port_family" json:"family"`
 	Enabled        bool   `json:"enabled"`
 	Settings       string `gorm:"type:text" json:"settings"`
 	StreamSettings string `gorm:"type:text" json:"stream_settings"`
 	Sniffing       string `gorm:"type:text" json:"sniffing"`
 	Upload         bool   `json:"upload"`
 	// UploadJSON sends this inbound to vpn-pannel as full client JSON configs instead of share links.
-	UploadJSON bool      `json:"upload_json"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	UploadJSON bool `json:"upload_json"`
+	// CDN marks an inbound meant to be reached through Cloudflare's proxy
+	// (ws/grpc/xhttp on a Cloudflare port). Its links send the server's
+	// hostname as SNI/Host, so they also work with a clean Cloudflare IP as
+	// the address; with TLS it needs the zone certificate and is only put on
+	// servers that have SSL.
+	CDN       bool      `json:"cdn"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CleanIP is a Cloudflare edge address (IP or a domain that resolves to
+// one) that is reachable from an Iranian operator. CDN links of proxied
+// servers are built with it as the address and the server's hostname as
+// SNI/Host.
+type CleanIP struct {
+	ID       uint   `gorm:"primaryKey" json:"id"`
+	Address  string `gorm:"size:255;uniqueIndex;not null" json:"address"`
+	Operator string `gorm:"size:16;index" json:"operator"`
+	// Source is "manual" or "source:<id>" of the CleanIPSource it came from;
+	// fetched rows disappear when their source no longer lists them.
+	Source    string     `gorm:"size:32;index" json:"source"`
+	Enabled   bool       `json:"enabled"`
+	LastSeen  time.Time  `json:"last_seen"`
+	CheckedAt *time.Time `json:"checked_at"`
+	// CheckOK is the last test from Iranian probes on port 443 (nil: never tested).
+	CheckOK   *bool     `json:"check_ok"`
+	CheckNote string    `gorm:"size:255" json:"check_note"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CleanIPSource is a URL the clean-IP list is fetched from: Clean-IP-Resolver
+// style JSON or plain text with one address (and optionally an operator) per
+// line. The built-in one is filtered by the cleanip.operators setting.
+type CleanIPSource struct {
+	ID        uint       `gorm:"primaryKey" json:"id"`
+	URL       string     `gorm:"size:1024;not null" json:"url"`
+	Builtin   bool       `json:"builtin"`
+	Enabled   bool       `json:"enabled"`
+	LastFetch *time.Time `json:"last_fetch"`
+	LastError string     `gorm:"type:text" json:"last_error"`
+	Count     int        `json:"count"`
+	CreatedAt time.Time  `json:"created_at"`
 }
 
 // Job states.
@@ -433,6 +532,6 @@ func All() []any {
 		&AdminUser{}, &ProviderAccount{}, &Location{}, &Server{}, &InboundStat{}, &IPAddress{},
 		&CheckRun{}, &CheckProbe{}, &XrayTemplate{}, &InboundTemplate{},
 		&Job{}, &JobLog{}, &Setting{}, &ClientIP{}, &IPGeo{}, &Destination{},
-		&CloudflareAccount{}, &Certificate{},
+		&CloudflareAccount{}, &Certificate{}, &CleanIP{}, &CleanIPSource{},
 	}
 }

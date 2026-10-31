@@ -5,6 +5,7 @@ import {
 } from '@ant-design/icons'
 import { deleteServer, keys, serverAction, useAction } from '../api/hooks'
 import type { Job, Server } from '../api/types'
+import { publicIP } from './ServerIP'
 
 /**
  * ServerActions is the action bar for one server. "Rotate IP" is the main
@@ -93,7 +94,7 @@ export function ServerActions({ server, compact, onJob }: { server: Server; comp
       >
         <Flex vertical gap={12}>
           <Typography.Text>
-            IP فعلی <Typography.Text code>{server.ipv4 || '—'}</Typography.Text> کنار گذاشته می‌شود، IP جدید از ایران چک می‌شود
+            IP فعلی <Typography.Text code>{publicIP(server) || '—'}</Typography.Text> کنار گذاشته می‌شود، IP جدید از ایران چک می‌شود
             و کانفیگ‌ها در vpn-pannel به IP جدید منتقل می‌شوند.
           </Typography.Text>
           {canKeep && (

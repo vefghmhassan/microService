@@ -132,6 +132,10 @@ func (g *Globalping) Check(ctx context.Context, host string, port int) ([]Probe,
 			p.ASN = "AS" + strconv.Itoa(r.Probe.ASN)
 		}
 		switch {
+		case unreachableFamily(r.Result.RawOutput):
+			// A probe without IPv6 cannot test an IPv6 target at all.
+			p.Error = "probe has no route to this IP family"
+			p.NoAnswer = true
 		case r.Result.Status != "finished":
 			// in-progress / offline / failed: the probe did not measure.
 			p.Error = r.Result.Status
@@ -147,4 +151,16 @@ func (g *Globalping) Check(ctx context.Context, host string, port int) ([]Probe,
 		probes = append(probes, p)
 	}
 	return probes, nil
+}
+
+// unreachableFamily reports a probe-side "no route" error: the probe lacks
+// the target's IP family, which says nothing about the target.
+func unreachableFamily(raw string) bool {
+	raw = strings.ToLower(raw)
+	for _, m := range []string{"network is unreachable", "address family not supported", "no ipv6", "cannot assign requested address"} {
+		if strings.Contains(raw, m) {
+			return true
+		}
+	}
+	return false
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,7 +25,7 @@ const (
 
 // DNSAPI is the Cloudflare record surface; *cloudflare.Client satisfies it.
 type DNSAPI interface {
-	UpsertA(ctx context.Context, zoneID, name, ip string, proxied bool) (string, error)
+	UpsertAddr(ctx context.Context, zoneID, name, ip string, proxied bool) (string, error)
 	Records(ctx context.Context, zoneID, typ, name string) ([]cloudflare.Record, error)
 	DeleteRecord(ctx context.Context, zoneID, id string) error
 }
@@ -38,7 +39,7 @@ type CertSource interface {
 // LinkHost is the address a server's links point at: its hostname when it
 // has one, else its IP.
 func LinkHost(s *models.Server) string {
-	return firstNonEmpty(s.Hostname, s.IPv4)
+	return firstNonEmpty(s.Hostname, s.PublicIP())
 }
 
 // HostnameFor turns a pattern like "fr{n}" into fr3.example.com.
@@ -119,7 +120,8 @@ func (o *Orchestrator) dnsAPI(accountID uint) (DNSAPI, error) {
 // syncDNS points the server's hostname at its current IP. It is safe to call
 // any number of times and does nothing for a server without a hostname.
 func (o *Orchestrator) syncDNS(ctx context.Context, r *jobs.Run, s *models.Server) error {
-	if s.Hostname == "" || s.IPv4 == "" {
+	ip := s.PublicIP()
+	if s.Hostname == "" || ip == "" {
 		return nil
 	}
 	err := func() error {
@@ -127,7 +129,7 @@ func (o *Orchestrator) syncDNS(ctx context.Context, r *jobs.Run, s *models.Serve
 		if err != nil {
 			return err
 		}
-		id, err := api.UpsertA(ctx, s.CFZoneID, s.Hostname, s.IPv4, s.DNSProxied)
+		id, err := api.UpsertAddr(ctx, s.CFZoneID, s.Hostname, ip, s.DNSProxied)
 		if id != "" {
 			s.DNSRecordID = id
 		}
@@ -135,10 +137,10 @@ func (o *Orchestrator) syncDNS(ctx context.Context, r *jobs.Run, s *models.Serve
 	}()
 	if err != nil {
 		s.DNSError = truncate(err.Error(), 255)
-		r.Logf("warn", "DNS %s → %s: %v", s.Hostname, s.IPv4, err)
+		r.Logf("warn", "DNS %s → %s: %v", s.Hostname, ip, err)
 	} else {
 		s.DNSError = ""
-		r.Info("DNS: %s → %s", s.Hostname, s.IPv4)
+		r.Info("DNS: %s %s → %s", cloudflare.AddrType(ip), s.Hostname, ip)
 	}
 	o.save(r, s, "dns_record_id", "dns_error")
 	return err
@@ -161,13 +163,17 @@ func (o *Orchestrator) removeDNS(ctx context.Context, r *jobs.Run, s *models.Ser
 		r.Logf("warn", "DNS: %v", err)
 		return
 	}
-	recs, err := api.Records(ctx, s.CFZoneID, "A", s.Hostname)
-	if err != nil {
-		r.Logf("warn", "DNS %s: %v", s.Hostname, err)
-		return
+	var recs []cloudflare.Record
+	for _, typ := range []string{"A", "AAAA"} {
+		rs, err := api.Records(ctx, s.CFZoneID, typ, s.Hostname)
+		if err != nil {
+			r.Logf("warn", "DNS %s: %v", s.Hostname, err)
+			return
+		}
+		recs = append(recs, rs...)
 	}
 	for _, rec := range recs {
-		if rec.Content != s.IPv4 {
+		if rec.Content == "" || (rec.Content != s.IPv4 && !sameIP(rec.Content, s.IPv6)) {
 			continue
 		}
 		if err := api.DeleteRecord(ctx, s.CFZoneID, rec.ID); err != nil {
@@ -301,4 +307,11 @@ func (o *Orchestrator) RenewCerts(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// sameIP compares two addresses textually after parsing, so "2a01::1" and
+// "2a01:0::1" match.
+func sameIP(a, b string) bool {
+	pa, pb := net.ParseIP(a), net.ParseIP(b)
+	return pa != nil && pb != nil && pa.Equal(pb)
 }

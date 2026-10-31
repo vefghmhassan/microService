@@ -33,10 +33,22 @@ func (a *App) GetTemplate(c *fiber.Ctx) error {
 		return err
 	}
 	var servers []models.Server
-	a.DB.Select("id", "name", "ipv4", "status", "sync_status", "applied_hash").
+	a.DB.Select("id", "name", "ipv4", "ipv6", "ip_family", "status", "sync_status", "applied_hash").
 		Where("status <> ? AND xui_port > 0", models.ServerDeleted).Find(&servers)
-	return c.JSON(fiber.Map{"xray": snap.Xray, "inbounds": snap.Inbounds, "hash": snap.Hash, "servers": servers})
+	for i := range servers {
+		servers[i].IPFamily = servers[i].Family()
+	}
+	for i := range snap.Inbounds {
+		snap.Inbounds[i].Family = orchestrator.InboundFamily(snap.Inbounds[i])
+	}
+	return c.JSON(fiber.Map{
+		"xray": snap.Xray, "xray_v6": snap.XrayV6, "xray_v6_set": orchestrator.HasXray(snap.XrayV6),
+		"inbounds": snap.Inbounds, "hash": snap.Hash, "hash_v6": snap.HashV6, "servers": servers,
+	})
 }
+
+// familyQuery reads ?family= as "v4" or "v6".
+func familyQuery(c *fiber.Ctx) string { return models.NormFamily(c.Query("family")) }
 
 func (a *App) PutXrayTemplate(c *fiber.Ctx) error {
 	var in struct {
@@ -52,8 +64,9 @@ func (a *App) PutXrayTemplate(c *fiber.Ctx) error {
 	if err := c.BodyParser(&in); err != nil {
 		return errJSON(c, fiber.StatusBadRequest, "invalid body")
 	}
+	// ?family=v6 edits the IPv6 servers' template; left empty they use the IPv4 one.
 	var t models.XrayTemplate
-	a.DB.FirstOrCreate(&t, models.XrayTemplate{ID: 1})
+	a.DB.FirstOrCreate(&t, models.XrayTemplate{ID: models.XrayID(familyQuery(c))})
 	switch {
 	case in.Full != nil && strings.TrimSpace(*in.Full) != "":
 		full, err := parseFullTemplate(*in.Full)
@@ -141,7 +154,7 @@ func (a *App) afterTemplateChange(c *fiber.Ctx, sync bool) error {
 	if err != nil {
 		return err
 	}
-	resp := fiber.Map{"version": snap.Xray.Version, "hash": snap.Hash}
+	resp := fiber.Map{"version": snap.Xray.Version, "hash": snap.Hash, "hash_v6": snap.HashV6}
 	if sync {
 		j, err := a.Engine.Enqueue(orchestrator.KindSyncAll, nil, struct{}{}, source(c))
 		if err != nil {
@@ -162,6 +175,8 @@ type inboundInput struct {
 	Sniffing       string `json:"sniffing"`
 	Upload         *bool  `json:"upload"`
 	UploadJSON     *bool  `json:"upload_json"`
+	CDN            *bool  `json:"cdn"`
+	Family         string `json:"family"`
 	ClientCount    int    `json:"client_count"`
 	Sync           bool   `json:"sync"`
 }
@@ -199,6 +214,29 @@ func (a *App) saveInbound(c *fiber.Ctx, t *models.InboundTemplate) error {
 	}
 	if in.UploadJSON != nil {
 		t.UploadJSON = *in.UploadJSON
+	}
+	if in.CDN != nil {
+		t.CDN = *in.CDN
+	}
+	switch in.Family {
+	case "":
+		if t.Family == "" {
+			t.Family = models.FamilyBoth
+		}
+	case models.FamilyV4, models.FamilyV6, models.FamilyBoth:
+		t.Family = in.Family
+	default:
+		return errJSON(c, fiber.StatusBadRequest, "family must be v4, v6 or both")
+	}
+	// One port per server: a "both" inbound may not share its port with any
+	// other, and v4/v6 ones only with the other family.
+	var clash int64
+	q := a.DB.Model(&models.InboundTemplate{}).Where("port = ? AND id <> ?", t.Port, t.ID)
+	if t.Family != models.FamilyBoth {
+		q = q.Where("COALESCE(family, 'both') IN ?", []string{t.Family, models.FamilyBoth})
+	}
+	if q.Count(&clash); clash > 0 {
+		return errJSON(c, fiber.StatusConflict, "این پورت قبلاً برای همین نوع IP استفاده شده است")
 	}
 	for k, v := range map[string]string{"settings": in.Settings, "stream_settings": in.StreamSettings, "sniffing": in.Sniffing} {
 		if err := validJSON(v, k); err != nil {
@@ -279,8 +317,18 @@ func (a *App) InboundLinks(c *fiber.Ctx) error {
 	if err := a.DB.First(&t, id).Error; err != nil {
 		return errJSON(c, fiber.StatusNotFound, "inbound not found")
 	}
-	host := c.Query("host", "1.2.3.4")
-	links, err := linkgen.Links(t.Protocol, t.Settings, t.StreamSettings, host, t.Port, t.Remark)
+	def := "1.2.3.4"
+	if t.Family == models.FamilyV6 || c.Query("family") == models.FamilyV6 {
+		def = "2001:db8::1"
+	}
+	host := c.Query("host", def)
+	// A CDN inbound is shown as a server would get it: the address may be a
+	// clean IP and the hostname goes in SNI/Host.
+	sni := ""
+	if t.CDN {
+		sni = c.Query("sni", "fr1.example.com")
+	}
+	links, err := linkgen.LinksVia(t.Protocol, t.Settings, t.StreamSettings, host, sni, t.Port, t.Remark)
 	if err != nil {
 		return errJSON(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -298,11 +346,15 @@ func (a *App) NewX25519(c *fiber.Ctx) error {
 
 // templateServer is the server named by ?server_id / server_id, or the first
 // live one with 3x-ui, for actions that need a real panel.
-func (a *App) templateServer(id int) (*models.Server, error) {
+func (a *App) templateServer(id int, family string) (*models.Server, error) {
 	var s models.Server
 	q := a.DB.Preload("ProviderAccount").Where("status IN ? AND xui_port > 0 AND ipv4 <> ''", []string{models.ServerActive, models.ServerFiltered})
 	if id > 0 {
 		q = q.Where("id = ?", id)
+	} else if family == models.FamilyV6 {
+		q = q.Where("ip_family = ?", models.FamilyV6)
+	} else if family == models.FamilyV4 {
+		q = q.Where("COALESCE(ip_family, 'v4') <> ?", models.FamilyV6)
 	}
 	if err := q.Order("id").First(&s).Error; err != nil {
 		return nil, fiber.NewError(fiber.StatusConflict, "هیچ سرور فعالی با 3x-ui پیدا نشد")
@@ -313,7 +365,7 @@ func (a *App) templateServer(id int) (*models.Server, error) {
 // XrayBase returns the live xray template of one server, to start the
 // Advanced editor from what 3x-ui actually runs.
 func (a *App) XrayBase(c *fiber.Ctx) error {
-	s, err := a.templateServer(c.QueryInt("server_id"))
+	s, err := a.templateServer(c.QueryInt("server_id"), c.Query("family"))
 	if err != nil {
 		return err
 	}
@@ -338,11 +390,12 @@ func (a *App) TestOutbounds(c *fiber.Ctx) error {
 		Mode      string           `json:"mode"`
 		Outbounds []map[string]any `json:"outbounds"`
 		Tags      []string         `json:"tags"`
+		Family    string           `json:"family"`
 	}
 	if err := c.BodyParser(&in); err != nil {
 		return errJSON(c, fiber.StatusBadRequest, "invalid body")
 	}
-	s, err := a.templateServer(in.ServerID)
+	s, err := a.templateServer(in.ServerID, in.Family)
 	if err != nil {
 		return err
 	}
