@@ -9,6 +9,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"microserver/internal/models"
+	"microserver/internal/services/orchestrator"
 	"microserver/internal/services/providers"
 	"microserver/internal/services/secret"
 	"microserver/internal/services/settings"
@@ -116,16 +117,24 @@ func (a *App) saveProvider(c *fiber.Ctx, acc *models.ProviderAccount) error {
 		creds[k] = strings.TrimSpace(v)
 	}
 	b, _ := json.Marshal(creds)
+	// Only new or changed credentials are checked against the API: an account
+	// whose token died must still be disabled, renamed or edited.
+	var old map[string]string
+	_ = json.Unmarshal([]byte(acc.Credentials), &old)
+	oldB, _ := json.Marshal(old)
+	changed := acc.ID == 0 || string(oldB) != string(b)
 	acc.Credentials = secret.String(b)
 
 	p, err := providers.New(acc.Type, json.RawMessage(b))
 	if err != nil {
 		return errJSON(c, fiber.StatusBadRequest, err.Error())
 	}
-	ctx, cancel := context.WithTimeout(c.UserContext(), 20*time.Second)
-	defer cancel()
-	if err := p.Validate(ctx); err != nil {
-		return errJSON(c, fiber.StatusBadRequest, "اعتبارسنجی API ناموفق بود: "+err.Error())
+	if changed {
+		ctx, cancel := context.WithTimeout(c.UserContext(), 20*time.Second)
+		defer cancel()
+		if err := p.Validate(ctx); err != nil {
+			return errJSON(c, fiber.StatusBadRequest, "اعتبارسنجی API ناموفق بود: "+err.Error())
+		}
 	}
 	if err := a.DB.Save(acc).Error; err != nil {
 		return err
@@ -150,12 +159,16 @@ func (a *App) DeleteProvider(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	var n int64
-	a.DB.Model(&models.Server{}).Where("provider_account_id = ? AND status <> ?", acc.ID, models.ServerDeleted).Count(&n)
-	if n > 0 {
-		return errJSON(c, fiber.StatusConflict, "ابتدا سرورهای این حساب را حذف کنید")
+	// Disabled at once so placement stops using it; the job then removes
+	// every server it built (provider, DNS, vpn-pannel) and the account.
+	if err := a.DB.Model(acc).Update("enabled", false).Error; err != nil {
+		return err
 	}
-	return a.DB.Delete(acc).Error
+	j, err := a.Engine.Enqueue(orchestrator.KindPurgeProvider, nil, orchestrator.PurgeParams{AccountID: acc.ID}, source(c))
+	if err != nil {
+		return err
+	}
+	return c.Status(fiber.StatusAccepted).JSON([]*models.Job{j})
 }
 
 func (a *App) account(c *fiber.Ctx) (*models.ProviderAccount, error) {

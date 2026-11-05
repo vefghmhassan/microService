@@ -34,6 +34,7 @@ export const jobKind: Record<string, string> = {
   panel_version: 'تغییر نسخه پنل',
   check_all: 'چک همه سرورها',
   provision_auto: 'ساخت خودکار (اولویت لوکیشن)',
+  purge_provider: 'حذف حساب ارائه‌دهنده و سرورهایش',
 }
 
 export const syncStatus: Record<string, { label: string; color: string }> = {

@@ -341,7 +341,7 @@ func (a *App) Meta(c *fiber.Ctx) error {
 			orchestrator.KindProvision, orchestrator.KindRotate, orchestrator.KindCheck, orchestrator.KindInstall,
 			orchestrator.KindSync, orchestrator.KindSyncAll, orchestrator.KindUpload, orchestrator.KindDelete,
 			orchestrator.KindXrayVersion, orchestrator.KindPanelVersion, orchestrator.KindCheckAll,
-			orchestrator.KindProvisionAuto,
+			orchestrator.KindProvisionAuto, orchestrator.KindPurgeProvider,
 		},
 	})
 }

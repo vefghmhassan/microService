@@ -21,6 +21,7 @@ func (d *downDest) ReplaceAddress(context.Context, string, string, string) (*des
 	return nil, destination.ErrNoNodes
 }
 func (d *downDest) SetActive(context.Context, string, bool) error { return nil }
+func (d *downDest) DeleteAddress(context.Context, string) error   { return nil }
 
 // One unreachable panel must not fail provisioning or rotation while
 // another one takes the configs.
@@ -63,6 +64,7 @@ func (d *recDest) ReplaceAddress(context.Context, string, string, string) (*dest
 	return &destination.ReplaceResult{Updated: 2}, nil
 }
 func (d *recDest) SetActive(context.Context, string, bool) error { return nil }
+func (d *recDest) DeleteAddress(context.Context, string) error   { return nil }
 
 // A "both" panel gets a normal and an ads set, but is moved only once.
 func TestBothAdsModes(t *testing.T) {

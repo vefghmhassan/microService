@@ -597,7 +597,7 @@ func kindFa(k string) string {
 		orchestrator.KindProvision: "ساخت سرور", orchestrator.KindRotate: "تعویض IP", orchestrator.KindCheck: "چک",
 		orchestrator.KindInstall: "نصب", orchestrator.KindSync: "همگام‌سازی", orchestrator.KindUpload: "بارگذاری",
 		orchestrator.KindDelete: "حذف", orchestrator.KindXrayVersion: "تغییر هسته", orchestrator.KindPanelVersion: "تغییر نسخه پنل",
-		orchestrator.KindProvisionAuto: "ساخت خودکار",
+		orchestrator.KindProvisionAuto: "ساخت خودکار", orchestrator.KindPurgeProvider: "حذف حساب ارائه‌دهنده",
 	}[k]; ok {
 		return v
 	}

@@ -45,6 +45,7 @@ const (
 	KindPanelAccess   = "panel_access"
 	KindCertPush      = "cert_push"
 	KindDNSSync       = "dns_sync"
+	KindPurgeProvider = "purge_provider"
 )
 
 // Remote is the SSH session the orchestrator needs; sshx.Client satisfies it
@@ -111,6 +112,7 @@ type Destination interface {
 	Upload(ctx context.Context, in destination.UploadRequest) error
 	ReplaceAddress(ctx context.Context, oldIP, newIP, country string) (*destination.ReplaceResult, error)
 	SetActive(ctx context.Context, address string, active bool) error
+	DeleteAddress(ctx context.Context, address string) error
 }
 
 func New(db *gorm.DB, st *settings.Store, key *sshx.Keypair, engine *jobs.Engine) *Orchestrator {
@@ -196,6 +198,7 @@ func (o *Orchestrator) Register() {
 	o.Engine.Register(KindPanelAccess, o.panelAccess)
 	o.Engine.Register(KindCertPush, o.certPush)
 	o.Engine.Register(KindDNSSync, o.dnsSync)
+	o.Engine.Register(KindPurgeProvider, o.purgeProvider)
 }
 
 func serverEvent(s *models.Server) jobs.Event {

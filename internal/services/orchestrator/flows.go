@@ -813,22 +813,44 @@ func (o *Orchestrator) delete(ctx context.Context, r *jobs.Run) error {
 			}
 		}
 	}
+	o.retire(ctx, r, s, false)
+	o.notify("🗑 سرور %s حذف شد", s.Name)
+	return nil
+}
+
+// retire does everything after the provider let go of a server: its IP rows
+// are released, its DNS record removed, its vpn-pannel configs deactivated (or
+// deleted outright when purge is set) and the row marked deleted.
+func (o *Orchestrator) retire(ctx context.Context, r *jobs.Run, s *models.Server, purge bool) {
 	o.DB.Model(&models.IPAddress{}).Where("server_id = ? AND status = ?", s.ID, models.IPInUse).
 		Updates(map[string]any{"status": models.IPReleased, "server_id": nil})
 	o.removeDNS(ctx, r, s)
-	if s.UploadedIP != "" {
+	addrs := []string{s.UploadedIP}
+	if ip := s.PublicIP(); purge && ip != "" && ip != s.UploadedIP {
+		addrs = append(addrs, ip)
+	}
+	for _, addr := range addrs {
+		if addr == "" {
+			continue
+		}
 		for _, d := range o.Dests() {
-			if err := d.SetActive(ctx, s.UploadedIP, false); err != nil {
-				r.Logf("warn", "%s: could not deactivate configs on %s: %v", d.Name, s.UploadedIP, err)
+			if purge {
+				if err := d.DeleteAddress(ctx, addr); err != nil {
+					r.Logf("warn", "%s: could not delete configs on %s: %v", d.Name, addr, err)
+				} else {
+					r.Info("%s: configs on %s deleted", d.Name, addr)
+				}
+				continue
+			}
+			if err := d.SetActive(ctx, addr, false); err != nil {
+				r.Logf("warn", "%s: could not deactivate configs on %s: %v", d.Name, addr, err)
 			} else {
-				r.Info("%s: configs on %s deactivated", d.Name, s.UploadedIP)
+				r.Info("%s: configs on %s deactivated", d.Name, addr)
 			}
 		}
 	}
 	s.Status = models.ServerDeleted
 	o.save(r, s, "status")
-	o.notify("🗑 سرور %s حذف شد", s.Name)
-	return nil
 }
 
 // ---- versions ----

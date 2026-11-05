@@ -15,7 +15,7 @@ export function Providers() {
   const meta = useMeta()
   const [editing, setEditing] = useState<ProviderAccount | 'new' | null>(null)
   const test = useAction((id: number) => post(`/providers/${id}/test`), { success: 'اتصال برقرار است' })
-  const remove = useAction((id: number) => del(`/providers/${id}`), { success: 'حذف شد', invalidate: [keys.providers] })
+  const remove = useAction((id: number) => del(`/providers/${id}`), { success: 'حذف در صف قرار گرفت', invalidate: [keys.providers] })
 
   return (
     <>
@@ -41,7 +41,7 @@ export function Providers() {
                 actions={[
                   <Button key="t" type="text" size="small" loading={test.isPending && test.variables === a.id} onClick={() => test.mutate(a.id)}>تست</Button>,
                   <Button key="e" type="text" size="small" icon={<EditOutlined />} onClick={() => setEditing(a)}>ویرایش</Button>,
-                  <ConfirmButton key="d" type="text" size="small" danger icon={<DeleteOutlined />} confirm="این حساب حذف شود؟" onConfirm={() => remove.mutate(a.id)}>حذف</ConfirmButton>,
+                  <ConfirmButton key="d" type="text" size="small" danger icon={<DeleteOutlined />} confirm={a.server_count ? `این حساب و ${a.server_count} سرورش (از ارائه‌دهنده، DNS و پنل‌های مقصد) حذف شوند؟` : 'این حساب حذف شود؟'} onConfirm={() => remove.mutate(a.id)}>حذف</ConfirmButton>,
                 ]}
               >
                 <Flex vertical gap={6}>

@@ -226,3 +226,29 @@ func (v *VPNPanel) SetActive(ctx context.Context, address string, active bool) e
 	}
 	return nil
 }
+
+// DeleteAddress removes every config on an address. A vpn-pannel without the
+// bulk-delete route (404) gets them deactivated instead, so none stay live.
+func (v *VPNPanel) DeleteAddress(ctx context.Context, address string) error {
+	payload, _ := json.Marshal(map[string]any{"address": address})
+	resp, body, err := v.do(ctx, func(tok string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.BaseURL+"/admin/v2ray/bulk-delete", bytes.NewReader(payload))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Authorization", "Bearer "+tok)
+		return req, nil
+	})
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		return v.SetActive(ctx, address, false)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("vpn-pannel bulk-delete: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}

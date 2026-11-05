@@ -32,6 +32,7 @@ type fakeProvider struct {
 	released  []string
 	servers   map[string]*providers.Instance
 	deleted   []string
+	deleteErr error
 	// capacity limits how many live servers a region holds (0 = unlimited).
 	capacity map[string]int
 }
@@ -84,6 +85,9 @@ func (f *fakeProvider) Get(_ context.Context, ref string) (*providers.Instance, 
 func (f *fakeProvider) Delete(_ context.Context, ref string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	delete(f.servers, ref)
 	f.deleted = append(f.deleted, ref)
 	return nil
@@ -190,6 +194,7 @@ type fakeDest struct {
 	mu       sync.Mutex
 	uploads  [][]string
 	replaced [][2]string
+	removed  []string
 }
 
 func (d *fakeDest) Upload(_ context.Context, in destination.UploadRequest) error {
@@ -205,6 +210,12 @@ func (d *fakeDest) ReplaceAddress(_ context.Context, oldIP, newIP, _ string) (*d
 	return &destination.ReplaceResult{Updated: 1}, nil
 }
 func (d *fakeDest) SetActive(context.Context, string, bool) error { return nil }
+func (d *fakeDest) DeleteAddress(_ context.Context, addr string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.removed = append(d.removed, addr)
+	return nil
+}
 
 // ---- harness ----
 
