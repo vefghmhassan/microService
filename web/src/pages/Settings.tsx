@@ -15,7 +15,7 @@ import { ConfirmButton } from '../components/ConfirmButton'
 const enc = (k: string) => k.replace(/\./g, '__')
 const dec = (k: string) => k.replace(/__/g, '.')
 const bools = ['xui.public_panel', 'rotate.keep_filtered_ip', 'rotate.v6_in_prefix', 'rotate.auto', 'rotate.fallback_location', 'traffic.auto_replace', 'watch.low_usage', 'vpnpannel.ads', 'vpnpannel.auto_upload', 'telegram.notify', 'acme.staging', 'sub.enabled']
-const nums = ['check.min_ok', 'check.min_asn', 'check.pre_install_port', 'check.interval_min', 'check.globalping_limit', 'check.atlas_limit', 'rotate.max_attempts', 'rotate.retry_kept_after_hours', 'auto.max_per_location', 'traffic.limit_gb', 'stats.interval_min', 'watch.minutes', 'watch.min_mb']
+const nums = ['xui.cf_panel_port', 'xui.cf_sub_port', 'check.min_ok', 'check.min_asn', 'check.pre_install_port', 'check.interval_min', 'check.globalping_limit', 'check.atlas_limit', 'rotate.max_attempts', 'rotate.retry_kept_after_hours', 'auto.max_per_location', 'traffic.limit_gb', 'stats.interval_min', 'watch.minutes', 'watch.min_mb']
 
 function toForm(s: S) {
   const out: Record<string, unknown> = {}
@@ -65,6 +65,8 @@ export function Settings() {
               </F>
               <F k="xray.version" label="نسخه هسته Xray" tip="خالی: نسخه‌ای که 3x-ui نصب می‌کند"><Input dir="ltr" placeholder="v25.x.x" /></F>
               <F k="xui.install_url" label="آدرس اسکریپت نصب"><Input dir="ltr" /></F>
+              <F k="xui.cf_panel_port" label="پورت پنل (با SSL کلودفلر)" tip="یکی از پورت‌های HTTPS کلودفلر (443، 2053، 2083، 2087، 2096، 8443). پنل سرورهای SSL روی این پورت و دامنهٔ خاکستری باز می‌شود و هیچ اینباندی نمی‌تواند از آن استفاده کند"><InputNumber min={1} max={65535} /></F>
+              <F k="xui.cf_sub_port" label="پورت سابسکریپشن پنل" tip="سابسکریپشن خود 3x-ui (و JSON آن) مثل اسکریپت 3x-ui-pro-configs؛ این پورت هم برای اینباندها رزرو است"><InputNumber min={1} max={65535} /></F>
               <F k="xui.public_panel" label="پنل 3x-ui از اینترنت باز باشد" tip="روی سرورهای جدید؛ برای سرورهای فعلی از صفحه هر سرور" bool><Switch /></F>
               <F k="acme.staging" label="گواهی آزمایشی Let's Encrypt (staging)" tip="فقط برای تست: گواهی معتبر نیست ولی سقف تعداد صدور ندارد" bool><Switch /></F>
             </Card>

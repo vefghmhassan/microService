@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Alert, Button, Card, Col, Flex, Form, Input, InputNumber, Modal, Row, Select, Switch, Table, Tag, Tooltip, Typography } from 'antd'
 import { CloudOutlined, DeleteOutlined, EditOutlined, LinkOutlined, PlusOutlined, SyncOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import { del, get, keys, post, put, useAction, useCDNAddons, useCloudflare, useCloudflareZones, useTemplate } from '../api/hooks'
+import { del, get, keys, post, put, useAction, useCDNAddons, useCloudflare, useCloudflareZones, useReservedPorts, useTemplate } from '../api/hooks'
 import type { CDNAddon, InboundTemplate, Link } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { ConfirmButton } from '../components/ConfirmButton'
@@ -60,7 +60,9 @@ function AddonCard({ addon, all, onEdit }: { addon: CDNAddon; all: CDNAddon[]; o
   const [presets, setPresets] = useState(false)
   const [links, setLinks] = useState<Link[] | null>(null)
   // Every port is unique per server: the shared template and every add-on.
-  const used = [...(tmpl.data?.inbounds ?? []).map((t) => t.port), ...all.flatMap((a) => a.inbounds.map((t) => t.port))]
+  const reserved = useReservedPorts()
+  // Every inbound's port, plus the two kept for the 3x-ui panel and its subscription.
+  const used = [...(tmpl.data?.inbounds ?? []).map((t) => t.port), ...all.flatMap((a) => a.inbounds.map((t) => t.port)), ...reserved]
   const toggle = useAction((v: boolean) => put(`/cdn-addons/${addon.id}`, { ...addon, enabled: v }), { invalidate: inv })
   const remove = useAction(() => del(`/cdn-addons/${addon.id}`), { success: 'حذف شد', invalidate: inv })
   const sync = useAction(() => post<{ queued?: number }>(`/cdn-addons/${addon.id}/sync`), {

@@ -279,25 +279,53 @@ func (o *Orchestrator) pushCert(ctx context.Context, r *jobs.Run, s *models.Serv
 func (o *Orchestrator) setPanelCert(ctx context.Context, r *jobs.Run, s *models.Server, remote Remote) error {
 	// The panel reads its certificate at start, so it is restarted either way.
 	panel := o.PanelFor(s, remote)
-	cmd := fmt.Sprintf("/usr/local/x-ui/x-ui cert -webCert %s -webCertKey %s >/dev/null 2>&1 && (x-ui restart >/dev/null 2>&1 || systemctl restart x-ui)", CertFile, KeyFile)
+	// With the certificate the panel moves to the reserved Cloudflare port
+	// (like the script's panel), unless an inbound already holds it.
+	prevPort, port := s.XUIPort, o.cfPanelPort(s)
+	cmd := fmt.Sprintf("/usr/local/x-ui/x-ui cert -webCert %s -webCertKey %s >/dev/null 2>&1", CertFile, KeyFile)
+	if port != 0 && port != prevPort {
+		cmd += fmt.Sprintf(" && /usr/local/x-ui/x-ui setting -port %d >/dev/null 2>&1"+
+			" && { if command -v ufw >/dev/null && ufw status | grep -q 'Status: active'; then ufw allow %d/tcp >/dev/null; fi; true; }", port, port)
+	}
+	cmd += " && (x-ui restart >/dev/null 2>&1 || systemctl restart x-ui)"
 	if _, err := remote.Run(ctx, cmd, nil); err != nil {
 		r.Logf("warn", "3x-ui panel certificate: %v", err)
 		return nil
 	}
 	prev := s.XUIScheme
 	s.XUIScheme = "https"
+	if port != 0 {
+		s.XUIPort = port
+	}
 	_ = sleep(ctx, o.RetryDelay/6)
 	if err := o.waitPanel(ctx, r, s, o.PanelFor(s, remote)); err != nil {
-		// Never leave the panel unreachable over a certificate.
-		r.Logf("warn", "3x-ui did not come up over https (%v); going back to http", err)
-		_, _ = remote.Run(ctx, "/usr/local/x-ui/x-ui cert -reset >/dev/null 2>&1; x-ui restart >/dev/null 2>&1 || systemctl restart x-ui", nil)
-		s.XUIScheme = firstNonEmpty(prev, "http")
-		o.save(r, s, "xui_scheme")
+		// Never leave the panel unreachable over a certificate or a port.
+		r.Logf("warn", "3x-ui did not come up over https on %d (%v); going back", s.XUIPort, err)
+		_, _ = remote.Run(ctx, fmt.Sprintf("/usr/local/x-ui/x-ui cert -reset >/dev/null 2>&1; /usr/local/x-ui/x-ui setting -port %d >/dev/null 2>&1; x-ui restart >/dev/null 2>&1 || systemctl restart x-ui", prevPort), nil)
+		s.XUIScheme, s.XUIPort = firstNonEmpty(prev, "http"), prevPort
+		o.save(r, s, "xui_scheme", "xui_port")
 		return o.waitPanel(ctx, r, s, panel)
 	}
-	o.save(r, s, "xui_scheme")
+	o.save(r, s, "xui_scheme", "xui_port")
 	r.Info("3x-ui panel serves https at %s", PanelURL(s))
 	return nil
+}
+
+// cfPanelPort is the reserved Cloudflare port for the panel of s, or 0 when
+// an inbound of s uses it (the panel then keeps its port).
+func (o *Orchestrator) cfPanelPort(s *models.Server) int {
+	port, _ := ReservedPorts(o.Settings)
+	if port <= 0 {
+		return 0
+	}
+	if snap, err := LoadSnapshot(o.DB); err == nil {
+		for _, t := range snap.For(s).Inbounds {
+			if t.Port == port {
+				return 0
+			}
+		}
+	}
+	return port
 }
 
 // certPush re-copies the certificate to one server (after a renewal, or by hand).

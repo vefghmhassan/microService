@@ -11,7 +11,9 @@ import (
 	"strconv"
 	"strings"
 
+	"microserver/internal/jobs"
 	"microserver/internal/models"
+	"microserver/internal/services/cleanip"
 	"microserver/internal/services/linkgen"
 	"microserver/internal/services/sshx"
 )
@@ -284,4 +286,41 @@ fi
 true
 `)
 	return b.String()
+}
+
+// autoTestConfigs runs the config test at the end of an install, as the
+// reference script does, and logs OK/FAIL per config. A failure is only a
+// warning: a fresh orange name can take a few minutes to resolve.
+func (o *Orchestrator) autoTestConfigs(ctx context.Context, r *jobs.Run, s *models.Server) {
+	r.Step("test every config")
+	snap, err := LoadSnapshot(o.DB)
+	if err != nil {
+		r.Logf("warn", "config test: %v", err)
+		return
+	}
+	ns := snap.For(s)
+	if ns.CDNHost != "" {
+		ns.Clean, _ = cleanip.Pick(o.DB, 2)
+	}
+	remote, _, err := o.Connect(ctx, s)
+	if err != nil {
+		r.Logf("warn", "config test: ssh: %v", err)
+		return
+	}
+	defer remote.Close()
+	res, err := TestConfigs(ctx, remote, ns, s)
+	if err != nil {
+		r.Logf("warn", "config test: %v", err)
+		return
+	}
+	ok := 0
+	for _, t := range res {
+		if t.OK {
+			ok++
+			r.Info("OK   %s (%s, %dms)", t.Name, t.Via, t.MS)
+		} else {
+			r.Logf("warn", "FAIL %s (%s): %s", t.Name, t.Via, t.Error)
+		}
+	}
+	r.Info("%d/%d configs work", ok, len(res))
 }

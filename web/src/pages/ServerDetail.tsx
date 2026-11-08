@@ -90,6 +90,9 @@ function Overview({ id, installed }: { id: number; installed: boolean }) {
               { label: 'دامنه', children: <HostBadge server={s} /> },
               { label: 'SSL', children: s.ssl ? (s.cert_not_after ? `تا ${fmtDate(s.cert_not_after)}` + (s.xui_scheme === 'https' ? ' · پنل https' : '') : 'هنوز کپی نشده') : 'خاموش' },
             ] : []),
+            ...(s.panel_sub_url ? [
+              { label: 'ساب پنل 3x-ui', children: <Flex vertical gap={2}><CopyText text={s.panel_sub_url} /><CopyText text={s.panel_sub_json} /><Typography.Text type="secondary" style={{ fontSize: 12 }}>کلاینت {s.panel_client} · JSON برای FinalMask</Typography.Text></Flex> },
+            ] : []),
             { label: 'vpn-pannel', children: s.uploaded_at ? `${s.uploaded_ip} · ${timeAgo(s.uploaded_at)}` : 'بارگذاری نشده' },
             { label: 'ساخته شده', children: fmtDate(s.created_at) },
           ]} />

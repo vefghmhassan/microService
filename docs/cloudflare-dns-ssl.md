@@ -38,6 +38,20 @@ Status: **in progress** (backend done and tested; frontend partly done; not test
   - Clean IP page → "تست از مسیر CDN خودمان" (`POST /clean-ips/check-cdn`) runs `curl --resolve <orange-name>:<port>:<ip>` from a live add-on server. Addresses that fail are no longer used.
 - **ufw/BBR:** after every template apply, inbound ports are opened when ufw is active, and BBR is turned on.
 
+## The 3x-ui panel side, like the script
+After every apply (install or sync), `syncPanelPro` (`orchestrator/panelpro.go`) sets the panel up the way `install.sh` does:
+- **One client:** a client `ms-<server>` with its own `subId` is attached to every managed inbound. It is re-attached on every sync.
+- **Hosts:** the 3x-ui Hosts page gets rows like the script's `HOSTS()`:
+  - `⚡ Main` and `6️⃣ IPv6` for REALITY / plain inbounds.
+  - `🔐 Main`, `🧩 Fragment` (finalMask fragment) and `6️⃣ IPv6` for direct TLS.
+  - `🚄 Main` for Hysteria2.
+  - `☁️ CDN` on the orange name (sni/Host + fragment) for CDN inbounds, plus `🧊 Clean NN` rows.
+  - Our rows carry the tag `ms` and are replaced on each sync. The operator's own rows stay.
+- **Settings:** `remarkTemplate={{HOST}}`, `subEnable`, `subJsonEnable`, sub port `xui.cf_sub_port` (2096). On SSL servers the subscription uses the zone certificate and the grey name. The links are shown on the server page.
+- **Panel port:** with SSL the panel moves to `xui.cf_panel_port` (8443) on the grey name. If it does not come up there, it goes back to its old port.
+- **Reserved ports:** both ports are refused for inbounds, and every port picker skips them. Reality XHTTP's Pro preset now uses 2443, which leaves 443, 2053, 2083 and 2087 for Reality Vision and the CDN configs.
+- **Install:** the end of each install runs the config test and logs OK/FAIL per config.
+
 ## CDN templates and clean IPs
 - **CDN inbounds:** `InboundTemplate.CDN` marks an inbound meant to be reached through Cloudflare's proxy.
   - With TLS, it points at `/root/cert/*`, so `Snapshot.For(server)` leaves it out on servers without SSL and a hostname. Xray would not start with a missing certificate.

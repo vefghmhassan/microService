@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import { Alert, Button, Card, Flex, Modal, Segmented, Skeleton, Switch, Table, Tabs, Tag, Typography } from 'antd'
 import { CloudOutlined, DeleteOutlined, EditOutlined, LinkOutlined, PlusOutlined, SaveOutlined, SyncOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import { del, get, keys, post, put, useAction, useTemplate, useCDNAddons } from '../api/hooks'
+import { del, get, keys, post, put, useAction, useTemplate, useCDNAddons, useReservedPorts } from '../api/hooks'
 import type { InboundTemplate, IPFamily, Job, Link, TemplateResponse, XrayTemplate } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { StatusTag } from '../components/StatusTag'
@@ -176,7 +176,10 @@ function Inbounds({ list, all, servers, family }: { list: InboundTemplate[]; all
   const [pro, setPro] = useState(false)
   const [links, setLinks] = useState<{ list: Link[]; cdn: boolean } | null>(null)
   // Ports taken for this family: its own and the shared ("both") inbounds.
-  const used = all.filter((t) => (t.family || 'both') === 'both' || t.family === family).map((t) => t.port)
+  const reserved = useReservedPorts()
+  // Ports taken for this family (its own and the shared "both" inbounds), plus
+  // the two kept for the 3x-ui panel and its subscription.
+  const used = [...all.filter((t) => (t.family || 'both') === 'both' || t.family === family).map((t) => t.port), ...reserved]
   const addons = useCDNAddons()
   // Ports are unique across the shared template and every add-on.
   const usedAll = [...used, ...(addons.data ?? []).flatMap((a) => a.inbounds.map((t) => t.port))]

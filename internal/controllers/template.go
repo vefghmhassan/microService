@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -256,6 +257,10 @@ func (a *App) saveInbound(c *fiber.Ctx, t *models.InboundTemplate) error {
 		t.Family = in.Family
 	default:
 		return errJSON(c, fiber.StatusBadRequest, "family must be v4, v6 or both")
+	}
+	// The 3x-ui panel and its subscription keep two Cloudflare ports.
+	if panelPort, subPort := orchestrator.ReservedPorts(a.Settings); t.Port == panelPort || t.Port == subPort {
+		return errJSON(c, fiber.StatusConflict, fmt.Sprintf("پورت %d برای پنل و سابسکریپشن 3x-ui رزرو است (پنل %d، ساب %d)؛ پورت دیگری انتخاب کنید", t.Port, panelPort, subPort))
 	}
 	// One port per server: a "both" inbound may not share its port with any
 	// other, and v4/v6 ones only with the other family.

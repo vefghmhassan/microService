@@ -224,23 +224,8 @@ func (o *Orchestrator) installPanelOpts(ctx context.Context, r *jobs.Run, s *mod
 	}
 	r.Info("3x-ui %s is up (xray %s)", version, s.XrayVersion)
 
-	// Subscriptions are not used: configs reach users through vpn-pannel.
-	changed, err := panel.DisableSubscription(ctx)
-	switch {
-	case err != nil:
-		r.Logf("warn", "could not turn off the subscription service: %v", err)
-	case changed:
-		r.Info("subscription service turned off; restarting the panel")
-		if err := panel.RestartPanel(ctx); err != nil {
-			r.Logf("warn", "restart panel: %v", err)
-		}
-		// Give the old process time to exit before polling the new one.
-		_ = sleep(ctx, o.RetryDelay/6)
-		if err := o.waitPanel(ctx, r, s, panel); err != nil {
-			return err
-		}
-	}
-
+	// The panel's own subscription is set up after the template is applied
+	// (syncPanelPro), like pdnczone/3x-ui-pro-configs does on a panel.
 	if want := firstNonEmpty(s.WantXrayVer, o.Settings.Get(settings.XrayVersion)); want != "" &&
 		strings.TrimPrefix(want, "v") != strings.TrimPrefix(s.XrayVersion, "v") {
 		r.Info("switching xray core to %s", want)

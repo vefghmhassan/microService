@@ -381,3 +381,75 @@ func (c *Client) Status(ctx context.Context) (*Status, error) {
 	}
 	return &s, err
 }
+
+// Settings returns every 3x-ui panel setting. They can only be written as a
+// whole: change the map and send it back with UpdateSettings.
+func (c *Client) Settings(ctx context.Context) (map[string]any, error) {
+	var all map[string]any
+	err := c.call(ctx, http.MethodPost, "/panel/api/setting/all", nil, &all)
+	return all, err
+}
+
+// UpdateSettings writes the whole settings map (the panel needs a restart).
+func (c *Client) UpdateSettings(ctx context.Context, all map[string]any) error {
+	return c.call(ctx, http.MethodPost, "/panel/api/setting/update", all, nil)
+}
+
+// PanelClient is a 3x-ui v3 client: one identity that can be attached to
+// several inbounds and has its own subscription (subId).
+type PanelClient struct {
+	Email      string `json:"email"`
+	SubID      string `json:"subId,omitempty"`
+	InboundIDs []int  `json:"inboundIds,omitempty"`
+}
+
+// ListClients lists the panel's clients.
+func (c *Client) ListClients(ctx context.Context) ([]PanelClient, error) {
+	var out []PanelClient
+	err := c.call(ctx, http.MethodGet, "/panel/api/clients/list", nil, &out)
+	return out, err
+}
+
+// AddClient creates a client and attaches it to inboundIDs at once.
+func (c *Client) AddClient(ctx context.Context, client map[string]any, inboundIDs []int) error {
+	return c.call(ctx, http.MethodPost, "/panel/api/clients/add", map[string]any{"client": client, "inboundIds": inboundIDs}, nil)
+}
+
+// AttachClient attaches an existing client to more inbounds.
+func (c *Client) AttachClient(ctx context.Context, email string, inboundIDs []int) error {
+	return c.call(ctx, http.MethodPost, "/panel/api/clients/"+url.PathEscape(email)+"/attach", map[string]any{"inboundIds": inboundIDs}, nil)
+}
+
+// HostGroup is one row of the 3x-ui Hosts page: extra addresses (and
+// SNI/Host/FinalMask overrides) an inbound's subscription links are made
+// for. Only the fields this app sets are listed.
+type HostGroup struct {
+	GroupID    string   `json:"groupId,omitempty"`
+	InboundIDs []int    `json:"inboundIds"`
+	Hosts      []string `json:"hosts"`
+	Remark     string   `json:"remark"`
+	SortOrder  int      `json:"sortOrder"`
+	Tags       []string `json:"tags"`
+	Port       int      `json:"port"`
+	Security   string   `json:"security"`
+	Sni        string   `json:"sni,omitempty"`
+	HostHeader string   `json:"hostHeader,omitempty"`
+	FinalMask  string   `json:"finalMask,omitempty"`
+}
+
+// ListHosts lists the Hosts page, one entry per group.
+func (c *Client) ListHosts(ctx context.Context) ([]HostGroup, error) {
+	var out []HostGroup
+	err := c.call(ctx, http.MethodGet, "/panel/api/hosts/list", nil, &out)
+	return out, err
+}
+
+// AddHost adds one host group.
+func (c *Client) AddHost(ctx context.Context, h HostGroup) error {
+	return c.call(ctx, http.MethodPost, "/panel/api/hosts/add", h, nil)
+}
+
+// DeleteHost removes one host group.
+func (c *Client) DeleteHost(ctx context.Context, groupID string) error {
+	return c.call(ctx, http.MethodPost, "/panel/api/hosts/del/"+url.PathEscape(groupID), nil, nil)
+}

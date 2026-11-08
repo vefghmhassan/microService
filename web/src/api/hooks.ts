@@ -76,6 +76,11 @@ export const useIPs = () => useQuery({ queryKey: keys.ips, queryFn: () => get<IP
 export const useChecks = () => useQuery({ queryKey: keys.checks, queryFn: () => get<CheckRun[]>('/checks') })
 export const useTemplate = () => useQuery({ queryKey: keys.template, queryFn: () => get<TemplateResponse>('/template') })
 export const useSettings = () => useQuery({ queryKey: keys.settings, queryFn: () => get<Settings>('/settings') })
+/** The Cloudflare ports kept for the 3x-ui panel and its subscription; no inbound may use them. */
+export const useReservedPorts = (): number[] => {
+  const { data } = useSettings()
+  return [Number(data?.['xui.cf_panel_port'] || 8443), Number(data?.['xui.cf_sub_port'] || 2096)]
+}
 export const useXUIReleases = () =>
   useQuery({ queryKey: ['xui-releases'], queryFn: () => get<string[]>('/meta/xui-releases'), staleTime: 3_600_000, retry: false })
 export const useMeta = () =>

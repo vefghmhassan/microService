@@ -226,6 +226,13 @@ type Server struct {
 	CDNDNSError string `gorm:"column:cdn_dns_error;size:255" json:"cdn_dns_error"`
 	// AddonHash is the add-on inbounds' hash last applied to this server.
 	AddonHash string `gorm:"column:addon_hash;size:64" json:"addon_hash"`
+	// The 3x-ui panel's own side, set up like pdnczone/3x-ui-pro-configs:
+	// one client (PanelClient, with SubID) attached to every managed inbound,
+	// and the panel's subscription links (PanelSubURL, PanelSubJSON).
+	PanelClient  string `gorm:"column:panel_client;size:64" json:"panel_client"`
+	SubID        string `gorm:"column:sub_id;size:32" json:"sub_id"`
+	PanelSubURL  string `gorm:"column:panel_sub_url;size:512" json:"panel_sub_url"`
+	PanelSubJSON string `gorm:"column:panel_sub_json;size:512" json:"panel_sub_json"`
 
 	XUIPort     int           `gorm:"column:xui_port" json:"xui_port"`
 	XUIBasePath string        `gorm:"column:xui_base_path;size:64" json:"xui_base_path"`

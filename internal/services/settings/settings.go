@@ -15,9 +15,13 @@ import (
 
 // Keys. Every key the UI may edit is listed in Defaults.
 const (
-	XUIVersion        = "xui.version"
-	XUIInstallURL     = "xui.install_url"
-	XUIPublic         = "xui.public_panel"
+	XUIVersion    = "xui.version"
+	XUIInstallURL = "xui.install_url"
+	XUIPublic     = "xui.public_panel"
+	// On servers with Cloudflare SSL the 3x-ui panel and its subscription
+	// sit on two of Cloudflare's HTTPS ports, kept free of inbounds.
+	XUICFPanelPort    = "xui.cf_panel_port"
+	XUICFSubPort      = "xui.cf_sub_port"
 	XrayVersion       = "xray.version"
 	CheckSources      = "check.sources"
 	CheckMinOK        = "check.min_ok"
@@ -65,6 +69,8 @@ var Defaults = map[string]string{
 	XUIVersion:       "v3.7.0",
 	XUIInstallURL:    "https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh",
 	XUIPublic:        "true",
+	XUICFPanelPort:   "8443",
+	XUICFSubPort:     "2096",
 	XrayVersion:      "",
 	CheckSources:     "checkhost,globalping",
 	CheckMinOK:       "2",

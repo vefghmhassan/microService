@@ -121,6 +121,11 @@ export interface Server extends DNSFields {
   cdn_hostname: string
   cdn_dns_error: string
   addon_hash: string
+  /** The 3x-ui panel's own side: the one client on every inbound and its subscription. */
+  panel_client: string
+  sub_id: string
+  panel_sub_url: string
+  panel_sub_json: string
   name: string
   provider_account_id: number
   provider_account?: ProviderAccount

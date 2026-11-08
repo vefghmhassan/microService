@@ -10,6 +10,7 @@ import (
 	"microserver/internal/jobs"
 	"microserver/internal/models"
 	"microserver/internal/services/checker"
+	"microserver/internal/services/cleanip"
 	"microserver/internal/services/destination"
 	"microserver/internal/services/providers"
 	"microserver/internal/services/settings"
@@ -573,6 +574,10 @@ func (o *Orchestrator) install(ctx context.Context, r *jobs.Run) error {
 		o.finishInstall(ctx, r, s, p)
 		r.Mark("finish")
 	}
+	if !r.Done("test") {
+		o.autoTestConfigs(ctx, r, s)
+		r.Mark("test")
+	}
 	s.Status = models.ServerActive
 	s.LastError = ""
 	o.save(r, s, "status", "last_error")
@@ -654,6 +659,11 @@ func (o *Orchestrator) applyWith(ctx context.Context, r *jobs.Run, s *models.Ser
 	if _, err := remote.Run(ctx, "bash -c "+sshx.ShellQuote(hostTuningScript(snap.For(s))), nil); err != nil {
 		r.Logf("warn", "firewall/BBR: %v", err)
 	}
+	ns := o.forUpload(snap, s)
+	if len(ns.Clean) == 0 && s.DNSProxied && s.Hostname != "" {
+		ns.Clean, _ = cleanip.Pick(o.DB, o.Settings.Int(settings.CleanIPPerLink))
+	}
+	o.syncPanelPro(ctx, r, s, panel, ns)
 	s.AppliedHash = snap.HashFor(s.Family())
 	s.AddonHash = snap.For(s).AddonHash
 	s.SyncStatus = models.SyncSynced

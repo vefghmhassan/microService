@@ -139,6 +139,75 @@ type fakePanel struct {
 	inbounds []xui.Inbound
 	setting  map[string]any
 	restarts int
+	// The panel side (ProPanel).
+	settings map[string]any
+	clients  map[string][]int // email → attached inbound ids
+	hosts    []xui.HostGroup
+	nextHost int
+}
+
+func (p *fakePanel) Settings(context.Context) (map[string]any, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := map[string]any{"subPath": "/sub/", "subJsonPath": "/json/", "remarkTemplate": "", "subEnable": false}
+	for k, v := range p.settings {
+		out[k] = v
+	}
+	return out, nil
+}
+func (p *fakePanel) UpdateSettings(_ context.Context, all map[string]any) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.settings = all
+	return nil
+}
+func (p *fakePanel) ListClients(context.Context) ([]xui.PanelClient, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []xui.PanelClient
+	for e, ids := range p.clients {
+		out = append(out, xui.PanelClient{Email: e, InboundIDs: ids})
+	}
+	return out, nil
+}
+func (p *fakePanel) AddClient(_ context.Context, c map[string]any, ids []int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.clients == nil {
+		p.clients = map[string][]int{}
+	}
+	p.clients[c["email"].(string)] = ids
+	return nil
+}
+func (p *fakePanel) AttachClient(_ context.Context, email string, ids []int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.clients[email] = ids
+	return nil
+}
+func (p *fakePanel) ListHosts(context.Context) ([]xui.HostGroup, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]xui.HostGroup{}, p.hosts...), nil
+}
+func (p *fakePanel) AddHost(_ context.Context, h xui.HostGroup) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.nextHost++
+	h.GroupID = fmt.Sprintf("g%d", p.nextHost)
+	p.hosts = append(p.hosts, h)
+	return nil
+}
+func (p *fakePanel) DeleteHost(_ context.Context, id string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, h := range p.hosts {
+		if h.GroupID == id {
+			p.hosts = append(p.hosts[:i], p.hosts[i+1:]...)
+			break
+		}
+	}
+	return nil
 }
 
 func (p *fakePanel) Onlines(context.Context) ([]string, error) { return p.online, nil }
@@ -330,8 +399,19 @@ func TestProvisionRotatesAwayFromFilteredIPThenInstallsAndUploads(t *testing.T) 
 	if s.SyncStatus != models.SyncSynced || s.AppliedHash == "" {
 		t.Fatalf("template not applied: %s %s", s.SyncStatus, s.AppliedHash)
 	}
-	if !panel.subOff {
-		t.Fatal("subscription was not turned off")
+	// The panel side, like pdnczone/3x-ui-pro-configs: its subscription on
+	// with {{HOST}} names and JSON, one client on every managed inbound and a
+	// Hosts row per inbound.
+	if panel.settings["subEnable"] != true || panel.settings["subJsonEnable"] != true ||
+		panel.settings["remarkTemplate"] != "{{HOST}}" || panel.settings["subPort"] != 2096 {
+		t.Fatalf("panel settings %v", panel.settings)
+	}
+	if ids := panel.clients[s.PanelClient]; s.PanelClient == "" || len(ids) != 1 || s.SubID == "" ||
+		!strings.HasSuffix(s.PanelSubJSON, ":2096/json/"+s.SubID) {
+		t.Fatalf("panel client %q %v sub %s", s.PanelClient, panel.clients, s.PanelSubJSON)
+	}
+	if len(panel.hosts) == 0 || panel.hosts[0].Tags[0] != HostTag {
+		t.Fatalf("hosts %+v", panel.hosts)
 	}
 	if len(panel.inbounds) != 1 || panel.inbounds[0].Remark != ManagedPrefix+"DE" || panel.restarts == 0 {
 		t.Fatalf("panel %+v", panel.inbounds)
