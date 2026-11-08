@@ -651,6 +651,9 @@ func (o *Orchestrator) applyWith(ctx context.Context, r *jobs.Run, s *models.Ser
 	if st, err := panel.Status(ctx); err == nil && st.Xray.Version != "" {
 		s.XrayVersion = st.Xray.Version
 	}
+	if _, err := remote.Run(ctx, "bash -c "+sshx.ShellQuote(hostTuningScript(snap.For(s))), nil); err != nil {
+		r.Logf("warn", "firewall/BBR: %v", err)
+	}
 	s.AppliedHash = snap.HashFor(s.Family())
 	s.AddonHash = snap.For(s).AddonHash
 	s.SyncStatus = models.SyncSynced

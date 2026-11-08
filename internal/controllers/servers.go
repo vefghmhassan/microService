@@ -10,6 +10,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"microserver/internal/models"
+	"microserver/internal/services/cleanip"
 	"microserver/internal/services/orchestrator"
 )
 
@@ -165,6 +166,39 @@ func (a *App) ServerLinks(c *fiber.Ctx) error {
 		resp["warning"] = err.Error()
 	}
 	return c.JSON(resp)
+}
+
+// TestServerConfigs runs every client config of a server from the server
+// itself (direct ones on 127.0.0.1, CDN ones really through Cloudflare by
+// the orange name and two clean IPs) and reports OK/FAIL per config.
+func (a *App) TestServerConfigs(c *fiber.Ctx) error {
+	s, err := a.server(c)
+	if err != nil {
+		return err
+	}
+	if s.XUIPort == 0 {
+		return errJSON(c, fiber.StatusBadRequest, "3x-ui روی این سرور نصب نیست")
+	}
+	snap, err := orchestrator.LoadSnapshot(a.DB)
+	if err != nil {
+		return err
+	}
+	ns := snap.For(s)
+	if ns.CDNHost != "" {
+		ns.Clean, _ = cleanip.Pick(a.DB, 2)
+	}
+	ctx, cancel := context.WithTimeout(c.UserContext(), 90*time.Second)
+	defer cancel()
+	remote, _, err := a.Orch.RemoteFor(ctx, s)
+	if err != nil {
+		return errJSON(c, fiber.StatusBadGateway, err.Error())
+	}
+	defer remote.Close()
+	res, err := orchestrator.TestConfigs(ctx, remote, ns, s)
+	if err != nil {
+		return errJSON(c, fiber.StatusBadGateway, err.Error())
+	}
+	return c.JSON(res)
 }
 
 func (a *App) ServerChecks(c *fiber.Ctx) error {

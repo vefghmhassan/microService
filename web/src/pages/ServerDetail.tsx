@@ -3,11 +3,11 @@ import { useNavigate, useParams } from 'react-router-dom'
 import {
   Alert, Button, Card, Col, Descriptions, Flex, InputNumber, Modal, Progress, QRCode, Row, Select, Skeleton, Space, Switch, Table, Tabs, Tag, Typography,
 } from 'antd'
-import { ArrowRightOutlined, CloudUploadOutlined, ExportOutlined, EyeOutlined, LeftOutlined, QrcodeOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons'
+import { ArrowRightOutlined, CloudUploadOutlined, ExportOutlined, EyeOutlined, LeftOutlined, QrcodeOutlined, ReloadOutlined, RightOutlined, ExperimentOutlined } from '@ant-design/icons'
 import {
   get, keys, post, put, serverAction, useAction, useJobs, useServer, useServerChecks, useServerInbounds, useServerLinks, useServerLive, useXUIReleases,
 } from '../api/hooks'
-import type { CheckRun, InboundStat, Job } from '../api/types'
+import type { CheckRun, InboundStat, Job, ConfigTest } from '../api/types'
 import { StatCard } from '../components/StatCard'
 import { TrafficBar } from '../components/TrafficBar'
 import { PageHeader } from '../components/PageHeader'
@@ -239,15 +239,36 @@ function Links({ id, active }: { id: number; active: boolean }) {
   const cur = qr === null ? undefined : links[qr]
   const openJob = useOpenJob()
   const upload = useAction(() => serverAction(id, 'upload'), { success: 'بارگذاری در صف قرار گرفت', invalidate: [['jobs']], onSuccess: (j) => openJob((j as Job).id) })
+  const [tests, setTests] = useState<ConfigTest[] | null>(null)
+  const testConfigs = useAction(() => post<ConfigTest[]>(`/servers/${id}/test-configs`), { onSuccess: setTests })
   const all = direct.map((l) => l.url).join('\n')
   const allClean = clean.map((l) => l.url).join('\n')
   return (
     <Flex vertical gap={12}>
       <Flex gap={8} wrap>
         <Button icon={<CloudUploadOutlined />} loading={upload.isPending} onClick={() => upload.mutate()}>بارگذاری در vpn-pannel</Button>
+        <Button icon={<ExperimentOutlined />} loading={testConfigs.isPending} onClick={() => testConfigs.mutate()}>تست همه کانفیگ‌ها</Button>
         {all && <Typography.Text copyable={{ text: all, tooltips: ['کپی همه', 'کپی شد'] }}>کپی همه لینک‌ها</Typography.Text>}
       </Flex>
       {data?.warning && <Alert type="warning" showIcon title={data.warning} />}
+      {tests && (
+        <Card size="small" title={`نتیجه تست: ${tests.filter((t) => t.ok).length} از ${tests.length} کار می‌کند`}
+          extra={<Button size="small" type="text" onClick={() => setTests(null)}>بستن</Button>}>
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+            از خود سرور با Xray: کانفیگ‌های مستقیم روی 127.0.0.1، و کانفیگ‌های CDN واقعاً از کلودفلر (رکورد نارنجی و IP تمیز). مقصد: generate_204 گوگل.
+          </Typography.Paragraph>
+          <Table<ConfigTest>
+            size="small" rowKey={(t) => t.name + t.via} dataSource={tests} pagination={false}
+            columns={[
+              { title: 'کانفیگ', dataIndex: 'name', render: (n: string) => <span dir="ltr">{n}</span> },
+              { title: 'مسیر', dataIndex: 'via', width: 110, render: (v: ConfigTest['via']) => <Tag color={v === 'direct' ? 'blue' : 'orange'}>{v === 'direct' ? 'مستقیم' : v === 'cdn' ? 'CDN' : 'IP تمیز'}</Tag> },
+              { title: 'نتیجه', width: 220, render: (_, t) => (t.ok
+                ? <Tag color="green">OK · {t.ms}ms</Tag>
+                : <Typography.Text type="danger" style={{ fontSize: 12 }}>FAIL {t.error}</Typography.Text>) },
+            ]}
+          />
+        </Card>
+      )}
       <Table
         loading={isLoading} size="small" rowKey="url" dataSource={direct} pagination={{ pageSize: 20, hideOnSinglePage: true }}
         columns={[

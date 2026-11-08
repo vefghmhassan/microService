@@ -19,6 +19,25 @@ Status: **in progress** (backend done and tested; frontend partly done; not test
 - **TLS links:** when a TLS inbound has no `serverName`, the link's `sni` is the hostname.
 - **Locations without Cloudflare:** behave exactly as before.
 
+## Pro configs (pdnczone/3x-ui-pro-configs) on top of the CDN add-on
+- **Where each config lives:**
+  - TLS, CDN and Hysteria2 configs are in the **CDN add-on**. It gives every server a grey record (direct) and an orange record (CDN).
+  - The rest come from Template page → **"کانفیگ‌های Pro"**: Reality Vision / XHTTP / gRPC, PQ Sudoku and SS-2022. They need no certificate and go on every server.
+  - Ports are taken from the script's preferences and are free across the template and every add-on.
+- **VLESS Encryption:** `"decryption": "vlessenc"` is replaced once, on save, with an X25519 pair like `xray vlessenc` makes.
+- **FinalMask:**
+  - A finalmask both sides share (Sudoku) travels in links as `fm=<json>`. Client JSON turns it back into `streamSettings.finalmask`.
+  - Hysteria2 keeps Salamander in the standard `obfs` fields.
+- **TLS outside CDN:** any shared TLS inbound pointing at `/root/cert/*` is left out on servers without SSL. The reachability check skips UDP-only Hysteria2 and other add-ons' inbounds.
+- **`/sub`:** includes the add-on servers' clean-IP configs. `?format=json` returns full client configs.
+- **Tests:**
+  - Server page → "تست همه کانفیگ‌ها" (`POST /servers/:id/test-configs`) runs xray on the server with every config:
+    - Direct ones dial 127.0.0.1.
+    - CDN ones go through the orange name and two clean IPs.
+    - Fragment variants go through the fragment outbound.
+  - Clean IP page → "تست از مسیر CDN خودمان" (`POST /clean-ips/check-cdn`) runs `curl --resolve <orange-name>:<port>:<ip>` from a live add-on server. Addresses that fail are no longer used.
+- **ufw/BBR:** after every template apply, inbound ports are opened when ufw is active, and BBR is turned on.
+
 ## CDN templates and clean IPs
 - **CDN inbounds:** `InboundTemplate.CDN` marks an inbound meant to be reached through Cloudflare's proxy.
   - With TLS, it points at `/root/cert/*`, so `Snapshot.For(server)` leaves it out on servers without SSL and a hostname. Xray would not start with a missing certificate.

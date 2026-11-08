@@ -524,8 +524,12 @@ type CleanIP struct {
 	LastSeen  time.Time  `json:"last_seen"`
 	CheckedAt *time.Time `json:"checked_at"`
 	// CheckOK is the last test from Iranian probes on port 443 (nil: never tested).
-	CheckOK   *bool     `json:"check_ok"`
-	CheckNote string    `gorm:"size:255" json:"check_note"`
+	CheckOK   *bool  `json:"check_ok"`
+	CheckNote string `gorm:"size:255" json:"check_note"`
+	// CDNOK is the last test through one of our own proxied hostnames: the
+	// address really is a Cloudflare edge that serves our zone (nil: never).
+	CDNOK     *bool     `gorm:"column:cdn_ok" json:"cdn_ok"`
+	CDNMS     int       `gorm:"column:cdn_ms" json:"cdn_ms"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

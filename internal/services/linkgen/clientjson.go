@@ -89,7 +89,7 @@ func ClientJSONWith(link string, opt JSONOptions) (string, error) {
 	case "ws":
 		stream["wsSettings"] = obj{"path": firstNonEmpty(f.path, "/"), "host": f.host}
 	case "grpc":
-		stream["grpcSettings"] = obj{"serviceName": f.serviceName, "authority": f.host, "multiMode": false}
+		stream["grpcSettings"] = obj{"serviceName": f.serviceName, "authority": f.host, "multiMode": f.mode == "multi"}
 	case "httpupgrade":
 		stream["httpupgradeSettings"] = obj{"path": firstNonEmpty(f.path, "/"), "host": f.host}
 	case "xhttp":
@@ -107,6 +107,9 @@ func ClientJSONWith(link string, opt JSONOptions) (string, error) {
 	}
 	if sec == "none" {
 		stream["security"] = ""
+	}
+	if fm := parse(f.fm); len(fm) > 0 {
+		stream["finalmask"] = fm
 	}
 	fragment := opt.Fragment && sec == "tls"
 	if fragment {
@@ -211,6 +214,7 @@ type linkForm struct {
 	alpn                                     []string
 	allowInsecure                            bool
 	obfsPassword                             string // hysteria2 salamander
+	fm                                       string // finalmask JSON (fm=)
 }
 
 func b64decode(s string) ([]byte, error) {
@@ -248,7 +252,7 @@ func parseLink(link string) (*linkForm, error) {
 		network: firstNonEmpty(q.Get("type"), "tcp"), host: firstNonEmpty(q.Get("host"), q.Get("authority")), path: q.Get("path"),
 		serviceName: q.Get("serviceName"), mode: q.Get("mode"), headerType: q.Get("headerType"),
 		tls: firstNonEmpty(q.Get("security"), "none"), sni: q.Get("sni"), fp: q.Get("fp"),
-		publicKey: q.Get("pbk"), shortID: q.Get("sid"), spiderX: q.Get("spx"), allowInsecure: q.Get("allowInsecure") == "1",
+		publicKey: q.Get("pbk"), shortID: q.Get("sid"), spiderX: q.Get("spx"), allowInsecure: q.Get("allowInsecure") == "1", fm: q.Get("fm"),
 	}
 	if f.network == "raw" {
 		f.network = "tcp"
@@ -329,7 +333,7 @@ func parseVmess(b64 string) (*linkForm, error) {
 	f := &linkForm{
 		protocol: "vmess", remark: s("ps"), address: s("add"), port: port, id: s("id"), security: s("scy"),
 		network: firstNonEmpty(s("net"), "tcp"), host: s("host"), path: s("path"), headerType: s("type"),
-		tls: "none", sni: s("sni"), fp: s("fp"),
+		tls: "none", sni: s("sni"), fp: s("fp"), fm: s("fm"),
 	}
 	if s("tls") == "tls" {
 		f.tls = "tls"

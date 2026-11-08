@@ -291,10 +291,17 @@ func (o *Orchestrator) recordCheck(r *jobs.Run, s *models.Server, res *checker.R
 // Iranian filtering is usually per IP, so either port answers the question.
 func (o *Orchestrator) checkPort(s *models.Server) int {
 	if s.AppliedHash != "" {
-		var in models.InboundTemplate
-		// A CDN inbound may be missing on a server without SSL; prefer the others.
-		if o.DB.Where("enabled = ? AND family IN ?", true, TemplateFamilies(s.Family())).Order("cdn, id").First(&in).Error == nil {
-			return in.Port
+		var ins []models.InboundTemplate
+		// A CDN inbound may be missing on a server without SSL; prefer the
+		// others. The check is TCP, so Hysteria2 (UDP only) never counts,
+		// and only this server's add-on inbounds do.
+		o.DB.Where("enabled = ? AND family IN ? AND protocol <> ? AND (addon_id = 0 OR addon_id = ?)", true, TemplateFamilies(s.Family()), "hysteria", s.CDNAddonID).
+			Order("cdn, id").Find(&ins)
+		certOK := s.SSL && s.Hostname != ""
+		for _, in := range ins {
+			if certOK || !NeedsCert(in) {
+				return in.Port
+			}
 		}
 	}
 	if p := o.Settings.Int(settings.CheckPreInstall); p > 0 {

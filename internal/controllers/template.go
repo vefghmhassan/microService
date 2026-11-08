@@ -284,6 +284,9 @@ func (a *App) saveInbound(c *fiber.Ctx, t *models.InboundTemplate) error {
 	if t.Settings, err = linkgen.PrepareSettings(t.Protocol, t.Settings, count, strings.ToLower(sanitize(t.Remark))+"-"); err != nil {
 		return errJSON(c, fiber.StatusBadRequest, err.Error())
 	}
+	if t.Settings, err = linkgen.PrepareVLESSEnc(t.Protocol, t.Settings); err != nil {
+		return errJSON(c, fiber.StatusBadRequest, err.Error())
+	}
 	if t.StreamSettings, err = linkgen.PrepareStream(t.StreamSettings); err != nil {
 		return errJSON(c, fiber.StatusBadRequest, err.Error())
 	}

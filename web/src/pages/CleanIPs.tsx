@@ -46,6 +46,10 @@ export function CleanIPs() {
   const add = useAction(() => post<{ added: number }>('/clean-ips', { text, operator: op }), {
     success: 'اضافه شد', invalidate: inv, onSuccess: () => { setAdding(false); setText('') },
   })
+  const checkCDN = useAction(() => post<{ server: string; host: string; tested: number; passed: number }>('/clean-ips/check-cdn'), {
+    invalidate: inv,
+    onSuccess: (r) => Modal.info({ title: 'تست از مسیر CDN خودمان', content: `${r.passed} از ${r.tested} آدرس از ${r.host} (سرور ${r.server}) جواب دادند. آدرس‌های ردشده در لینک‌ها استفاده نمی‌شوند.` }),
+  })
   const toggle = useAction((r: CleanIP) => put(`/clean-ips/${r.id}`, { enabled: !r.enabled }), { invalidate: inv })
   const remove = useAction((id: number) => del(`/clean-ips/${id}`), { invalidate: inv })
   const removeMany = useAction((body: { ids?: number[]; failed?: boolean }) => post('/clean-ips/delete', body), {
@@ -119,6 +123,9 @@ export function CleanIPs() {
           onClick={() => check.mutate(selected.length ? selected : ips.filter((r) => r.enabled).map((r) => r.id))}>
           {checking ? 'در حال تست…' : selected.length ? `تست ${selected.length} مورد از ایران` : 'تست همه از ایران'}
         </Button>
+        <Tooltip title="از یک سرور فعال افزونهٔ CDN، هر آدرس را با --resolve به نام نارنجی خودمان امتحان می‌کند؛ فقط لبه‌های واقعی کلودفلر که دامنهٔ ما را سرو می‌کنند رد می‌شوند (مثل اسکریپت)">
+          <Button icon={<RadarChartOutlined />} loading={checkCDN.isPending} onClick={() => checkCDN.mutate()}>تست از مسیر CDN خودمان</Button>
+        </Tooltip>
         {selected.length > 0 && (
           <ConfirmButton danger icon={<DeleteOutlined />} confirm={`${selected.length} آدرس حذف شود؟`} onConfirm={() => removeMany.mutate({ ids: selected })}>
             حذف انتخاب‌شده‌ها
@@ -155,6 +162,11 @@ export function CleanIPs() {
                   </Tooltip>
                 )
               },
+            },
+            {
+              title: 'از CDN ما', width: 120, render: (_, r) => (r.cdn_ok === null
+                ? <Typography.Text type="secondary">تست نشده</Typography.Text>
+                : <Tag color={r.cdn_ok ? 'green' : 'red'}>{r.cdn_ok ? `OK · ${r.cdn_ms}ms` : 'رد شد'}</Tag>),
             },
             { title: 'فعال', dataIndex: 'enabled', width: 70, render: (_, r) => <Switch size="small" checked={r.enabled} onChange={() => toggle.mutate(r)} /> },
             { title: '', width: 50, render: (_, r) => <Button size="small" danger icon={<DeleteOutlined />} onClick={() => remove.mutate(r.id)} /> },

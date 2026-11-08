@@ -12,6 +12,7 @@ import (
 
 	"microserver/internal/models"
 	"microserver/internal/services/cleanip"
+	"microserver/internal/services/orchestrator"
 	"microserver/internal/services/settings"
 )
 
@@ -242,4 +243,49 @@ func (a *App) CheckCleanIPs(c *fiber.Ctx) error {
 		log.Printf("clean IPs: tested %d addresses from Iran", len(rows))
 	}()
 	return c.JSON(fiber.Map{"started": len(rows)})
+}
+
+// CheckCleanIPsViaCDN tries every enabled clean IPv4/domain through the
+// orange (CDN add-on) name of one live server, from that server: an address
+// that answers is a Cloudflare edge serving our zone, the way the reference
+// script picks its clean IPs. It complements the test from Iran, which only
+// shows the address is reachable there.
+func (a *App) CheckCleanIPsViaCDN(c *fiber.Ctx) error {
+	var s models.Server
+	if err := a.DB.Where("cdn_hostname <> '' AND xui_port > 0 AND status IN ?",
+		[]string{models.ServerActive, models.ServerFiltered}).Order("status, id").First(&s).Error; err != nil {
+		return errJSON(c, fiber.StatusBadRequest, "هیچ سرور فعالی با رکورد نارنجی (افزونهٔ CDN) نیست")
+	}
+	var rows []models.CleanIP
+	if err := a.DB.Where("enabled = ?", true).Order("id").Find(&rows).Error; err != nil {
+		return err
+	}
+	addrs := make([]string, 0, len(rows))
+	for _, r := range rows {
+		addrs = append(addrs, r.Address)
+	}
+	snap, err := orchestrator.LoadSnapshot(a.DB)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(c.UserContext(), 90*time.Second)
+	defer cancel()
+	remote, _, err := a.Orch.RemoteFor(ctx, &s)
+	if err != nil {
+		return errJSON(c, fiber.StatusBadGateway, err.Error())
+	}
+	defer remote.Close()
+	res, err := orchestrator.TestCleanViaCDN(ctx, remote, &s, orchestrator.CDNPort(snap.For(&s)), addrs)
+	if err != nil {
+		return errJSON(c, fiber.StatusBadGateway, err.Error())
+	}
+	passed := 0
+	for _, r := range res {
+		ok := r.OK
+		if ok {
+			passed++
+		}
+		a.DB.Model(&models.CleanIP{}).Where("address = ?", r.Address).Updates(map[string]any{"cdn_ok": &ok, "cdn_ms": r.MS})
+	}
+	return c.JSON(fiber.Map{"server": s.Name, "host": s.CDNHostname, "tested": len(res), "passed": passed, "results": res})
 }

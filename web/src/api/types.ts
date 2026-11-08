@@ -328,6 +328,18 @@ export interface CleanIP {
   checked_at: string | null
   check_ok: boolean | null
   check_note: string
+  /** Last test through one of our orange (CDN add-on) names; null: never. */
+  cdn_ok: boolean | null
+  cdn_ms: number
+}
+
+/** One client config of a server, tried from the server itself. */
+export interface ConfigTest {
+  name: string
+  via: 'direct' | 'cdn' | 'clean'
+  ok: boolean
+  ms: number
+  error?: string
 }
 
 export interface CleanIPSource {

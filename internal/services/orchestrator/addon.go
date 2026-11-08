@@ -45,14 +45,19 @@ func (o *Orchestrator) locationAddon(loc *models.Location) *models.CDNAddon {
 // addonClean picks the clean Cloudflare addresses a server's add-on
 // inbounds get extra configs for.
 func (o *Orchestrator) addonClean(s *models.Server) []models.CleanIP {
+	return AddonClean(o.DB, s)
+}
+
+// AddonClean is addonClean for callers without an Orchestrator.
+func AddonClean(db *gorm.DB, s *models.Server) []models.CleanIP {
 	if s.CDNAddonID == 0 || s.CDNHostname == "" {
 		return nil
 	}
 	var a models.CDNAddon
-	if o.DB.First(&a, s.CDNAddonID).Error != nil || a.CleanIPCount <= 0 {
+	if db.First(&a, s.CDNAddonID).Error != nil || a.CleanIPCount <= 0 {
 		return nil
 	}
-	ips, err := cleanip.Pick(o.DB, a.CleanIPCount)
+	ips, err := cleanip.Pick(db, a.CleanIPCount)
 	if err != nil {
 		return nil
 	}

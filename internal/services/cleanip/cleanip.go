@@ -228,8 +228,11 @@ func Pick(db *gorm.DB, limit int) ([]models.CleanIP, error) {
 		return nil, nil
 	}
 	var rows []models.CleanIP
-	err := db.Where("enabled = ? AND (check_ok IS NULL OR check_ok = ?)", true, true).
-		Order("CASE WHEN check_ok THEN 0 ELSE 1 END, last_seen DESC, id DESC").
+	// Failing either last test (from Iran, or through our own CDN) leaves an
+	// address out; among the rest, passes come first, the fastest CDN ones
+	// first.
+	err := db.Where("enabled = ? AND (check_ok IS NULL OR check_ok = ?) AND (cdn_ok IS NULL OR cdn_ok = ?)", true, true, true).
+		Order("CASE WHEN check_ok THEN 0 ELSE 1 END, CASE WHEN cdn_ok THEN 0 ELSE 1 END, cdn_ms, last_seen DESC, id DESC").
 		Limit(limit).Find(&rows).Error
 	return rows, err
 }

@@ -165,9 +165,13 @@ func (snap *Snapshot) hash(family string) string {
 }
 
 // NeedsCert reports whether t only works with the zone certificate on the
-// server: a CDN inbound with TLS points at /root/cert/*.
+// server: a CDN inbound with TLS, or any TLS inbound (TLS Vision, …)
+// pointing at /root/cert/*.
 func NeedsCert(t models.InboundTemplate) bool {
-	return t.CDN && linkgen.Security(t.StreamSettings) == "tls"
+	if linkgen.Security(t.StreamSettings) != "tls" {
+		return false
+	}
+	return t.CDN || strings.Contains(t.StreamSettings, CertFile) || strings.Contains(t.StreamSettings, KeyFile)
 }
 
 // For is the snapshot as it applies to one server: the inbounds and xray
@@ -427,7 +431,7 @@ func (snap *Snapshot) cleanLinks(t models.InboundTemplate) ([]linkgen.Link, erro
 	}
 	var out []linkgen.Link
 	for _, ip := range snap.Clean {
-		remark := strings.TrimSpace(t.Remark + " " + ip.Operator + " " + ip.Address)
+		remark := strings.Join(strings.Fields(t.Remark+" "+ip.Operator+" "+ip.Address), " ")
 		ls, err := linkgen.LinksVia(t.Protocol, t.Settings, t.StreamSettings, ip.Address, snap.CDNHost, t.Port, remark)
 		if err != nil {
 			return out, fmt.Errorf("%s: %w", t.Remark, err)
@@ -502,7 +506,7 @@ func CleanLinks(snap *Snapshot, s *models.Server, ips []models.CleanIP) ([]linkg
 			continue
 		}
 		for _, ip := range ips {
-			remark := strings.TrimSpace(t.Remark + " " + ip.Operator + " " + ip.Address)
+			remark := strings.Join(strings.Fields(t.Remark+" "+ip.Operator+" "+ip.Address), " ")
 			ls, err := linkgen.LinksVia(t.Protocol, t.Settings, t.StreamSettings, ip.Address, s.Hostname, t.Port, remark)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("%s: %w", t.Remark, err))

@@ -187,7 +187,48 @@ func streamParams(stream obj) url.Values {
 			q.Set("spx", spx)
 		}
 	}
+	// A FinalMask both sides must share (Sudoku on PQ) travels as fm=<json>,
+	// the v2rayN / 3x-ui convention.
+	if fm := clientFinalMask(stream); fm != "" {
+		q.Set("fm", fm)
+	}
 	return q
+}
+
+// clientFinalMask is the JSON of the part of a stream's finalmask a client
+// repeats: everything but the server-only "filter" mask. Hysteria2 carries
+// its Salamander in the standard obfs fields instead.
+func clientFinalMask(stream obj) string {
+	fm, ok := stream["finalmask"].(obj)
+	if !ok || str(stream, "network") == "hysteria" {
+		return ""
+	}
+	out := obj{}
+	for k, v := range fm {
+		masks, isList := v.([]any)
+		if !isList {
+			out[k] = v
+			continue
+		}
+		var kept []any
+		for _, m := range masks {
+			if mm, ok := m.(obj); ok && strings.EqualFold(str(mm, "type"), "filter") {
+				continue
+			}
+			kept = append(kept, m)
+		}
+		if len(kept) > 0 {
+			out[k] = kept
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 func clients(settings obj) []obj {
@@ -276,6 +317,9 @@ func LinksVia(protocol, settingsJSON, streamJSON, host, sniHost string, port int
 				"type": firstNonEmpty(q.Get("headerType"), "none"), "host": q.Get("host"),
 				"path": firstNonEmpty(q.Get("path"), q.Get("serviceName")), "tls": q.Get("security"),
 				"sni": q.Get("sni"), "alpn": q.Get("alpn"), "fp": q.Get("fp"),
+			}
+			if fm := q.Get("fm"); fm != "" {
+				v["fm"] = fm
 			}
 			if v["tls"] == "none" {
 				v["tls"] = ""
@@ -400,6 +444,11 @@ func PrepareSettings(protocol, settingsJSON string, count int, emailPrefix strin
 		case "shadowsocks":
 			c["method"] = str(settings, "method")
 			c["password"] = randHex(16)
+			if strings.HasPrefix(str(settings, "method"), "2022-") {
+				// SS-2022 user keys are base64 of the cipher's key size, and
+				// the method is the inbound's (as the panel's form does).
+				c["method"], c["password"] = "", randKey(ssKeyLen(str(settings, "method")))
+			}
 		case "hysteria":
 			c["auth"] = randHex(16)
 		default:
@@ -411,6 +460,47 @@ func PrepareSettings(protocol, settingsJSON string, count int, emailPrefix strin
 	if protocol == "vless" && str(settings, "decryption") == "" {
 		settings["decryption"] = "none"
 	}
+	return marshal(settings)
+}
+
+// ssKeyLen is the key size, in bytes, of an SS-2022 method.
+func ssKeyLen(method string) int {
+	if strings.Contains(method, "aes-128") {
+		return 16
+	}
+	return 32
+}
+
+func randKey(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+// VLESSEnc generates a VLESS Encryption pair the way `xray vlessenc` does
+// with X25519 authentication: decryption (the server half, with the private
+// key) and encryption (the client half, with the public key).
+func VLESSEnc() (decryption, encryption string, err error) {
+	priv, pub, err := X25519()
+	if err != nil {
+		return "", "", err
+	}
+	return "mlkem768x25519plus.native.600s." + priv, "mlkem768x25519plus.native.0rtt." + pub, nil
+}
+
+// PrepareVLESSEnc fills in a VLESS Encryption pair when a vless inbound asks
+// for one with "decryption": "vlessenc"; like Reality keys, it is generated
+// once so every server shares it.
+func PrepareVLESSEnc(protocol, settingsJSON string) (string, error) {
+	settings := parse(settingsJSON)
+	if protocol != "vless" || str(settings, "decryption") != "vlessenc" {
+		return settingsJSON, nil
+	}
+	dec, enc, err := VLESSEnc()
+	if err != nil {
+		return "", err
+	}
+	settings["decryption"], settings["encryption"] = dec, enc
 	return marshal(settings)
 }
 

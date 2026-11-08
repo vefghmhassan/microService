@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http/httptest"
 	"path/filepath"
@@ -105,5 +106,36 @@ func TestSubLinksEveryLiveServer(t *testing.T) {
 	_, plain := fetch(t, app, "/sub/secret?raw=1")
 	if plain != all {
 		t.Fatalf("raw differs:\n%s", plain)
+	}
+}
+
+func TestSubJSONAndAddonCleanLinks(t *testing.T) {
+	a, app := subApp(t)
+	a.Settings.Set(map[string]string{settings.SubEnabled: "true", settings.SubToken: "secret"})
+	addon := models.CDNAddon{Name: "cdn", Enabled: true, CFAccountID: 1, CFZoneID: "z", CFZoneName: "example.com",
+		DirectPattern: "d{n}", CDNPattern: "c{n}", CleanIPCount: 1}
+	a.DB.Create(&addon)
+	vless := `{"clients":[{"id":"11111111-2222-4333-8444-555555555555","email":"u1"}],"decryption":"none"}`
+	a.DB.Create(&models.InboundTemplate{Remark: "WS", Protocol: "vless", Port: 2053, Enabled: true, Upload: true, AddonID: addon.ID,
+		Route: models.RouteCDN, CleanIPs: true, Settings: vless, StreamSettings: `{"network":"ws","security":"tls","wsSettings":{"path":"/w"}}`})
+	s := models.Server{ProviderAccountID: 1, Name: "d", Status: models.ServerActive, IPv4: "10.0.0.4",
+		Hostname: "d1.example.com", CDNHostname: "c1.example.com", CDNAddonID: addon.ID}
+	s.SSL = true
+	a.DB.Create(&s)
+	a.DB.Create(&models.CleanIP{Address: "104.16.1.1", Enabled: true})
+
+	_, all := fetch(t, app, "/sub/secret?raw=1")
+	for _, want := range []string{"@d1.example.com:443", "@c1.example.com:2053", "@104.16.1.1:2053", "sni=c1.example.com", "#d%20%C2%B7%20WS%20104.16.1.1"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("missing %q in\n%s", want, all)
+		}
+	}
+	code, body := fetch(t, app, "/sub/secret?format=json")
+	var configs []map[string]any
+	if err := json.Unmarshal([]byte(body), &configs); code != 200 || err != nil {
+		t.Fatalf("json sub %d %v: %s", code, err, body)
+	}
+	if n := len(strings.Split(all, "\n")); len(configs) != n || configs[0]["outbounds"] == nil {
+		t.Fatalf("%d configs for %d links", len(configs), n)
 	}
 }

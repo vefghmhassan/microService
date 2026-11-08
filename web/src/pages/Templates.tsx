@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link as RouterLink } from 'react-router-dom'
 import { Alert, Button, Card, Flex, Modal, Segmented, Skeleton, Switch, Table, Tabs, Tag, Typography } from 'antd'
-import { CloudOutlined, DeleteOutlined, EditOutlined, LinkOutlined, PlusOutlined, SaveOutlined, SyncOutlined } from '@ant-design/icons'
-import { del, get, keys, post, put, useAction, useTemplate } from '../api/hooks'
+import { CloudOutlined, DeleteOutlined, EditOutlined, LinkOutlined, PlusOutlined, SaveOutlined, SyncOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { del, get, keys, post, put, useAction, useTemplate, useCDNAddons } from '../api/hooks'
 import type { InboundTemplate, IPFamily, Job, Link, TemplateResponse, XrayTemplate } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { StatusTag } from '../components/StatusTag'
@@ -18,6 +19,7 @@ import { serverStatus, syncStatus } from '../lib/labels'
 import { prettyJSON, timeAgo } from '../lib/format'
 import { parse, parseArray, type Obj } from '../lib/xray'
 import { cdnPresets, freePort, presetInbound, type CDNPreset } from '../lib/cdnPresets'
+import { proInbound, proPort, proPresets, type ProPreset } from '../lib/proPresets'
 
 /** xrayURL is the save endpoint of one family's xray template. */
 export const xrayURL = (family: IPFamily) => (family === 'v6' ? '/template/xray?family=v6' : '/template/xray')
@@ -171,9 +173,13 @@ function Inbounds({ list, all, servers, family }: { list: InboundTemplate[]; all
   const [editing, setEditing] = useState<InboundTemplate | 'new' | null>(null)
   const [initial, setInitial] = useState<Partial<InboundTemplate>>()
   const [presets, setPresets] = useState(false)
+  const [pro, setPro] = useState(false)
   const [links, setLinks] = useState<{ list: Link[]; cdn: boolean } | null>(null)
   // Ports taken for this family: its own and the shared ("both") inbounds.
   const used = all.filter((t) => (t.family || 'both') === 'both' || t.family === family).map((t) => t.port)
+  const addons = useCDNAddons()
+  // Ports are unique across the shared template and every add-on.
+  const usedAll = [...used, ...(addons.data ?? []).flatMap((a) => a.inbounds.map((t) => t.port))]
   const openNew = (init?: Partial<InboundTemplate>) => {
     setInitial(init)
     setEditing('new')
@@ -200,12 +206,34 @@ function Inbounds({ list, all, servers, family }: { list: InboundTemplate[]; all
       await post('/template/inbounds', { ...bodies[i], family, client_count: 0, sync: i === bodies.length - 1 })
     }
   }, { success: 'سه اینباند CDN اضافه شد و روی سرورها اعمال می‌شود', invalidate: [keys.template, keys.servers], onSuccess: () => setPresets(false) })
+  const pickPro = (p: ProPreset) => {
+    const port = proPort(p, usedAll)
+    if (!port) return
+    setPro(false)
+    openNew({ ...proInbound(p, port), family } as Partial<InboundTemplate>)
+  }
+  // Every Pro config that still has a free port; the last request applies
+  // the template to every server.
+  const addAllPro = useAction(async () => {
+    const taken = [...usedAll]
+    const bodies = proPresets.flatMap((p) => {
+      const port = proPort(p, taken)
+      if (!port) return []
+      taken.push(port)
+      return [proInbound(p, port)]
+    })
+    if (!bodies.length) throw new Error('برای هیچ‌کدام پورت آزاد نماند')
+    for (let i = 0; i < bodies.length; i++) {
+      await post('/template/inbounds', { ...bodies[i], family, client_count: 0, sync: i === bodies.length - 1 })
+    }
+  }, { success: 'کانفیگ‌های Pro اضافه شد و روی سرورها اعمال می‌شود', invalidate: [keys.template, keys.servers], onSuccess: () => setPro(false) })
   const remove = useAction((id: number) => del(`/template/inbounds/${id}`), { success: 'حذف شد', invalidate: [keys.template, keys.servers] })
   const toggle = useAction((t: InboundTemplate) => put(`/template/inbounds/${t.id}`, { ...t, enabled: !t.enabled }), { invalidate: [keys.template, keys.servers] })
   return (
     <>
       <Flex justify="end" style={{ marginBottom: 12 }}>
         <Flex gap={8}>
+          <Button icon={<ThunderboltOutlined />} onClick={() => setPro(true)}>کانفیگ‌های Pro</Button>
           <Button icon={<CloudOutlined />} onClick={() => setPresets(true)}>قالب آمادهٔ کلودفلر</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => openNew()}>اینباند جدید</Button>
         </Flex>
@@ -243,6 +271,25 @@ function Inbounds({ list, all, servers, family }: { list: InboundTemplate[]; all
           ? `نمونه لینک‌ها (IP تمیز نمونه ${family === 'v6' ? '2001:db8::1' : '1.2.3.4'}، ساب‌دامین نمونه fr1.example.com)`
           : `نمونه لینک‌ها (IP نمونه ${family === 'v6' ? '2001:db8::1' : '1.2.3.4'})`}>
         <Flex vertical gap={8}>{links?.list.map((l) => <CopyText key={l.url} text={l.url} maxWidth="100%" />)}</Flex>
+      </Modal>
+      <Modal open={pro} onCancel={() => setPro(false)} footer={null} title="کانفیگ‌های Pro (مثل اسکریپت 3x-ui-pro-configs)" width={780}>
+        <Alert type="info" showIcon style={{ marginBottom: 12 }} title={<>
+          کانفیگ‌هایی از اسکریپت که گواهی و کلودفلر نمی‌خواهند و روی همهٔ سرورها می‌نشینند. کانفیگ‌های TLS، CDN و Hysteria2 در
+          {' '}<RouterLink to="/cdn-addon">افزونهٔ CDN</RouterLink>{' '}هستند (رکورد خاکستری برای مستقیم، نارنجی برای CDN).
+          PQ Sudoku کلاینت Xray 26 و ساب JSON (<span dir="ltr">?format=json</span>) می‌خواهد.
+        </>} />
+        <Flex justify="end" style={{ marginBottom: 12 }}>
+          <Button type="primary" icon={<PlusOutlined />} loading={addAllPro.isPending} onClick={() => addAllPro.mutate()}>افزودن همه</Button>
+        </Flex>
+        <Table<ProPreset>
+          size="small" rowKey="key" pagination={false} dataSource={proPresets}
+          columns={[
+            { title: 'کانفیگ', dataIndex: 'title', render: (t: string) => <span dir="ltr">{t}</span> },
+            { title: 'پورت', render: (_, p) => proPort(p, usedAll) ?? <Typography.Text type="danger">پورت آزاد نیست</Typography.Text> },
+            { title: 'توضیح', dataIndex: 'note', render: (n: string) => <Typography.Text type="secondary" style={{ fontSize: 12 }}>{n}</Typography.Text> },
+            { title: '', width: 90, render: (_, p) => <Button size="small" disabled={!proPort(p, usedAll)} onClick={() => pickPro(p)}>انتخاب</Button> },
+          ]}
+        />
       </Modal>
       <Modal open={presets} onCancel={() => setPresets(false)} footer={null} title="قالب‌های آمادهٔ کلودفلر (CDN)" width={760}>
         <Alert type="info" showIcon style={{ marginBottom: 12 }} title={<>
