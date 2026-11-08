@@ -63,3 +63,24 @@ export function trafficLimit(serverGB: number | undefined, locationGB: number | 
 export function formatGB(g: number): string {
   return g >= 1024 && g % 1024 === 0 ? `${g / 1024} TB` : `${g} GB`
 }
+
+/**
+ * copyText copies to the clipboard. navigator.clipboard exists only on HTTPS
+ * or localhost, so over plain http://IP:port it falls back to execCommand.
+ */
+export function copyText(t: string): Promise<void> {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(t)
+  return new Promise((resolve, reject) => {
+    const ta = document.createElement('textarea')
+    ta.value = t
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    if (ok) resolve()
+    else reject(new Error('copy failed'))
+  })
+}

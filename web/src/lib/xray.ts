@@ -71,7 +71,17 @@ const hex = '0123456789abcdef'
 const alnum = 'abcdefghijklmnopqrstuvwxyz0123456789'
 export const randStr = (n: number, chars = alnum) =>
   Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => chars[b % chars.length]).join('')
-export const randomUUID = () => crypto.randomUUID()
+// crypto.randomUUID exists only in secure contexts (HTTPS or localhost); the
+// panel is often opened over plain http://IP:port, so build a v4 UUID from
+// getRandomValues, which works everywhere.
+export const randomUUID = (): string => {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  b[6] = (b[6] & 0x0f) | 0x40
+  b[8] = (b[8] & 0x3f) | 0x80
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
 export const randomPort = () => 10000 + Math.floor(Math.random() * 50000)
 /** shortIds like 3x-ui: random hex of lengths 2..16, shuffled. */
 export const randomShortIds = () =>

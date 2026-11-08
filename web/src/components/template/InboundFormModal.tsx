@@ -11,7 +11,7 @@ import { useOpenJob } from '../JobViewer'
 import { JsonEditor } from '../JsonEditor'
 import {
   alpnOptions, defaultNetwork, defaultReality, defaultSettings, defaultSniffing, defaultTLS, destOverrides,
-  fingerprints, flowCapable, inboundProtocols, networks, newClient, parse, randomB64, randomPort, randomShortIds,
+  fingerprints, flowCapable, inboundProtocols, networks, newClient, parse, randomB64, randomPort, randomUUID, randomShortIds,
   randomSpiderX, realityTargets, securityModes, ssKeyLen, ssMethods, tlsVersions, vlessFlows, vmessSecurity,
   xhttpModes, type InboundProtocol, type Obj,
 } from '../../lib/xray'
@@ -578,7 +578,7 @@ function ClientModal({ value, protocol, flowOK, keyField, onCancel, onSave, emai
       <F label={keyField === 'id' ? 'UUID' : 'رمز'}>
         <Space.Compact style={{ width: '100%' }}>
           <Input value={c[keyField]} onChange={(e) => upd(keyField, e.target.value)} dir="ltr" />
-          <Button icon={<ReloadOutlined />} onClick={() => upd(keyField, keyField === 'id' ? crypto.randomUUID() : Math.random().toString(36).slice(2, 18))} />
+          <Button icon={<ReloadOutlined />} onClick={() => upd(keyField, keyField === 'id' ? randomUUID() : Math.random().toString(36).slice(2, 18))} />
         </Space.Compact>
       </F>
       {protocol === 'vless' && (

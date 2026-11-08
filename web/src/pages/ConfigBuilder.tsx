@@ -6,6 +6,7 @@ import type { Link } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { useDestinations } from '../components/DestinationsCard'
 import { buildClientConfig, defaultCamo, splitLinks, type CamoOptions } from '../lib/clientjson'
+import { copyText } from '../lib/format'
 
 const mono = { fontFamily: 'ui-monospace, Consolas, monospace', direction: 'ltr' as const }
 
@@ -26,7 +27,7 @@ export function ConfigBuilder() {
   const ok = built.filter((b) => b.json)
   const jsonOf = (b: (typeof built)[number]) => JSON.stringify(b.json, null, 2)
 
-  const copy = (t: string) => navigator.clipboard.writeText(t).then(() => message.success('کپی شد'), () => message.error('کپی نشد'))
+  const copy = (t: string) => copyText(t).then(() => message.success('کپی شد'), () => message.error('کپی نشد'))
   const loadServer = (id: number) =>
     get<{ links: Link[]; warning?: string }>(`/servers/${id}/links`).then((r) => {
       setText(r.links.map((l) => l.url).join('\n'))
