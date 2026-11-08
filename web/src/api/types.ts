@@ -494,3 +494,79 @@ export interface Destination {
   updated_at: string
 }
 
+// ---- panel self-update (served by the updater sidecar via /update/*) ----
+
+export interface UpdateCommit {
+  sha: string
+  short: string
+  subject: string
+  author: string
+  date: string
+}
+
+export interface UpdateBranch {
+  name: string
+  commit: UpdateCommit
+  /** Commits relative to the running version; -1 when unknown. */
+  ahead: number
+  behind: number
+  active: boolean
+}
+
+export interface UpdateVersion {
+  id: string
+  tags: string[] | null
+  commit: string
+  short: string
+  branch: string
+  subject: string
+  version: string
+  built: string
+  created: string
+  size_mb: number
+  current: boolean
+}
+
+export type UpdateStep = 'fetch' | 'build' | 'backup' | 'swap' | 'health' | 'rollback' | 'done'
+export type UpdateOpStatus = 'running' | 'success' | 'failed' | 'rolled_back' | 'canceled' | 'interrupted'
+
+export interface UpdateOp {
+  id: string
+  kind: 'update' | 'switch'
+  ref: string
+  branch?: string
+  target?: string
+  subject?: string
+  from?: string
+  user?: string
+  step: UpdateStep
+  status: UpdateOpStatus
+  error?: string
+  backup_id?: string
+  restore_db?: string
+  warnings?: string[] | null
+  started_at: string
+  finished_at?: string
+}
+
+export interface UpdateStatus {
+  busy: boolean
+  op: UpdateOp | null
+  current: UpdateVersion | null
+  panel?: { version: string; commit: string; branch: string; build_time: string }
+  panel_error?: string
+  repo_dir: string
+  remote: string
+  remote_url: string
+  checked_out: string
+  server_time: string
+  docker_error?: string
+}
+
+export interface UpdateBackup {
+  id: string
+  commit: string
+  reason: string
+  created: string
+  size_kb: number
+}

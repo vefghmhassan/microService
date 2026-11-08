@@ -18,6 +18,7 @@ import (
 	"microserver/internal/services/destination"
 	"microserver/internal/services/orchestrator"
 	"microserver/internal/services/providers"
+	"microserver/internal/version"
 )
 
 // ---- dashboard ----
@@ -336,6 +337,7 @@ func (a *App) XUIReleases(c *fiber.Ctx) error {
 func (a *App) Meta(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"ssh_public_key": a.Orch.Key.PublicKey,
+		"version":        version.Get(),
 		"provider_types": providers.Descriptors(),
 		"job_kinds": []string{
 			orchestrator.KindProvision, orchestrator.KindRotate, orchestrator.KindCheck, orchestrator.KindInstall,

@@ -5,6 +5,7 @@ import { del, get, post, put } from './client'
 import type {
   CDNAddon, Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, Option, ProviderAccount,
   ProviderType, Server, ServerEvent, ServerInbounds, Settings, TemplateResponse,
+  UpdateBackup, UpdateBranch, UpdateCommit, UpdateOp, UpdateStatus, UpdateVersion,
 } from './types'
 
 export const keys = {
@@ -27,6 +28,12 @@ export const keys = {
   cleanIPs: ['clean-ips'] as const,
   cdnAddons: ['cdn-addons'] as const,
   sub: ['sub'] as const,
+  update: ['update'] as const,
+  updateStatus: ['update', 'status'] as const,
+  updateBranches: ['update', 'branches'] as const,
+  updateVersions: ['update', 'versions'] as const,
+  updateBackups: ['update', 'backups'] as const,
+  updateHistory: ['update', 'history'] as const,
 }
 
 export const useDashboard = () => useQuery({ queryKey: keys.dashboard, queryFn: () => get<Dashboard>('/dashboard') })
@@ -73,6 +80,32 @@ export const useXUIReleases = () =>
   useQuery({ queryKey: ['xui-releases'], queryFn: () => get<string[]>('/meta/xui-releases'), staleTime: 3_600_000, retry: false })
 export const useMeta = () =>
   useQuery({ queryKey: ['meta'], queryFn: () => get<{ ssh_public_key: string }>('/meta'), staleTime: Infinity })
+
+// ---- panel self-update ----
+// While an update swaps the container the panel is briefly down; these
+// queries just keep retrying until it is back.
+
+export const useUpdateStatus = (busy: boolean) =>
+  useQuery({
+    queryKey: keys.updateStatus, queryFn: () => get<UpdateStatus>('/update/status'),
+    refetchInterval: busy ? 1500 : 15_000, retry: false,
+  })
+export const useUpdateBranches = (opts: { enabled?: boolean; background?: boolean } = {}) =>
+  useQuery({
+    queryKey: keys.updateBranches,
+    queryFn: () => get<{ branches: UpdateBranch[]; fetch_error?: string; fetched_at: string }>('/update/branches'),
+    enabled: opts.enabled ?? true, retry: false, staleTime: 60_000,
+    refetchInterval: opts.background ? 600_000 : false,
+  })
+export const useUpdateCommits = (branch?: string) =>
+  useQuery({
+    queryKey: ['update', 'commits', branch], queryFn: () => get<UpdateCommit[]>(`/update/commits?branch=${encodeURIComponent(branch ?? '')}&n=40`),
+    enabled: !!branch, retry: false,
+  })
+export const useUpdateVersions = () => useQuery({ queryKey: keys.updateVersions, queryFn: () => get<UpdateVersion[]>('/update/versions'), retry: false })
+export const useUpdateBackups = (enabled: boolean) =>
+  useQuery({ queryKey: keys.updateBackups, queryFn: () => get<UpdateBackup[]>('/update/backups'), enabled, retry: false })
+export const useUpdateHistory = () => useQuery({ queryKey: keys.updateHistory, queryFn: () => get<UpdateOp[]>('/update/history'), retry: false })
 
 /** useAction wraps a mutation with toast feedback and cache invalidation. */
 export function useAction<TVars = void, TRes = unknown>(

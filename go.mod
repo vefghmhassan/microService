@@ -3,6 +3,7 @@ module microserver
 go 1.26.0
 
 require (
+	github.com/glebarez/go-sqlite v1.21.2
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-telegram/bot v1.27.0
 	github.com/gofiber/fiber/v2 v2.52.5
@@ -20,7 +21,6 @@ require (
 require (
 	github.com/andybalholm/brotli v1.0.5 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/google/uuid v1.5.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect

@@ -11,6 +11,7 @@ import (
 	"microserver/internal/controllers"
 	"microserver/internal/models"
 	"microserver/internal/services/orchestrator"
+	"microserver/internal/version"
 )
 
 // Register mounts the JSON API under /api/v1 and the dashboard (the built SPA)
@@ -20,6 +21,7 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	api.Post("/auth/login", a.Login)
 	api.Post("/auth/logout", a.Logout)
 	api.Get("/healthz", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"ok": true}) })
+	api.Get("/version", func(c *fiber.Ctx) error { return c.JSON(version.Get()) })
 
 	exists := func(id uint) bool {
 		var n int64
@@ -34,6 +36,8 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Get("/meta/xui-releases", a.XUIReleases)
 	p.Get("/dashboard", a.Dashboard)
 	p.Get("/events", a.Events)
+	// Panel self-update: everything is forwarded to the updater sidecar.
+	p.All("/update/*", a.UpdaterProxy)
 
 	p.Get("/providers/types", a.ProviderTypes)
 	p.Get("/providers", a.ListProviders)

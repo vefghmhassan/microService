@@ -1,0 +1,17 @@
+# Self-update sidecar: builds panel images from git and swaps the panel
+# container (see internal/updater). Needs the docker socket and the repo.
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/updater ./cmd/updater
+COPY internal/updater ./internal/updater
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /updater ./cmd/updater
+
+# docker:cli ships the docker CLI with the compose and buildx plugins.
+FROM docker:27-cli
+RUN apk add --no-cache git ca-certificates tzdata \
+    # The repo is owned by the host user, not root in this container.
+    && git config --system --add safe.directory '*'
+COPY --from=build /updater /usr/local/bin/updater
+ENTRYPOINT ["updater"]

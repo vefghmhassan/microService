@@ -23,6 +23,7 @@ import { Locations } from './pages/Locations'
 import { Cloudflare } from './pages/Cloudflare'
 import { CleanIPs } from './pages/CleanIPs'
 import { CDNAddonPage } from './pages/CDNAddon'
+import { Update } from './pages/Update'
 
 export default function App() {
   const qc = useQueryClient()
@@ -69,6 +70,7 @@ export default function App() {
             <Route path="/cdn-addon" element={<CDNAddonPage />} />
             <Route path="/jobs" element={<Jobs />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/update" element={<Update />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </AppLayout>

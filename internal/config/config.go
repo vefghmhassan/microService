@@ -20,6 +20,11 @@ type Config struct {
 	JWTSecret     []byte
 	MasterKey     []byte
 	CookieSecure  bool
+	// UpdaterURL is the updater sidecar (docker-compose service "updater").
+	UpdaterURL string
+	// UpdaterToken authenticates the panel to the updater. It lives in
+	// DATA_DIR/updater.token, which the updater reads from the same volume.
+	UpdaterToken string
 }
 
 // Load reads .env (when present) and the process environment.
@@ -36,6 +41,7 @@ func Load() (*Config, error) {
 		AdminUsername: env("ADMIN_USERNAME", "admin"),
 		AdminPassword: env("ADMIN_PASSWORD", ""),
 		CookieSecure:  strings.EqualFold(env("COOKIE_SECURE", "false"), "true"),
+		UpdaterURL:    strings.TrimRight(env("UPDATER_URL", "http://updater:8091"), "/"),
 	}
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("data dir: %w", err)
@@ -49,6 +55,11 @@ func Load() (*Config, error) {
 	if cfg.MasterKey, err = secretFromEnvOrFile("MASTER_KEY", filepath.Join(cfg.DataDir, "master.key"), 32); err != nil {
 		return nil, err
 	}
+	tok, err := secretFromEnvOrFile("UPDATER_TOKEN", filepath.Join(cfg.DataDir, "updater.token"), 32)
+	if err != nil {
+		return nil, err
+	}
+	cfg.UpdaterToken = hex.EncodeToString(tok)
 	if len(cfg.MasterKey) != 32 {
 		return nil, fmt.Errorf("MASTER_KEY must be 32 bytes (64 hex chars), got %d bytes", len(cfg.MasterKey))
 	}
