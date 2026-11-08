@@ -7,11 +7,14 @@ import (
 )
 
 func TestVLESSEncPairAndLink(t *testing.T) {
-	out, err := PrepareVLESSEnc("vless", `{"clients":[{"id":"11111111-1111-1111-1111-111111111111","email":"a"}],"decryption":"vlessenc"}`)
+	out, err := PrepareVLESSEnc("vless", `{"clients":[{"id":"11111111-1111-1111-1111-111111111111","email":"a"}],"decryption":"vlessenc","fallbacks":[]}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := parse(out)
+	if _, ok := m["fallbacks"]; ok {
+		t.Fatal("fallbacks kept next to a decryption: xray would not start")
+	}
 	dec, enc := str(m, "decryption"), str(m, "encryption")
 	if !strings.HasPrefix(dec, "mlkem768x25519plus.native.600s.") || !strings.HasPrefix(enc, "mlkem768x25519plus.native.0rtt.") {
 		t.Fatalf("pair %q %q", dec, enc)
@@ -65,5 +68,18 @@ func TestGrpcMultiModeAndSS2022Keys(t *testing.T) {
 	c := clients(parse(out))[0]
 	if b, err := b64decode(str(c, "password")); err != nil || len(b) != 32 || str(c, "method") != "" {
 		t.Fatalf("client %v", c)
+	}
+}
+
+func TestNormalizeDropsFallbacksNextToDecryption(t *testing.T) {
+	// The template that took xray down on live servers.
+	bad := `{"clients":[{"id":"11111111-1111-1111-1111-111111111111","email":"a","tgId":""}],"decryption":"mlkem768x25519plus.native.600s.x","encryption":"e","fallbacks":[]}`
+	m := parse(NormalizeSettings(bad))
+	if _, ok := m["fallbacks"]; ok || str(m, "decryption") == "" {
+		t.Fatalf("normalized %v", m)
+	}
+	plain := parse(NormalizeSettings(`{"clients":[],"decryption":"none","fallbacks":[{"dest":80}]}`))
+	if _, ok := plain["fallbacks"]; !ok {
+		t.Fatal("fallbacks of a plain VLESS inbound removed")
 	}
 }

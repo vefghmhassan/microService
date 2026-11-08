@@ -47,7 +47,8 @@ export const proPresets: ProPreset[] = [
   {
     key: 'pq', title: '🧬 PQ Sudoku', note: 'VLESS پست‌کوانتومی + Sudoku (آزمایشی، کلاینت Xray 26)', ports: [10443, 11443, 12443, 13443],
     build: () => ({
-      protocol: 'vless', settings: { ...vlessWith(), decryption: 'vlessenc', encryption: '' },
+      protocol: 'vless', // Xray refuses fallbacks (even []) next to a decryption.
+      settings: { clients: vlessWith().clients, decryption: 'vlessenc', encryption: '' },
       stream: {
         network: 'tcp', security: 'none', ...tcp(),
         finalmask: { tcp: [{ type: 'sudoku', settings: { password: randStr(32, hex), ascii: 'prefer_entropy', paddingMin: 2, paddingMax: 7 } }] },

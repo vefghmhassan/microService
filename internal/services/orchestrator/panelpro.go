@@ -168,7 +168,8 @@ func (o *Orchestrator) syncPanelPro(ctx context.Context, r *jobs.Run, s *models.
 // attached again on every sync.
 func (o *Orchestrator) panelClient(ctx context.Context, r *jobs.Run, s *models.Server, pp ProPanel, ids []int) error {
 	if s.PanelClient == "" || s.SubID == "" {
-		s.PanelClient = "ms-" + strings.ToLower(s.Name)
+		// Server names usually start with "ms-" already; don't double it.
+		s.PanelClient = "ms-" + strings.TrimPrefix(strings.ToLower(s.Name), "ms-")
 		s.SubID = strings.ToLower(randomSuffix(16))
 		o.save(r, s, "panel_client", "sub_id")
 	}

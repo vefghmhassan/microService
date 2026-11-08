@@ -501,6 +501,8 @@ func PrepareVLESSEnc(protocol, settingsJSON string) (string, error) {
 		return "", err
 	}
 	settings["decryption"], settings["encryption"] = dec, enc
+	// Xray refuses fallbacks next to a decryption.
+	delete(settings, "fallbacks")
 	return marshal(settings)
 }
 
@@ -509,8 +511,14 @@ func PrepareVLESSEnc(protocol, settingsJSON string) (string, error) {
 func NormalizeSettings(settingsJSON string) string {
 	settings := parse(settingsJSON)
 	arr, ok := settings["clients"].([]any)
-	if !ok {
+	_, hasFallbacks := settings["fallbacks"]
+	if !ok && !hasFallbacks {
 		return settingsJSON
+	}
+	// Xray refuses "fallbacks" (even an empty list) next to a VLESS
+	// Encryption "decryption"; the whole xray would not start.
+	if d := str(settings, "decryption"); hasFallbacks && d != "" && d != "none" {
+		delete(settings, "fallbacks")
 	}
 	for _, c := range arr {
 		m, ok := c.(obj)
