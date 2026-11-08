@@ -29,6 +29,10 @@ interface Model {
   cdn: boolean
   family: TemplateFamily
   sync: boolean
+  // CDN add-on inbounds only.
+  route: 'direct' | 'cdn'
+  fragment: boolean
+  cleanIPs: boolean
   settings: Obj
   stream: Obj
   sniffing: Obj
@@ -57,6 +61,7 @@ function fromTemplate(t: Partial<InboundTemplate> | null, family: TemplateFamily
   if (!t) {
     return {
       remark: '', protocol: 'vless', port: randomPort(), enabled: true, upload: true, uploadJSON: false, cdn: false, family, sync: true,
+      route: 'cdn', fragment: false, cleanIPs: false,
       settings: defaultSettings('vless'), stream: { network: 'tcp', security: 'none', ...defaultNetwork('tcp') },
       sniffing: { ...defaultSniffing },
     }
@@ -68,8 +73,9 @@ function fromTemplate(t: Partial<InboundTemplate> | null, family: TemplateFamily
     delete stream.realitySettings.dest
   }
   return {
-    remark: t.remark ?? '', protocol: t.protocol ?? 'vless', port: t.port ?? randomPort(), enabled: t.enabled ?? true, upload: t.upload ?? true,
+    remark: t.remark ?? '', protocol: (t.protocol === 'hysteria' ? 'vless' : t.protocol) ?? 'vless', port: t.port ?? randomPort(), enabled: t.enabled ?? true, upload: t.upload ?? true,
     uploadJSON: !!t.upload_json, cdn: !!t.cdn, family: t.family || family, sync: true,
+    route: t.route === 'direct' ? 'direct' : 'cdn', fragment: !!t.fragment, cleanIPs: !!t.clean_ips,
     settings: parse(t.settings), stream: { network: 'tcp', security: 'none', ...stream },
     sniffing: Object.keys(parse(t.sniffing)).length ? parse(t.sniffing) : { ...defaultSniffing },
   }
@@ -80,13 +86,15 @@ function fromTemplate(t: Partial<InboundTemplate> | null, family: TemplateFamily
  * dialog does: tabs for basics, protocol, transport, security, sniffing and
  * clients, with an advanced JSON tab only for the rare field not covered.
  */
-export function InboundFormModal({ value, initial, servers, family = 'both', onClose }: {
+export function InboundFormModal({ value, initial, servers, family = 'both', addon, onClose }: {
   value: InboundTemplate | 'new' | null
   /** initial fills a new inbound (a CDN preset) instead of the blank default. */
   initial?: Partial<InboundTemplate>
   servers?: ScanServers
   /** family is what a new inbound is for (the Templates page's IPv4/IPv6 view). */
   family?: TemplateFamily
+  /** addon makes this an inbound of that CDN add-on instead of the shared template. */
+  addon?: { id: number }
   onClose: () => void
 }) {
   const existing = value && value !== 'new' ? value : null
@@ -112,10 +120,12 @@ export function InboundFormModal({ value, initial, servers, family = 'both', onC
       remark: m.remark.trim(), protocol: m.protocol, port: m.port, enabled: m.enabled, upload: m.upload, upload_json: m.upload && m.uploadJSON, cdn: m.cdn, family: m.family, sync: m.sync,
       client_count: 0,
       settings: JSON.stringify(m.settings), stream_settings: JSON.stringify(m.stream), sniffing: JSON.stringify(m.sniffing),
+      ...(addon ? { route: m.route, fragment: m.upload && m.uploadJSON && m.fragment, clean_ips: m.route === 'cdn' && m.cleanIPs } : {}),
     }
-    return existing ? put<{ job?: Job }>(`/template/inbounds/${existing.id}`, body) : post<{ job?: Job }>('/template/inbounds', body)
+    if (existing) return put<{ job?: Job }>(`/template/inbounds/${existing.id}`, body)
+    return post<{ job?: Job }>(addon ? `/cdn-addons/${addon.id}/inbounds` : '/template/inbounds', body)
   }, {
-    success: 'ذخیره شد', invalidate: [keys.template, keys.servers],
+    success: 'ذخیره شد', invalidate: [keys.template, keys.servers, keys.cdnAddons],
     onSuccess: (r) => {
       onClose()
       if (r.job) openJob(r.job.id)
@@ -183,13 +193,35 @@ export function InboundFormModal({ value, initial, servers, family = 'both', onC
                 <F label="ارسال به‌صورت کانفیگ JSON" tip="به‌جای لینک عادی، برای هر کاربر کانفیگ کامل کلاینت (مثل صفحه «ساخت کانفیگ JSON») ساخته و در پنل مقصد ذخیره می‌شود">
                   <Switch checked={m.upload && m.uploadJSON} disabled={!m.upload} onChange={(v) => set(['uploadJSON'], v)} />
                 </F>
-                <F label="اینباند CDN (پشت کلودفلر)" tip="لینک‌هایش ساب‌دامین سرور را در SNI/Host می‌فرستند تا با IP تمیز کلودفلر هم کار کنند. با TLS فقط روی سرورهایی ساخته می‌شود که SSL دارند.">
-                  <Switch checked={m.cdn} onChange={(v) => set(['cdn'], v)} />
-                </F>
-                {m.cdn && cdnProblem(m.port, network, security) && (
-                  <Alert type="warning" showIcon style={{ marginBottom: 12 }} title={cdnProblem(m.port, network, security)} />
+                {addon ? (
+                  <>
+                    <F label="مسیر" tip="مستقیم: لینک به ساب‌دامین بدون پروکسی (ابر خاکستری) می‌رود. CDN: به ساب‌دامین پروکسی‌شده (ابر نارنجی) و از کلودفلر عبور می‌کند.">
+                      <Segmented value={m.route} onChange={(v) => set(['route'], v)}
+                        options={[{ value: 'direct', label: 'مستقیم (خاکستری)' }, { value: 'cdn', label: 'CDN (نارنجی)' }]} />
+                    </F>
+                    {m.route === 'cdn' && (
+                      <F label="کانفیگ با IP تمیز" tip="برای هر IP تمیز کلودفلر یک کانفیگ اضافه ساخته و در vpn-pannel هم بارگذاری می‌شود (تعدادش در تنظیمات افزونه).">
+                        <Switch checked={m.cleanIPs} onChange={(v) => set(['cleanIPs'], v)} />
+                      </F>
+                    )}
+                    <F label="Fragment در کانفیگ JSON" tip="ClientHello در کانفیگ JSON تکه‌تکه فرستاده می‌شود (ضد DPI). فقط برای TLS و وقتی ارسال JSON روشن است.">
+                      <Switch checked={m.upload && m.uploadJSON && m.fragment} disabled={!m.upload || !m.uploadJSON} onChange={(v) => set(['fragment'], v)} />
+                    </F>
+                    {m.route === 'cdn' && cdnProblem(m.port, network, security) && (
+                      <Alert type="warning" showIcon style={{ marginBottom: 12 }} title={cdnProblem(m.port, network, security)} />
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <F label="اینباند CDN (پشت کلودفلر)" tip="لینک‌هایش ساب‌دامین سرور را در SNI/Host می‌فرستند تا با IP تمیز کلودفلر هم کار کنند. با TLS فقط روی سرورهایی ساخته می‌شود که SSL دارند.">
+                      <Switch checked={m.cdn} onChange={(v) => set(['cdn'], v)} />
+                    </F>
+                    {m.cdn && cdnProblem(m.port, network, security) && (
+                      <Alert type="warning" showIcon style={{ marginBottom: 12 }} title={cdnProblem(m.port, network, security)} />
+                    )}
+                  </>
                 )}
-                <F label="اعمال فوری روی همه سرورها"><Switch checked={m.sync} onChange={(v) => set(['sync'], v)} /></F>
+                <F label={addon ? 'اعمال فوری روی سرورهای این افزونه' : 'اعمال فوری روی همه سرورها'}><Switch checked={m.sync} onChange={(v) => set(['sync'], v)} /></F>
               </>
             ),
           },

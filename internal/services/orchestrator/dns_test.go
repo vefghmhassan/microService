@@ -16,13 +16,18 @@ import (
 type fakeCF struct {
 	mu      sync.Mutex
 	records map[string]string // name → ip
+	proxied map[string]bool
 	upserts []string
 }
 
-func (f *fakeCF) UpsertAddr(_ context.Context, _, name, ip string, _ bool) (string, error) {
+func (f *fakeCF) UpsertAddr(_ context.Context, _, name, ip string, proxied bool) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.records[name] = ip
+	if f.proxied == nil {
+		f.proxied = map[string]bool{}
+	}
+	f.proxied[name] = proxied
 	f.upserts = append(f.upserts, name+"="+ip)
 	return "rec-" + name, nil
 }

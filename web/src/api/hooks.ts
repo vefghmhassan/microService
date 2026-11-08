@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/
 import { App } from 'antd'
 import { del, get, post, put } from './client'
 import type {
-  Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, Option, ProviderAccount,
+  CDNAddon, Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, Option, ProviderAccount,
   ProviderType, Server, ServerEvent, ServerInbounds, Settings, TemplateResponse,
 } from './types'
 
@@ -25,6 +25,7 @@ export const keys = {
   cloudflare: ['cloudflare'] as const,
   certificates: ['cloudflare', 'certificates'] as const,
   cleanIPs: ['clean-ips'] as const,
+  cdnAddons: ['cdn-addons'] as const,
   sub: ['sub'] as const,
 }
 
@@ -62,6 +63,7 @@ export const useCloudflareZones = (accountId?: number) =>
     queryKey: ['cloudflare', accountId, 'zones'], queryFn: () => get<CloudflareZone[]>(`/cloudflare/${accountId}/zones`),
     enabled: !!accountId, staleTime: 300_000, retry: false,
   })
+export const useCDNAddons = () => useQuery({ queryKey: keys.cdnAddons, queryFn: () => get<CDNAddon[]>('/cdn-addons') })
 export const useCertificates = () => useQuery({ queryKey: keys.certificates, queryFn: () => get<Certificate[]>('/cloudflare/certificates') })
 export const useIPs = () => useQuery({ queryKey: keys.ips, queryFn: () => get<IPAddress[]>('/ips') })
 export const useChecks = () => useQuery({ queryKey: keys.checks, queryFn: () => get<CheckRun[]>('/checks') })

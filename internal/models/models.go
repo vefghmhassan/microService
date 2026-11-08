@@ -73,11 +73,50 @@ type Location struct {
 	DNS
 	// NamePrefix names the configs servers built here get in vpn-pannel:
 	// "sama" gives sama-1, sama-2, … Empty keeps the default name.
-	NamePrefix string    `gorm:"size:40" json:"name_prefix"`
+	NamePrefix string `gorm:"size:40" json:"name_prefix"`
+	// CDNAddonID turns the CDN add-on on for servers built here (0 = off). It
+	// replaces the DNS fields above: the add-on brings its own zone.
+	CDNAddonID uint      `gorm:"column:cdn_addon_id;index" json:"cdn_addon_id"`
 	Note       string    `gorm:"size:255" json:"note"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
+
+// CDNAddon is the CDN add-on: every server built in a location that uses it
+// gets two Cloudflare records for its IP — DirectPattern with the proxy off
+// (TLS, Hysteria2 and the 3x-ui panel over SSL) and CDNPattern with the proxy
+// on (CDN inbounds and clean IPs) — the zone's certificate before 3x-ui is
+// installed, and the add-on's own inbounds next to the shared template.
+type CDNAddon struct {
+	ID            uint   `gorm:"primaryKey" json:"id"`
+	Name          string `gorm:"column:name;size:100;not null" json:"name"`
+	Enabled       bool   `gorm:"column:enabled" json:"enabled"`
+	CFAccountID   uint   `gorm:"column:cf_account_id;index" json:"cf_account_id"`
+	CFZoneID      string `gorm:"column:cf_zone_id;size:64" json:"cf_zone_id"`
+	CFZoneName    string `gorm:"column:cf_zone_name;size:255" json:"cf_zone_name"`
+	DirectPattern string `gorm:"column:direct_pattern;size:63" json:"direct_pattern"`
+	CDNPattern    string `gorm:"column:cdn_pattern;size:63" json:"cdn_pattern"`
+	// CleanIPCount is how many clean Cloudflare addresses each inbound marked
+	// CleanIPs gets as extra configs (also uploaded to vpn-pannel).
+	CleanIPCount int `gorm:"column:clean_ip_count" json:"clean_ip_count"`
+	// Hash is the content hash of the add-on's inbounds; servers whose
+	// AddonHash differs have drifted.
+	Hash      string    `gorm:"column:hash;size:64" json:"hash"`
+	Note      string    `gorm:"column:note;size:255" json:"note"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// On reports whether the add-on can be used for new servers.
+func (a CDNAddon) On() bool {
+	return a.Enabled && a.CFAccountID != 0 && a.CFZoneID != "" && a.DirectPattern != "" && a.CDNPattern != ""
+}
+
+// Routes of an add-on inbound: which of the server's two names its links use.
+const (
+	RouteDirect = "direct" // the grey (DNS-only) name
+	RouteCDN    = "cdn"    // the orange (proxied) name
+)
 
 // DNS is the Cloudflare part of a Location, copied onto each server built
 // there so editing or deleting the location never orphans a record.
@@ -178,6 +217,15 @@ type Server struct {
 	DNSRecordID  string     `gorm:"column:dns_record_id;size:64" json:"dns_record_id"`
 	DNSError     string     `gorm:"column:dns_error;size:255" json:"dns_error"`
 	CertNotAfter *time.Time `json:"cert_not_after"`
+	// CDN add-on (CDNAddonID 0 = none). Hostname above is then the grey
+	// (DNS-only) name and CDNHostname the orange (proxied) one, same number.
+	CDNAddonID  uint   `gorm:"column:cdn_addon_id;index" json:"cdn_addon_id"`
+	CDNPattern  string `gorm:"column:cdn_pattern;size:63" json:"cdn_pattern"`
+	CDNHostname string `gorm:"column:cdn_hostname;size:255;index" json:"cdn_hostname"`
+	CDNRecordID string `gorm:"column:cdn_record_id;size:64" json:"cdn_record_id"`
+	CDNDNSError string `gorm:"column:cdn_dns_error;size:255" json:"cdn_dns_error"`
+	// AddonHash is the add-on inbounds' hash last applied to this server.
+	AddonHash string `gorm:"column:addon_hash;size:64" json:"addon_hash"`
 
 	XUIPort     int           `gorm:"column:xui_port" json:"xui_port"`
 	XUIBasePath string        `gorm:"column:xui_base_path;size:64" json:"xui_base_path"`
@@ -446,7 +494,17 @@ type InboundTemplate struct {
 	// hostname as SNI/Host, so they also work with a clean Cloudflare IP as
 	// the address; with TLS it needs the zone certificate and is only put on
 	// servers that have SSL.
-	CDN       bool      `json:"cdn"`
+	CDN bool `json:"cdn"`
+	// AddonID puts the inbound in a CDN add-on instead of the shared template
+	// (0 = shared): only servers on that add-on get it.
+	AddonID uint `gorm:"column:addon_id;index" json:"addon_id"`
+	// Route is the add-on inbound's address: RouteDirect or RouteCDN.
+	Route string `gorm:"column:route;size:8" json:"route"`
+	// Fragment adds a TLS-hello fragment to this inbound's client JSON configs.
+	Fragment bool `gorm:"column:fragment" json:"fragment"`
+	// CleanIPs gives this (CDN) inbound one extra config per clean
+	// Cloudflare address, uploaded to vpn-pannel too.
+	CleanIPs  bool      `gorm:"column:clean_ips" json:"clean_ips"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -532,6 +590,6 @@ func All() []any {
 		&AdminUser{}, &ProviderAccount{}, &Location{}, &Server{}, &InboundStat{}, &IPAddress{},
 		&CheckRun{}, &CheckProbe{}, &XrayTemplate{}, &InboundTemplate{},
 		&Job{}, &JobLog{}, &Setting{}, &ClientIP{}, &IPGeo{}, &Destination{},
-		&CloudflareAccount{}, &Certificate{}, &CleanIP{}, &CleanIPSource{},
+		&CloudflareAccount{}, &Certificate{}, &CleanIP{}, &CleanIPSource{}, &CDNAddon{},
 	}
 }

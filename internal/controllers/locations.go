@@ -39,6 +39,7 @@ type locationInput struct {
 	SSL               bool   `json:"ssl"`
 	IPFamily          string `json:"ip_family"`
 	NamePrefix        string `json:"name_prefix"`
+	CDNAddonID        uint   `json:"cdn_addon_id"`
 }
 
 func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
@@ -63,6 +64,16 @@ func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
 	if err := orchestrator.ValidNamePrefix(prefix); err != nil {
 		return errJSON(c, fiber.StatusBadRequest, err.Error())
 	}
+	if in.CDNAddonID != 0 {
+		if in.CFAccountID != 0 {
+			return errJSON(c, fiber.StatusBadRequest, "افزونه CDN دامنه و SSL خودش را دارد؛ بخش کلودفلر این لوکیشن را خاموش کنید")
+		}
+		var ad models.CDNAddon
+		if err := a.DB.First(&ad, in.CDNAddonID).Error; err != nil {
+			return errJSON(c, fiber.StatusBadRequest, "افزونه CDN پیدا نشد")
+		}
+	}
+	l.CDNAddonID = in.CDNAddonID
 	dns := models.DNS{}
 	if in.CFAccountID != 0 {
 		var cf models.CloudflareAccount

@@ -91,6 +91,8 @@ export interface Location extends DNSFields {
   note: string
   ip_family: IPFamily
   name_prefix: string
+  /** The CDN add-on servers built here get (0 = none). */
+  cdn_addon_id: number
 }
 
 /** What a server's configs, DNS and checks use. Every server is dual-stack. */
@@ -114,6 +116,11 @@ export interface Server extends DNSFields {
   dns_record_id: string
   dns_error: string
   cert_not_after: string | null
+  /** CDN add-on: hostname is then the grey name and cdn_hostname the orange one. */
+  cdn_addon_id: number
+  cdn_hostname: string
+  cdn_dns_error: string
+  addon_hash: string
   name: string
   provider_account_id: number
   provider_account?: ProviderAccount
@@ -256,7 +263,7 @@ export interface XrayTemplate {
 export interface InboundTemplate {
   id: number
   remark: string
-  protocol: 'vless' | 'vmess' | 'trojan' | 'shadowsocks'
+  protocol: 'vless' | 'vmess' | 'trojan' | 'shadowsocks' | 'hysteria'
   port: number
   enabled: boolean
   settings: string
@@ -266,6 +273,31 @@ export interface InboundTemplate {
   upload_json: boolean
   cdn: boolean
   family: TemplateFamily
+  /** CDN add-on inbounds only (addon_id 0 = shared template). */
+  addon_id?: number
+  route?: 'direct' | 'cdn'
+  fragment?: boolean
+  clean_ips?: boolean
+  created_at: string
+  updated_at: string
+}
+
+/** The CDN add-on: two Cloudflare names per server, SSL from the start and its own inbounds. */
+export interface CDNAddon {
+  id: number
+  name: string
+  enabled: boolean
+  cf_account_id: number
+  cf_zone_id: string
+  cf_zone_name: string
+  direct_pattern: string
+  cdn_pattern: string
+  clean_ip_count: number
+  hash: string
+  note: string
+  inbounds: InboundTemplate[]
+  locations: number
+  servers: number
   created_at: string
   updated_at: string
 }
@@ -461,3 +493,4 @@ export interface Destination {
   created_at: string
   updated_at: string
 }
+

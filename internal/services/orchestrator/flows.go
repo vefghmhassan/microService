@@ -595,12 +595,41 @@ func (o *Orchestrator) installAndApply(ctx context.Context, r *jobs.Run, s *mode
 		s.SSHHostKey = hostKey
 		o.save(r, s, "ssh_host_key")
 	}
-	if err := o.installPanel(ctx, r, s, remote, version); err != nil {
-		return err
-	}
-	// Before the template: TLS inbounds need the files when xray starts.
-	if err := o.pushCert(ctx, r, s, remote); err != nil {
-		r.Logf("warn", "SSL: %v", err)
+	if s.CDNAddonID != 0 {
+		// CDN add-on: both records and the certificate come first, so the
+		// panel is served over SSL on its grey name from the moment it opens.
+		if s.Hostname != "" {
+			r.Step("DNS " + s.Hostname)
+			_ = o.syncDNS(ctx, r, s)
+		}
+		if err := o.pushCert(ctx, r, s, remote); err != nil {
+			r.Logf("warn", "SSL: %v", err)
+		}
+		fresh := s.XUIPort == 0
+		if err := o.installPanelOpts(ctx, r, s, remote, version, fresh); err != nil {
+			return err
+		}
+		if s.CertNotAfter != nil {
+			if err := o.setPanelCert(ctx, r, s, remote); err != nil {
+				r.Logf("warn", "SSL: %v", err)
+			}
+		}
+		if fresh {
+			if err := o.setPanelListen(ctx, r, s, remote, o.Settings.Bool(settings.XUIPublic)); err != nil {
+				r.Logf("warn", "%v", err)
+			}
+		}
+		if err := o.ensureAddonXray(ctx, r, s, remote); err != nil {
+			r.Logf("warn", "%v", err)
+		}
+	} else {
+		if err := o.installPanel(ctx, r, s, remote, version); err != nil {
+			return err
+		}
+		// Before the template: TLS inbounds need the files when xray starts.
+		if err := o.pushCert(ctx, r, s, remote); err != nil {
+			r.Logf("warn", "SSL: %v", err)
+		}
 	}
 
 	r.Step("apply template")
@@ -623,8 +652,9 @@ func (o *Orchestrator) applyWith(ctx context.Context, r *jobs.Run, s *models.Ser
 		s.XrayVersion = st.Xray.Version
 	}
 	s.AppliedHash = snap.HashFor(s.Family())
+	s.AddonHash = snap.For(s).AddonHash
 	s.SyncStatus = models.SyncSynced
-	o.save(r, s, "applied_hash", "sync_status", "xray_version")
+	o.save(r, s, "applied_hash", "addon_hash", "sync_status", "xray_version")
 	return nil
 }
 
@@ -642,6 +672,9 @@ func (o *Orchestrator) sync(ctx context.Context, r *jobs.Run) error {
 		return fmt.Errorf("ssh: %w", err)
 	}
 	defer remote.Close()
+	if err := o.ensureAddonXray(ctx, r, s, remote); err != nil {
+		r.Logf("warn", "%v", err)
+	}
 	return o.applyWith(ctx, r, s, remote)
 }
 
@@ -698,7 +731,7 @@ func (o *Orchestrator) uploadTo(ctx context.Context, r *jobs.Run, s *models.Serv
 	if err != nil {
 		return err
 	}
-	urls, err := UploadEntries(snap.For(s), LinkHost(s))
+	urls, err := UploadEntries(o.forUpload(snap, s), LinkHost(s))
 	if err != nil {
 		r.Logf("warn", "some links could not be built: %v", err)
 	}
@@ -829,6 +862,12 @@ func (o *Orchestrator) retire(ctx context.Context, r *jobs.Run, s *models.Server
 	if ip := s.PublicIP(); purge && ip != "" && ip != s.UploadedIP {
 		addrs = append(addrs, ip)
 	}
+	// The CDN add-on's orange name carries the CDN configs; it is gone with
+	// the server unless a replacement took it over (UploadedIP is then
+	// cleared too, and the configs stay).
+	if s.CDNHostname != "" && s.UploadedIP != "" {
+		addrs = append(addrs, s.CDNHostname)
+	}
 	for _, addr := range addrs {
 		if addr == "" {
 			continue
@@ -848,6 +887,9 @@ func (o *Orchestrator) retire(ctx context.Context, r *jobs.Run, s *models.Server
 				r.Info("%s: configs on %s deactivated", d.Name, addr)
 			}
 		}
+	}
+	if s.CDNHostname != "" && s.UploadedIP != "" {
+		o.retireCleanConfigs(ctx, r, s.CDNHostname, purge)
 	}
 	s.Status = models.ServerDeleted
 	o.save(r, s, "status")

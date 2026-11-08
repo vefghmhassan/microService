@@ -5,7 +5,7 @@ import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, us
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import {
-  del, keys, post, put, useAction, useCloudflare, useCloudflareZones, useLocations, usePlans, useProviders, useRegions, useSettings,
+  del, keys, post, put, useAction, useCDNAddons, useCloudflare, useCloudflareZones, useLocations, usePlans, useProviders, useRegions, useSettings,
 } from '../api/hooks'
 import type { Location } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
@@ -47,6 +47,8 @@ function SortableRow(props: HTMLAttributes<HTMLTableRowElement> & { 'data-row-ke
 export function Locations() {
   const { data, isLoading } = useLocations()
   const { data: settings } = useSettings()
+  const { data: addons } = useCDNAddons()
+  const addonName = new Map((addons ?? []).map((a) => [a.id, a]))
   const [editing, setEditing] = useState<Location | 'new' | null>(null)
   const inv = [keys.locations]
   const reorder = useAction((ids: number[]) => post('/locations/reorder', { ids }), { invalidate: inv })
@@ -115,7 +117,11 @@ export function Locations() {
             { title: 'پلن', dataIndex: 'plan', render: (p: string) => <span dir="ltr">{p}</span> },
             { title: 'IP', dataIndex: 'ip_family', render: (f: string) => (f === 'v6' ? <Tag color="purple">IPv6</Tag> : <Tag>IPv4</Tag>) },
             {
-              title: 'دامنه', render: (_, l) => (l.cf_account_id ? (
+              title: 'دامنه', render: (_, l) => (l.cdn_addon_id ? (
+                <Tooltip title={addonName.get(l.cdn_addon_id) ? `${addonName.get(l.cdn_addon_id)!.direct_pattern.replace('{n}', '1')} + ${addonName.get(l.cdn_addon_id)!.cdn_pattern.replace('{n}', '1')}.${addonName.get(l.cdn_addon_id)!.cf_zone_name}` : undefined}>
+                  <Tag color="orange">افزونه CDN: {addonName.get(l.cdn_addon_id)?.name ?? l.cdn_addon_id}</Tag>
+                </Tooltip>
+              ) : l.cf_account_id ? (
                 <Flex gap={4} align="center">
                   <span dir="ltr">{l.dns_pattern.replace('{n}', '1')}.{l.cf_zone_name}</span>
                   {l.ssl && <Tooltip title="SSL"><LockOutlined style={{ color: '#52c41a' }} /></Tooltip>}
@@ -166,6 +172,7 @@ interface FormValues {
   ssl: boolean
   ip_family: 'v4' | 'v6'
   name_prefix?: string
+  cdn_addon_id?: number
 }
 
 /** CapInput edits a cap stored in GB, typed in GB or TB (1 TB = 1024 GB). */
@@ -198,17 +205,20 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
   const zoneName = Form.useWatch('cf_zone_name', form)
   const pattern = Form.useWatch('dns_pattern', form)
   const proxied = Form.useWatch('dns_proxied', form)
+  const addonId = Form.useWatch('cdn_addon_id', form)
+  const { data: addons } = useCDNAddons()
   const { data: cfAccounts } = useCloudflare()
   const zones = useCloudflareZones(cfAccountId || undefined)
 
   useEffect(() => {
     if (!value) return
     form.resetFields()
-    if (existing) form.setFieldsValue({ ...existing, cf_account_id: existing.cf_account_id || undefined })
+    if (existing) form.setFieldsValue({ ...existing, cf_account_id: existing.cf_account_id || undefined, cdn_addon_id: existing.cdn_addon_id || undefined })
   }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = useAction((f: FormValues) => {
-    const v = { ...f, cf_account_id: f.cf_account_id ?? 0 }
+    // The add-on brings its own domain and SSL; the location's own section is then off.
+    const v = { ...f, cdn_addon_id: f.cdn_addon_id ?? 0, cf_account_id: f.cdn_addon_id ? 0 : (f.cf_account_id ?? 0) }
     return existing ? put(`/locations/${existing.id}`, v) : post('/locations', v)
   }, {
     success: 'ذخیره شد', invalidate: [keys.locations], onSuccess: onClose,
@@ -282,6 +292,13 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
         <Form.Item name="image" label="ایمیج (اختیاری)"><Input dir="ltr" /></Form.Item>
         <Form.Item name="note" label="یادداشت"><Input /></Form.Item>
 
+        <Divider titlePlacement="start" plain>افزونه CDN (اختیاری)</Divider>
+        <Form.Item name="cdn_addon_id" label="افزونه CDN"
+          extra={addonId ? 'هر سرور این لوکیشن دو رکورد (مستقیم و CDN) و SSL از ابتدا می‌گیرد؛ بخش کلودفلر پایین استفاده نمی‌شود.' : 'خالی = بدون افزونه'}>
+          <Select allowClear placeholder="بدون افزونه"
+            options={addons?.map((a) => ({ value: a.id, label: `${a.name}${a.enabled ? '' : ' (غیرفعال)'} — ${a.cf_zone_name}` }))} />
+        </Form.Item>
+        {!addonId && <>
         <Divider titlePlacement="start" plain>دامنه و SSL (کلودفلر، اختیاری)</Divider>
         <Form.Item name="cf_account_id" label="حساب کلودفلر" extra="خالی بماند تا سرورهای این لوکیشن مثل قبل فقط با IP کار کنند.">
           <Select
@@ -332,6 +349,7 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
             )}
           </>
         )}
+        </>}
       </Form>
     </Modal>
   )

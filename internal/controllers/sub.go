@@ -63,7 +63,9 @@ func BuildSub(db *gorm.DB) (body string, up, down int64, err error) {
 			label = "⛔ " + label
 		}
 		// A template that fails to render is skipped; the rest still serve.
-		links, _ := orchestrator.SubLinks(snap, orchestrator.LinkHost(&s), label)
+		// For(s): only what this server really runs (its IP family, its
+		// add-on, no certificate inbounds without SSL).
+		links, _ := orchestrator.SubLinks(snap.For(&s), orchestrator.LinkHost(&s), label)
 		for _, l := range links {
 			lines = append(lines, l.URL)
 		}

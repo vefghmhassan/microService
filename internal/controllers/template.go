@@ -179,9 +179,17 @@ type inboundInput struct {
 	Family         string `json:"family"`
 	ClientCount    int    `json:"client_count"`
 	Sync           bool   `json:"sync"`
+	// CDN add-on inbounds only.
+	Route    string `json:"route"`
+	Fragment *bool  `json:"fragment"`
+	CleanIPs *bool  `json:"clean_ips"`
 }
 
 var protocols = map[string]bool{"vless": true, "vmess": true, "trojan": true, "shadowsocks": true}
+
+// addonProtocols adds Hysteria2 (Xray 26+, with the zone certificate) to
+// what CDN add-on inbounds may use.
+var addonProtocols = map[string]bool{"vless": true, "vmess": true, "trojan": true, "shadowsocks": true, "hysteria": true}
 
 func (a *App) saveInbound(c *fiber.Ctx, t *models.InboundTemplate) error {
 	var in inboundInput
@@ -197,7 +205,28 @@ func (a *App) saveInbound(c *fiber.Ctx, t *models.InboundTemplate) error {
 	if in.Protocol != "" {
 		t.Protocol = in.Protocol
 	}
-	if !protocols[t.Protocol] {
+	if t.AddonID != 0 {
+		if !addonProtocols[t.Protocol] {
+			return errJSON(c, fiber.StatusBadRequest, "protocol must be vless, vmess, trojan, shadowsocks or hysteria")
+		}
+		switch in.Route {
+		case "":
+		case models.RouteDirect, models.RouteCDN:
+			t.Route = in.Route
+		default:
+			return errJSON(c, fiber.StatusBadRequest, "route must be direct or cdn")
+		}
+		if t.Protocol == "hysteria" && t.Route == models.RouteCDN {
+			return errJSON(c, fiber.StatusBadRequest, "Hysteria2 روی UDP است و از CDN کلودفلر عبور نمی‌کند؛ مسیر را «مستقیم» بگذارید")
+		}
+		if in.Fragment != nil {
+			t.Fragment = *in.Fragment
+		}
+		if in.CleanIPs != nil {
+			t.CleanIPs = *in.CleanIPs
+		}
+		t.CDN = t.Route == models.RouteCDN
+	} else if !protocols[t.Protocol] {
 		return errJSON(c, fiber.StatusBadRequest, "protocol must be vless, vmess, trojan or shadowsocks")
 	}
 	if in.Port != 0 {
@@ -215,7 +244,7 @@ func (a *App) saveInbound(c *fiber.Ctx, t *models.InboundTemplate) error {
 	if in.UploadJSON != nil {
 		t.UploadJSON = *in.UploadJSON
 	}
-	if in.CDN != nil {
+	if in.CDN != nil && t.AddonID == 0 {
 		t.CDN = *in.CDN
 	}
 	switch in.Family {
@@ -264,6 +293,9 @@ func (a *App) saveInbound(c *fiber.Ctx, t *models.InboundTemplate) error {
 		}
 		return err
 	}
+	if t.AddonID != 0 {
+		return a.afterAddonChange(c, t.AddonID, in.Sync)
+	}
 	return a.afterTemplateChange(c, in.Sync)
 }
 
@@ -301,8 +333,15 @@ func (a *App) DeleteInbound(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	var t models.InboundTemplate
+	if err := a.DB.First(&t, id).Error; err != nil {
+		return errJSON(c, fiber.StatusNotFound, "inbound not found")
+	}
 	if err := a.DB.Delete(&models.InboundTemplate{}, id).Error; err != nil {
 		return err
+	}
+	if t.AddonID != 0 {
+		return a.afterAddonChange(c, t.AddonID, c.Query("sync") == "1")
 	}
 	return a.afterTemplateChange(c, c.Query("sync") == "1")
 }
@@ -327,6 +366,18 @@ func (a *App) InboundLinks(c *fiber.Ctx) error {
 	sni := ""
 	if t.CDN {
 		sni = c.Query("sni", "fr1.example.com")
+	}
+	// An add-on inbound points at the add-on's grey or orange name.
+	if t.AddonID != 0 {
+		var ad models.CDNAddon
+		if a.DB.First(&ad, t.AddonID).Error == nil && ad.CFZoneName != "" {
+			if t.Route == models.RouteCDN {
+				host = orchestrator.HostnameFor(ad.CDNPattern, 1, ad.CFZoneName)
+			} else {
+				host = orchestrator.HostnameFor(ad.DirectPattern, 1, ad.CFZoneName)
+			}
+			sni = host
+		}
 	}
 	links, err := linkgen.LinksVia(t.Protocol, t.Settings, t.StreamSettings, host, sni, t.Port, t.Remark)
 	if err != nil {

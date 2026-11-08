@@ -24,6 +24,7 @@ const items = [
   { key: '/providers', icon: <ApiOutlined />, label: 'ارائه‌دهنده‌ها' },
   { key: '/cloudflare', icon: <CloudOutlined />, label: 'دامنه‌ها (کلودفلر)' },
   { key: '/clean-ips', icon: <ThunderboltOutlined />, label: 'IP تمیز' },
+  { key: '/cdn-addon', icon: <AppstoreOutlined />, label: 'افزونه CDN' },
   { key: '/jobs', icon: <UnorderedListOutlined />, label: 'کارها' },
   { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
 ]
@@ -111,3 +112,4 @@ export function AppLayout({ children, onLogout }: { children: ReactNode; onLogou
     </Layout>
   )
 }
+

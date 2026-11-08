@@ -291,12 +291,45 @@ func LinksVia(protocol, settingsJSON, streamJSON, host, sniHost string, port int
 			}
 			cred := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + password))
 			u = "ss://" + cred + "@" + addr + "#" + url.PathEscape(label)
+		case "hysteria":
+			u = hysteria2Link(c, stream, addr, sniHost, label)
 		default:
 			return nil, fmt.Errorf("links for protocol %q are not supported", protocol)
 		}
 		out = append(out, Link{Email: email, URL: u})
 	}
 	return out, nil
+}
+
+// hysteria2Link is the hysteria2:// share link of an Xray hysteria (v2)
+// inbound: the client's auth, TLS SNI/ALPN and, with a Salamander
+// FinalMask, the obfs password.
+func hysteria2Link(c obj, stream obj, addr, sniHost, label string) string {
+	q := url.Values{}
+	t := sub(stream, "tlsSettings")
+	if sni := firstNonEmpty(str(t, "serverName"), sniHost); sni != "" {
+		q.Set("sni", sni)
+	}
+	q.Set("alpn", firstNonEmpty(joinList(t, "alpn"), "h3"))
+	if pw := salamander(stream); pw != "" {
+		q.Set("obfs", "salamander")
+		q.Set("obfs-password", pw)
+	}
+	q.Set("insecure", "0")
+	auth := firstNonEmpty(str(c, "auth"), str(c, "password"))
+	return "hysteria2://" + url.PathEscape(auth) + "@" + addr + "/?" + q.Encode() + "#" + url.PathEscape(label)
+}
+
+// salamander is the Salamander FinalMask password of a stream ("" without).
+func salamander(stream obj) string {
+	if arr, ok := sub(stream, "finalmask")["udp"].([]any); ok {
+		for _, m := range arr {
+			if mm, ok := m.(obj); ok && str(mm, "type") == "salamander" {
+				return str(mm, "settings", "password")
+			}
+		}
+	}
+	return ""
 }
 
 func firstNonEmpty(v ...string) string {
@@ -367,6 +400,8 @@ func PrepareSettings(protocol, settingsJSON string, count int, emailPrefix strin
 		case "shadowsocks":
 			c["method"] = str(settings, "method")
 			c["password"] = randHex(16)
+		case "hysteria":
+			c["auth"] = randHex(16)
 		default:
 			return "", fmt.Errorf("cannot generate clients for %q", protocol)
 		}
@@ -427,6 +462,21 @@ func PrepareStream(streamJSON string) (string, error) {
 			r["shortIds"] = []any{randHex(4)}
 		}
 		stream["realitySettings"] = r
+	}
+	// A Salamander FinalMask (Hysteria2) without a password gets one, shared
+	// by every server like the Reality keys.
+	if fm, ok := stream["finalmask"].(obj); ok {
+		if arr, ok := fm["udp"].([]any); ok {
+			for _, m := range arr {
+				if mm, ok := m.(obj); ok && str(mm, "type") == "salamander" {
+					st := sub(mm, "settings")
+					if str(st, "password") == "" {
+						st["password"] = randHex(16)
+					}
+					mm["settings"] = st
+				}
+			}
+		}
 	}
 	return marshal(stream)
 }

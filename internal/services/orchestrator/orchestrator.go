@@ -115,6 +115,13 @@ type Destination interface {
 	DeleteAddress(ctx context.Context, address string) error
 }
 
+// HostDestination is the optional by-SNI/Host surface of a destination,
+// used for the CDN add-on's clean-IP configs.
+type HostDestination interface {
+	SetActiveHost(ctx context.Context, host string, active bool) error
+	DeleteHost(ctx context.Context, host string) error
+}
+
 func New(db *gorm.DB, st *settings.Store, key *sshx.Keypair, engine *jobs.Engine) *Orchestrator {
 	o := &Orchestrator{DB: db, Settings: st, Key: key, Engine: engine, SSHWait: 10 * time.Minute, RetryDelay: 20 * time.Second}
 	o.Provider = func(acc *models.ProviderAccount) (providers.Provider, error) {

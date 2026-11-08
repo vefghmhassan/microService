@@ -73,37 +73,58 @@ var hostnameMu sync.Mutex
 // replacement in the same zone and pattern takes over the replaced server's
 // name, so the record simply moves to the new IP; anything else gets the
 // lowest number no live server of the zone holds.
+//
+// A server with the CDN add-on gets a second, proxied name from CDNPattern
+// with the same number (d3 and c3); a number is only used when both are free.
 func (o *Orchestrator) assignHostname(r *jobs.Run, s *models.Server, replaceID uint) {
-	if !s.DNS.On() || s.Hostname != "" {
+	wantCDN := s.CDNPattern != ""
+	if !s.DNS.On() || (s.Hostname != "" && (!wantCDN || s.CDNHostname != "")) {
 		return
 	}
 	hostnameMu.Lock()
 	defer hostnameMu.Unlock()
-	if replaceID != 0 {
+	if replaceID != 0 && s.Hostname == "" {
 		var old models.Server
 		if o.DB.First(&old, replaceID).Error == nil && old.Hostname != "" &&
-			old.CFZoneID == s.CFZoneID && old.DNSPattern == s.DNSPattern {
+			old.CFZoneID == s.CFZoneID && old.DNSPattern == s.DNSPattern &&
+			(!wantCDN || (old.CDNPattern == s.CDNPattern && old.CDNHostname != "")) {
 			s.Hostname = old.Hostname
-			o.save(r, s, "hostname")
-			r.Info("takes over %s from %s", s.Hostname, old.Name)
+			if wantCDN {
+				s.CDNHostname = old.CDNHostname
+			}
+			o.save(r, s, "hostname", "cdn_hostname")
+			r.Info("takes over %s from %s", strings.TrimSuffix(s.Hostname+" + "+s.CDNHostname, " + "), old.Name)
 			return
 		}
 	}
-	var taken []string
-	o.DB.Model(&models.Server{}).Where("cf_zone_id = ? AND id <> ? AND status <> ? AND hostname <> ''", s.CFZoneID, s.ID, models.ServerDeleted).
-		Pluck("hostname", &taken)
+	type names struct{ Hostname, CDNHostname string }
+	var taken []names
+	o.DB.Model(&models.Server{}).Where("cf_zone_id = ? AND id <> ? AND status <> ?", s.CFZoneID, s.ID, models.ServerDeleted).
+		Select("hostname", "cdn_hostname").Scan(&taken)
 	used := map[string]bool{}
 	for _, h := range taken {
-		used[h] = true
+		used[h.Hostname], used[h.CDNHostname] = true, true
 	}
+	delete(used, "")
 	for n := 1; ; n++ {
-		if h := HostnameFor(s.DNSPattern, n, s.CFZoneName); !used[h] {
-			s.Hostname = h
-			break
+		direct := HostnameFor(s.DNSPattern, n, s.CFZoneName)
+		if s.Hostname == "" && used[direct] {
+			continue
 		}
+		cdn := ""
+		if wantCDN {
+			if cdn = HostnameFor(s.CDNPattern, n, s.CFZoneName); used[cdn] || cdn == direct {
+				continue
+			}
+		}
+		if s.Hostname == "" {
+			s.Hostname = direct
+		}
+		s.CDNHostname = cdn
+		break
 	}
-	o.save(r, s, "hostname")
-	r.Info("hostname %s", s.Hostname)
+	o.save(r, s, "hostname", "cdn_hostname")
+	r.Info("hostname %s", strings.TrimSuffix(s.Hostname+" + "+s.CDNHostname, " + "))
 }
 
 func (o *Orchestrator) dnsAPI(accountID uint) (DNSAPI, error) {
@@ -143,19 +164,58 @@ func (o *Orchestrator) syncDNS(ctx context.Context, r *jobs.Run, s *models.Serve
 		r.Info("DNS: %s %s → %s", cloudflare.AddrType(ip), s.Hostname, ip)
 	}
 	o.save(r, s, "dns_record_id", "dns_error")
+	if cerr := o.syncCDNDNS(ctx, r, s); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// syncCDNDNS points the CDN add-on's proxied name at the server's IP.
+func (o *Orchestrator) syncCDNDNS(ctx context.Context, r *jobs.Run, s *models.Server) error {
+	ip := s.PublicIP()
+	if s.CDNHostname == "" || ip == "" {
+		return nil
+	}
+	err := func() error {
+		api, err := o.dnsAPI(s.CFAccountID)
+		if err != nil {
+			return err
+		}
+		id, err := api.UpsertAddr(ctx, s.CFZoneID, s.CDNHostname, ip, true)
+		if id != "" {
+			s.CDNRecordID = id
+		}
+		return err
+	}()
+	if err != nil {
+		s.CDNDNSError = truncate(err.Error(), 255)
+		r.Logf("warn", "DNS %s → %s (proxied): %v", s.CDNHostname, ip, err)
+	} else {
+		s.CDNDNSError = ""
+		r.Info("DNS: %s %s → %s (proxied)", cloudflare.AddrType(ip), s.CDNHostname, ip)
+	}
+	o.save(r, s, "cdn_record_id", "cdn_dns_error")
 	return err
 }
 
 // removeDNS deletes a deleted server's record, unless another live server
 // has taken the name over or the record already points elsewhere.
 func (o *Orchestrator) removeDNS(ctx context.Context, r *jobs.Run, s *models.Server) {
-	if s.Hostname == "" || s.CFZoneID == "" {
+	if s.CFZoneID == "" {
 		return
 	}
+	for _, name := range []string{s.Hostname, s.CDNHostname} {
+		if name != "" {
+			o.removeRecord(ctx, r, s, name)
+		}
+	}
+}
+
+func (o *Orchestrator) removeRecord(ctx context.Context, r *jobs.Run, s *models.Server, name string) {
 	var n int64
-	o.DB.Model(&models.Server{}).Where("hostname = ? AND id <> ? AND status <> ?", s.Hostname, s.ID, models.ServerDeleted).Count(&n)
+	o.DB.Model(&models.Server{}).Where("(hostname = ? OR cdn_hostname = ?) AND id <> ? AND status <> ?", name, name, s.ID, models.ServerDeleted).Count(&n)
 	if n > 0 {
-		r.Info("DNS: %s now belongs to another server; kept", s.Hostname)
+		r.Info("DNS: %s now belongs to another server; kept", name)
 		return
 	}
 	api, err := o.dnsAPI(s.CFAccountID)
@@ -165,9 +225,9 @@ func (o *Orchestrator) removeDNS(ctx context.Context, r *jobs.Run, s *models.Ser
 	}
 	var recs []cloudflare.Record
 	for _, typ := range []string{"A", "AAAA"} {
-		rs, err := api.Records(ctx, s.CFZoneID, typ, s.Hostname)
+		rs, err := api.Records(ctx, s.CFZoneID, typ, name)
 		if err != nil {
-			r.Logf("warn", "DNS %s: %v", s.Hostname, err)
+			r.Logf("warn", "DNS %s: %v", name, err)
 			return
 		}
 		recs = append(recs, rs...)
@@ -177,9 +237,9 @@ func (o *Orchestrator) removeDNS(ctx context.Context, r *jobs.Run, s *models.Ser
 			continue
 		}
 		if err := api.DeleteRecord(ctx, s.CFZoneID, rec.ID); err != nil {
-			r.Logf("warn", "DNS: delete %s: %v", s.Hostname, err)
+			r.Logf("warn", "DNS: delete %s: %v", name, err)
 		} else {
-			r.Info("DNS: %s removed", s.Hostname)
+			r.Info("DNS: %s removed", name)
 		}
 	}
 }
@@ -211,7 +271,12 @@ func (o *Orchestrator) pushCert(ctx context.Context, r *jobs.Run, s *models.Serv
 	if s.XUIPort == 0 {
 		return nil
 	}
+	return o.setPanelCert(ctx, r, s, remote)
+}
 
+// setPanelCert serves the 3x-ui panel with the certificate already copied
+// to the server, falling back to http if it does not come up over https.
+func (o *Orchestrator) setPanelCert(ctx context.Context, r *jobs.Run, s *models.Server, remote Remote) error {
 	// The panel reads its certificate at start, so it is restarted either way.
 	panel := o.PanelFor(s, remote)
 	cmd := fmt.Sprintf("/usr/local/x-ui/x-ui cert -webCert %s -webCertKey %s >/dev/null 2>&1 && (x-ui restart >/dev/null 2>&1 || systemctl restart x-ui)", CertFile, KeyFile)

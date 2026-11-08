@@ -227,6 +227,50 @@ func (v *VPNPanel) SetActive(ctx context.Context, address string, active bool) e
 	return nil
 }
 
+// ErrNoHostRoute means vpn-pannel has no by-host routes yet (an older
+// version); nothing was changed.
+var ErrNoHostRoute = errors.New("vpn-pannel has no by-host route (update vpn-pannel)")
+
+// SetActiveHost enables or disables every config whose SNI/Host is host:
+// the CDN add-on's clean-IP configs, whose addresses are shared by every
+// server. They use their own routes, so an older vpn-pannel answers 404
+// (ErrNoHostRoute) instead of matching anything by an empty address.
+func (v *VPNPanel) SetActiveHost(ctx context.Context, host string, active bool) error {
+	return v.byHost(ctx, "/admin/v2ray/bulk-active-by-host", map[string]any{"host": host, "active": fmt.Sprint(active)})
+}
+
+// DeleteHost removes every config whose SNI/Host is host (see SetActiveHost).
+func (v *VPNPanel) DeleteHost(ctx context.Context, host string) error {
+	return v.byHost(ctx, "/admin/v2ray/bulk-delete-by-host", map[string]any{"host": host})
+}
+
+func (v *VPNPanel) byHost(ctx context.Context, path string, body map[string]any) error {
+	if h, _ := body["host"].(string); strings.TrimSpace(h) == "" {
+		return errors.New("empty host")
+	}
+	payload, _ := json.Marshal(body)
+	resp, out, err := v.do(ctx, func(tok string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.BaseURL+path, bytes.NewReader(payload))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Authorization", "Bearer "+tok)
+		return req, nil
+	})
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		return ErrNoHostRoute
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("vpn-pannel %s: HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // DeleteAddress removes every config on an address. A vpn-pannel without the
 // bulk-delete route (404) gets them deactivated instead, so none stay live.
 func (v *VPNPanel) DeleteAddress(ctx context.Context, address string) error {

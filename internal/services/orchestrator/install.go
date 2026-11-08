@@ -135,6 +135,12 @@ func (o *Orchestrator) waitPanel(ctx context.Context, r *jobs.Run, s *models.Ser
 // installPanel installs (or reinstalls at another version) 3x-ui and stores
 // the credentials and API token it ends up with.
 func (o *Orchestrator) installPanel(ctx context.Context, r *jobs.Run, s *models.Server, remote Remote, version string) error {
+	return o.installPanelOpts(ctx, r, s, remote, version, false)
+}
+
+// installPanelOpts is installPanel; keepLocal leaves the panel on localhost
+// so the caller can put its certificate in place before opening it.
+func (o *Orchestrator) installPanelOpts(ctx context.Context, r *jobs.Run, s *models.Server, remote Remote, version string, keepLocal bool) error {
 	version = firstNonEmpty(version, s.WantPanelVer, o.Settings.Get(settings.XUIVersion))
 	if s.XUIPort == 0 {
 		s.XUIPort = int(randomInt(20000, 60000))
@@ -201,7 +207,11 @@ func (o *Orchestrator) installPanel(ctx context.Context, r *jobs.Run, s *models.
 		s.XUIScheme = "https"
 	}
 
-	if err := o.setPanelListen(ctx, r, s, remote, o.Settings.Bool(settings.XUIPublic)); err != nil {
+	public := o.Settings.Bool(settings.XUIPublic)
+	if keepLocal {
+		public = false
+	}
+	if err := o.setPanelListen(ctx, r, s, remote, public); err != nil {
 		r.Logf("warn", "%v", err)
 	}
 

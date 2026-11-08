@@ -176,7 +176,9 @@ func (o *Orchestrator) tryLocation(ctx context.Context, r *jobs.Run, loc *models
 			Status:  models.ServerCreating, SyncStatus: models.SyncPending, XUIScheme: "http",
 			LocationID: loc.ID, IPFamily: models.NormFamily(family),
 		}
-		if loc.DNS.On() {
+		if a := o.locationAddon(loc); a != nil {
+			ApplyAddon(s, a)
+		} else if loc.DNS.On() {
 			s.DNS = loc.DNS
 		}
 		if err := o.DB.Create(s).Error; err != nil {
