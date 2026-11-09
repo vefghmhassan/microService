@@ -38,6 +38,11 @@ func (e *APIError) Error() string {
 }
 
 func (c *restClient) do(ctx context.Context, method, path string, in, out any) error {
+	return c.doH(ctx, method, path, nil, in, out)
+}
+
+// doH is do with extra request headers (e.g. an idempotency key).
+func (c *restClient) doH(ctx context.Context, method, path string, hdr map[string]string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -54,6 +59,9 @@ func (c *restClient) do(ctx context.Context, method, path string, in, out any) e
 	req.Header.Set("Accept", "application/json")
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range hdr {
+		req.Header.Set(k, v)
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

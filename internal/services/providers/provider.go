@@ -209,8 +209,9 @@ func isNotFound(err error) bool { return errors.Is(err, ErrNotFound) }
 
 // capacityHints are fragments providers use when an account or location has
 // no room: Hetzner resource_limit_exceeded / resource_unavailable, Vultr
-// "maximum", DigitalOcean "droplet limit", OVH "quota", Linode "limit".
-var capacityHints = []string{"limit", "unavailable", "quota", "maximum", "insufficient", "capacity", "no available"}
+// "maximum", DigitalOcean "droplet limit", OVH "quota", Linode "limit",
+// X-ZoneServers LOCATION_SOLD_OUT.
+var capacityHints = []string{"limit", "unavailable", "quota", "maximum", "insufficient", "capacity", "no available", "sold out", "sold_out"}
 
 // IsCapacityErr reports whether a create failed because there is no room
 // (account limit, quota, or the location being sold out), as opposed to a
