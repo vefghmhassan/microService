@@ -45,6 +45,9 @@ type Snapshot struct {
 	DirectHost string
 	CDNHost    string
 	AddonHash  string
+	// Hostname is the server's own name (set by For): the SNI of its TLS
+	// inbounds, whose links point at the IP.
+	Hostname string
 	// Clean are the clean Cloudflare addresses the add-on inbounds marked
 	// CleanIPs get extra configs for (filled by the caller, see addonClean).
 	Clean []models.CleanIP
@@ -194,6 +197,7 @@ func (snap *Snapshot) For(s *models.Server) *Snapshot {
 		}
 	}
 	out.DirectHost, out.CDNHost, out.AddonHash, out.Clean = "", "", "", nil
+	out.Hostname = s.Hostname
 	if s.CDNAddonID != 0 {
 		out.AddonHash = snap.AddonHashes[s.CDNAddonID]
 		// Every add-on inbound uses the zone certificate and one of the
@@ -213,6 +217,13 @@ func (snap *Snapshot) For(s *models.Server) *Snapshot {
 		}
 	}
 	return &out
+}
+
+// knownXray reports whether a version 3x-ui reports is a real one: while
+// xray is down it says "Unknown", and storing that would drop every
+// xray-26-only inbound (Hysteria2) from the server on the next sync.
+func knownXray(version string) bool {
+	return XrayAtLeast(version, 1)
 }
 
 // XrayAtLeast reports whether an xray version ("26.1.13", "v25.9.11") has
@@ -239,16 +250,23 @@ func sniHost(t models.InboundTemplate, host string) string {
 	return ""
 }
 
-// target is where t's links point and the SNI/Host they send: an add-on
-// inbound uses the server's grey or orange name, a shared one host.
+// target is where t's links point and the SNI/Host they send. CDN inbounds
+// go through the proxied name. Everything else points at host, the raw IP
+// (LinkHost), as 3x-ui-pro-configs does: a filtered domain then takes no
+// direct config down with it. TLS inbounds still send the certificate's name.
 func (snap *Snapshot) target(t models.InboundTemplate, host string) (addr, sni string) {
-	if t.AddonID != 0 {
-		if t.Route == models.RouteCDN {
-			return snap.CDNHost, snap.CDNHost
-		}
-		return snap.DirectHost, ""
+	if t.AddonID != 0 && t.Route == models.RouteCDN {
+		return snap.CDNHost, snap.CDNHost
 	}
-	return host, sniHost(t, host)
+	if t.AddonID == 0 && t.CDN {
+		if name := sniHost(t, snap.Hostname); name != "" {
+			return name, name
+		}
+	}
+	if linkgen.Security(t.StreamSettings) == "tls" {
+		sni = firstNonEmpty(snap.DirectHost, snap.Hostname)
+	}
+	return host, sni
 }
 
 // canonical re-encodes JSON so whitespace and key order do not count as drift.

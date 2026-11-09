@@ -28,12 +28,12 @@ func TestPanelHostsLikeTheScript(t *testing.T) {
 	}
 
 	if got := hostRemarks(panelHosts(ns, s, ins["Reality"], 1, false)); got !=
-		"⚡ Reality · Main@d1.example.com|sni=|host=|frag=n\n6️⃣ Reality · IPv6@2a01::5|sni=|host=|frag=n" {
+		"⚡ Reality · Main@5.5.5.5|sni=|host=|frag=n\n6️⃣ Reality · IPv6@2a01::5|sni=|host=|frag=n" {
 		t.Fatalf("reality:\n%s", got)
 	}
 	if got := hostRemarks(panelHosts(ns, s, ins["TLS"], 2, false)); got !=
-		"🔐 TLS · Main@d1.example.com|sni=d1.example.com|host=|frag=n\n"+
-			"🧩 TLS · Fragment@d1.example.com|sni=d1.example.com|host=|frag=y\n"+
+		"🔐 TLS · Main@5.5.5.5|sni=d1.example.com|host=|frag=n\n"+
+			"🧩 TLS · Fragment@5.5.5.5|sni=d1.example.com|host=|frag=y\n"+
 			"6️⃣ TLS · IPv6@2a01::5|sni=d1.example.com|host=|frag=n" {
 		t.Fatalf("tls:\n%s", got)
 	}
@@ -85,5 +85,28 @@ func TestPanelSubscriptionStaysOffWhenAnInboundHoldsItsPort(t *testing.T) {
 	p := &fakePanel{}
 	if err := o.panelSubscription(context.Background(), nil, s, p, p, snap); err == nil || p.settings != nil {
 		t.Fatalf("subscription turned on over an inbound: %v %v", err, p.settings)
+	}
+}
+
+func TestKnownXrayIgnoresUnknown(t *testing.T) {
+	for v, want := range map[string]bool{"26.7.28": true, "v25.9.11": true, "Unknown": false, "": false} {
+		if knownXray(v) != want {
+			t.Fatalf("%q: %t", v, !want)
+		}
+	}
+}
+
+func TestPanelHostsHysteriaNamesItsCertAndIconsAreNotDoubled(t *testing.T) {
+	s := testAddonServer()
+	ns := proSnap().For(s)
+	hy := models.InboundTemplate{Remark: "hysteria2", Protocol: "hysteria", Port: 14443, Enabled: true, AddonID: 1, Route: models.RouteDirect,
+		StreamSettings: `{"network":"hysteria","security":"tls"}`}
+	if got := hostRemarks(panelHosts(ns, s, hy, 4, false)); got != "🚄 hysteria2 · Main@d1.example.com|sni=d1.example.com|host=|frag=n" {
+		t.Fatalf("hysteria:\n%s", got)
+	}
+	r := ns.Inbounds[0]
+	r.Remark = "⚡ Reality Vision"
+	if got := hostRemarks(panelHosts(ns, s, r, 1, false)); got != "⚡ Reality Vision · Main@5.5.5.5|sni=|host=|frag=n" {
+		t.Fatalf("reality:\n%s", got)
 	}
 }

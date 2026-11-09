@@ -91,7 +91,7 @@ func TestSubLinksEveryLiveServer(t *testing.T) {
 		t.Fatalf("%d lines:\n%s", len(lines), raw)
 	}
 	all := string(raw)
-	for _, want := range []string{"@10.0.0.1:443", "@10.0.0.1:8443", "@fr1.example.com:443", "%E2%9B%94"} {
+	for _, want := range []string{"@10.0.0.1:443", "@10.0.0.1:8443", "@10.0.0.2:443", "%E2%9B%94"} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("missing %q in\n%s", want, all)
 		}
@@ -125,7 +125,7 @@ func TestSubJSONAndAddonCleanLinks(t *testing.T) {
 	a.DB.Create(&models.CleanIP{Address: "104.16.1.1", Enabled: true})
 
 	_, all := fetch(t, app, "/sub/secret?raw=1")
-	for _, want := range []string{"@d1.example.com:443", "@c1.example.com:2053", "@104.16.1.1:2053", "sni=c1.example.com", "#d%20%C2%B7%20WS%20104.16.1.1"} {
+	for _, want := range []string{"@10.0.0.4:443", "@c1.example.com:2053", "@104.16.1.1:2053", "sni=c1.example.com", "#d%20%C2%B7%20WS%20104.16.1.1"} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("missing %q in\n%s", want, all)
 		}

@@ -104,14 +104,14 @@ func TestDNSNumbersServersAndUsesHostnameInLinks(t *testing.T) {
 		if ip, _ := cf.get(s.Hostname); ip != s.IPv4 || s.DNSRecordID == "" {
 			t.Fatalf("record %s → %q, server ip %s", s.Hostname, ip, s.IPv4)
 		}
-		if s.UploadedIP != s.Hostname || s.CertNotAfter == nil || s.XUIScheme != "https" {
+		if s.UploadedIP != s.IPv4 || s.CertNotAfter == nil || s.XUIScheme != "https" {
 			t.Fatalf("server %s uploaded=%s cert=%v scheme=%s", s.Name, s.UploadedIP, s.CertNotAfter, s.XUIScheme)
 		}
 	}
 	if certs.calls == 0 {
 		t.Fatal("certificate never requested")
 	}
-	if len(dest.uploads) != 2 || !strings.Contains(dest.uploads[0][0], "@fr1.example.com:443") {
+	if len(dest.uploads) != 2 || !strings.Contains(dest.uploads[0][0], "@"+ss[0].IPv4+":443") {
 		t.Fatalf("uploads %v", dest.uploads)
 	}
 }
@@ -150,8 +150,9 @@ func TestDNSReplacementTakesOverTheRecord(t *testing.T) {
 	if ip, ok := cf.get("fr1.example.com"); !ok || ip != repl.IPv4 {
 		t.Fatalf("record → %q (%t), want %s", ip, ok, repl.IPv4)
 	}
-	// Links were already on the hostname: nothing to move in vpn-pannel.
-	if len(dest.replaced) != 0 || len(dest.uploads) != 1 || repl.UploadedIP != "fr1.example.com" {
+	// Links point at the IP, so vpn-pannel's configs move to the new one.
+	if len(dest.replaced) != 1 || dest.replaced[0][0] != old.IPv4 || dest.replaced[0][1] != repl.IPv4 ||
+		len(dest.uploads) != 1 || repl.UploadedIP != repl.IPv4 {
 		t.Fatalf("replaced=%v uploads=%d uploaded=%s", dest.replaced, len(dest.uploads), repl.UploadedIP)
 	}
 }
@@ -174,8 +175,8 @@ func TestDNSRotationMovesRecordAndDeleteRemovesIt(t *testing.T) {
 	if ip, _ := cf.get(s.Hostname); ip != s.IPv4 {
 		t.Fatalf("record → %s, want %s", ip, s.IPv4)
 	}
-	if len(dest.replaced) != 0 {
-		t.Fatalf("hostname links should need no replace-address: %v", dest.replaced)
+	if len(dest.replaced) != 1 || dest.replaced[0][0] != oldIP || dest.replaced[0][1] != s.IPv4 {
+		t.Fatalf("links on the IP should move to the new one: %v", dest.replaced)
 	}
 
 	j, _ = o.Engine.Enqueue(KindDelete, &s.ID, struct{}{}, "test")
@@ -198,5 +199,30 @@ func TestHostnameForAndPattern(t *testing.T) {
 	}
 	if err := ValidPattern("de-{n}"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSyncMovesHostnameConfigsToTheIP(t *testing.T) {
+	o, _, _, dest, _, _ := setupDNS(t)
+	runAuto(t, o, AutoParams{Count: 1})
+	var s models.Server
+	o.DB.First(&s, "status = ?", models.ServerActive)
+	// Uploaded before links moved from the hostname to the IP.
+	o.DB.Model(&s).Update("uploaded_ip", s.Hostname)
+
+	j, _ := o.Engine.Enqueue(KindSync, &s.ID, struct{}{}, "test")
+	if got := waitJob(t, o, j.ID); got.Status != models.JobDone {
+		t.Fatalf("sync: %s", got.Error)
+	}
+	o.DB.First(&s, s.ID)
+	if len(dest.replaced) != 1 || dest.replaced[0] != [2]string{s.Hostname, s.IPv4} || s.UploadedIP != s.IPv4 {
+		t.Fatalf("replaced=%v uploaded=%s", dest.replaced, s.UploadedIP)
+	}
+
+	// A second sync has nothing left to move.
+	j, _ = o.Engine.Enqueue(KindSync, &s.ID, struct{}{}, "test")
+	waitJob(t, o, j.ID)
+	if len(dest.replaced) != 1 {
+		t.Fatalf("moved again: %v", dest.replaced)
 	}
 }

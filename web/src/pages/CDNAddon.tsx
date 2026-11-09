@@ -86,18 +86,44 @@ function AddonCard({ addon, all, onEdit }: { addon: CDNAddon; all: CDNAddon[]; o
   const addHy = useAction((body: Partial<InboundTemplate>) => post(`/cdn-addons/${addon.id}/inbounds`, { ...body, family: 'both', client_count: 0, sync: true }), {
     success: 'Hysteria2 اضافه شد', invalidate: inv,
   })
+  // Cloudflare proxies HTTPS on six ports only, so not every preset may fit:
+  // add the ones that do and name the rest.
   const addAll = useAction(async () => {
     const taken = [...used]
-    const bodies = addonPresets.map((p) => {
+    const bodies: ReturnType<AddonPreset['build']>[] = []
+    const skipped: string[] = []
+    for (const p of addonPresets) {
       const port = addonPort(p, taken)
-      if (!port) throw new Error(`پورت آزاد برای ${p.title} نیست`)
+      if (!port) {
+        skipped.push(p.title)
+        continue
+      }
       taken.push(port)
-      return p.build(port)
-    })
+      bodies.push(p.build(port))
+    }
+    if (!bodies.length) throw new Error('برای هیچ‌کدام پورت آزاد نماند')
     for (let i = 0; i < bodies.length; i++) {
       await post(`/cdn-addons/${addon.id}/inbounds`, { ...bodies[i], family: 'both', client_count: 0, sync: i === bodies.length - 1 })
     }
-  }, { success: 'همهٔ کانفیگ‌ها اضافه شد', invalidate: inv, onSuccess: () => setPresets(false) })
+    return skipped
+  }, {
+    invalidate: inv,
+    onSuccess: (skipped) => {
+      setPresets(false)
+      if (!skipped.length) {
+        Modal.success({ title: 'همهٔ کانفیگ‌ها اضافه شد' })
+        return
+      }
+      Modal.warning({
+        title: 'بقیهٔ کانفیگ‌ها اضافه شد',
+        content: <>
+          <p>برای این‌ها پورت آزاد نماند و اضافه نشدند:</p>
+          <ul style={{ paddingInlineStart: 18 }}>{skipped.map((t) => <li key={t} dir="ltr">{t}</li>)}</ul>
+          <p>کلودفلر HTTPS را فقط روی ۶ پورت پروکسی می‌کند (443, 2053, 2083, 2087, 2096, 8443) و دو تا برای پنل و ساب رزرو است.</p>
+        </>,
+      })
+    },
+  })
   const host = (p: string) => `${p.replace('{n}', '1')}.${addon.cf_zone_name}`
 
   return (

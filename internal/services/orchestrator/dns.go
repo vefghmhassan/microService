@@ -36,10 +36,11 @@ type CertSource interface {
 	Ensure(ctx context.Context, accountID uint, zoneID, zoneName string, logf func(string, ...any)) (*models.Certificate, bool, error)
 }
 
-// LinkHost is the address a server's links point at: its hostname when it
-// has one, else its IP.
+// LinkHost is the address a server's direct links point at: its IP, the
+// way 3x-ui-pro-configs builds them (a filtered domain would take every
+// config down), else its hostname. CDN links use the proxied name instead.
 func LinkHost(s *models.Server) string {
-	return firstNonEmpty(s.Hostname, s.PublicIP())
+	return firstNonEmpty(s.PublicIP(), s.Hostname)
 }
 
 // HostnameFor turns a pattern like "fr{n}" into fr3.example.com.

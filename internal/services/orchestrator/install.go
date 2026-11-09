@@ -117,7 +117,7 @@ func (o *Orchestrator) waitPanel(ctx context.Context, r *jobs.Run, s *models.Ser
 	for {
 		st, err := panel.Status(ctx)
 		if err == nil {
-			if st.Xray.Version != "" {
+			if knownXray(st.Xray.Version) {
 				s.XrayVersion = st.Xray.Version
 				o.save(r, s, "xray_version")
 			}

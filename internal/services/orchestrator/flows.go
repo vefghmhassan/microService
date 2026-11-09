@@ -648,12 +648,19 @@ func (o *Orchestrator) applyWith(ctx context.Context, r *jobs.Run, s *models.Ser
 		return err
 	}
 	panel := o.PanelFor(s, remote)
+	// What goes on the server depends on its xray (Hysteria2 needs 26+):
+	// learn the version first when none is known yet.
+	if !knownXray(s.XrayVersion) {
+		if st, err := panel.Status(ctx); err == nil && knownXray(st.Xray.Version) {
+			s.XrayVersion = st.Xray.Version
+		}
+	}
 	if err := Apply(ctx, panel, snap.For(s), r.Info); err != nil {
 		s.SyncStatus = models.SyncFailed
 		o.save(r, s, "sync_status")
 		return err
 	}
-	if st, err := panel.Status(ctx); err == nil && st.Xray.Version != "" {
+	if st, err := panel.Status(ctx); err == nil && knownXray(st.Xray.Version) {
 		s.XrayVersion = st.Xray.Version
 	}
 	if _, err := remote.Run(ctx, "bash -c "+sshx.ShellQuote(hostTuningScript(snap.For(s))), nil); err != nil {
@@ -688,7 +695,18 @@ func (o *Orchestrator) sync(ctx context.Context, r *jobs.Run) error {
 	if err := o.ensureAddonXray(ctx, r, s, remote); err != nil {
 		r.Logf("warn", "%v", err)
 	}
-	return o.applyWith(ctx, r, s, remote)
+	if err := o.applyWith(ctx, r, s, remote); err != nil {
+		return err
+	}
+	// Configs uploaded while links still pointed at the hostname move to
+	// the IP the links use now.
+	if s.UploadedIP != "" && s.UploadedIP != LinkHost(s) {
+		r.Step("move vpn-pannel configs")
+		if err := o.moveDestination(ctx, r, s, s.UploadedIP); err != nil {
+			r.Logf("warn", "vpn-pannel: %v", err)
+		}
+	}
+	return nil
 }
 
 func (o *Orchestrator) syncAll(ctx context.Context, r *jobs.Run) error {
@@ -931,7 +949,7 @@ func (o *Orchestrator) xrayVersion(ctx context.Context, r *jobs.Run) error {
 	if err := panel.InstallXray(ctx, version); err != nil {
 		return err
 	}
-	if st, err := panel.Status(ctx); err == nil {
+	if st, err := panel.Status(ctx); err == nil && knownXray(st.Xray.Version) {
 		s.XrayVersion = st.Xray.Version
 	} else {
 		s.XrayVersion = strings.TrimPrefix(version, "v")

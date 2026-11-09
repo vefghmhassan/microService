@@ -112,6 +112,9 @@ func TestXZoneCreatePaysUnsettledDocument(t *testing.T) {
 	if got := strings.Join(f.calls, "\n"); got != want {
 		t.Fatalf("calls:\n%s\nwant:\n%s", got, want)
 	}
+	if f.order["withdrawalWaiverAccepted"] != true || f.order["acceptTerms"] != true {
+		t.Fatalf("order must accept terms and the withdrawal waiver: %v", f.order)
+	}
 	if f.idemKey == "" {
 		t.Fatal("no Idempotency-Key header")
 	}

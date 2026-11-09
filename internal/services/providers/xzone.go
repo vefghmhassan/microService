@@ -287,6 +287,11 @@ func (x *XZone) Create(ctx context.Context, req CreateRequest) (*Instance, error
 		"billingCycle":  "hourly",
 		"hostname":      sanitizeLabel(req.Name),
 		"configOptions": cfg,
+		// The operator refuses orders (400 WITHDRAWAL_WAIVER_REQUIRED) unless
+		// the buyer accepts that an hourly server starts at once, waiving the
+		// right of withdrawal; the panel owner agrees by choosing this provider.
+		"acceptTerms":              true,
+		"withdrawalWaiverAccepted": true,
 	}
 	if req.Region != "" {
 		body["location"] = req.Region

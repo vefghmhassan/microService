@@ -187,7 +187,7 @@ func TestAddonServerGetsTwoRecordsAndSSLBeforeTheInstall(t *testing.T) {
 		t.Fatalf("uploads %v", dest.uploads)
 	}
 	joined := strings.Join(dest.uploads[0], "\n")
-	if !strings.Contains(joined, "@d1.example.com:443") || !strings.Contains(joined, "@c1.example.com:2053") ||
+	if !strings.Contains(joined, "@10.0.0.1:443") || !strings.Contains(joined, "@c1.example.com:2053") ||
 		!strings.Contains(joined, "sni=c1.example.com") {
 		t.Fatalf("uploaded %s", joined)
 	}

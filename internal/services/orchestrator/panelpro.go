@@ -9,6 +9,8 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"microserver/internal/jobs"
 	"microserver/internal/models"
@@ -60,6 +62,14 @@ func panelHosts(snap *Snapshot, s *models.Server, t models.InboundTemplate, id i
 	row := func(remark, addr string) xui.HostGroup {
 		return xui.HostGroup{InboundIDs: []int{id}, Hosts: []string{addr}, Remark: remark, Tags: []string{HostTag}, Security: "same"}
 	}
+	// A remark that already starts with its own symbol ("⚡ Reality") keeps
+	// it instead of getting a second one.
+	name := func(icon, suffix string) string {
+		if r, _ := utf8.DecodeRuneInString(t.Remark); r != utf8.RuneError && !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			return t.Remark + " · " + suffix
+		}
+		return icon + " " + t.Remark + " · " + suffix
+	}
 	addr, sni := snap.target(t, LinkHost(s))
 	if addr == "" {
 		return nil
@@ -77,7 +87,7 @@ func panelHosts(snap *Snapshot, s *models.Server, t models.InboundTemplate, id i
 	var out []xui.HostGroup
 	switch {
 	case cdn:
-		h := row("☁️ "+t.Remark+" · CDN", addr)
+		h := row(name("☁️", "CDN"), addr)
 		h.Sni, h.HostHeader, h.FinalMask = sni, sni, fragMask
 		out = append(out, h)
 		if withClean {
@@ -88,24 +98,26 @@ func panelHosts(snap *Snapshot, s *models.Server, t models.InboundTemplate, id i
 			}
 		}
 	case t.Protocol == "hysteria":
-		h := row("🚄 "+t.Remark+" · Main", addr)
+		// 3x-ui's hysteria2 link ignores the row's SNI, so it points at the
+		// certificate's name: an IP would leave the client nothing to verify.
+		h := row(name("🚄", "Main"), firstNonEmpty(sni, addr))
 		h.Sni = sni
 		out = append(out, h)
 	case tls:
-		h := row("🔐 "+t.Remark+" · Main", addr)
+		h := row(name("🔐", "Main"), addr)
 		h.Sni = sni
-		f := row("🧩 "+t.Remark+" · Fragment", addr)
+		f := row(name("🧩", "Fragment"), addr)
 		f.Sni, f.FinalMask = sni, fragMask
 		out = append(out, h, f)
 		if v6 != "" {
-			x := row("6️⃣ "+t.Remark+" · IPv6", v6)
+			x := row(name("6️⃣", "IPv6"), v6)
 			x.Sni = sni
 			out = append(out, x)
 		}
 	default:
-		out = append(out, row("⚡ "+t.Remark+" · Main", addr))
+		out = append(out, row(name("⚡", "Main"), addr))
 		if v6 != "" {
-			out = append(out, row("6️⃣ "+t.Remark+" · IPv6", v6))
+			out = append(out, row(name("6️⃣", "IPv6"), v6))
 		}
 	}
 	for i := range out {
