@@ -252,11 +252,15 @@ type Server struct {
 	UploadedAt   *time.Time `json:"uploaded_at"`
 	// UploadedIP is the address the links in vpn-pannel point at: the IP, or
 	// the hostname when the server has one.
-	UploadedIP    string     `gorm:"size:255" json:"uploaded_ip"`
-	LastCheckAt   *time.Time `json:"last_check_at"`
-	LastCheckOK   *bool      `json:"last_check_ok"`
-	LastCheckNote string     `gorm:"size:255" json:"last_check_note"`
-	RotateCount   int        `json:"rotate_count"`
+	UploadedIP string `gorm:"size:255" json:"uploaded_ip"`
+	// UploadedInbounds lists the template inbound IDs (comma separated) whose
+	// links are in vpn-pannel now, so one removed or disabled later can be
+	// told apart and taken out.
+	UploadedInbounds string     `gorm:"size:1024" json:"-"`
+	LastCheckAt      *time.Time `json:"last_check_at"`
+	LastCheckOK      *bool      `json:"last_check_ok"`
+	LastCheckNote    string     `gorm:"size:255" json:"last_check_note"`
+	RotateCount      int        `json:"rotate_count"`
 	// Traffic and online users as last read from 3x-ui (all inbounds).
 	TrafficUp   int64      `json:"traffic_up"`
 	TrafficDown int64      `json:"traffic_down"`

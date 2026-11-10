@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -745,6 +747,11 @@ func (o *Orchestrator) sync(ctx context.Context, r *jobs.Run) error {
 			r.Logf("warn", "vpn-pannel: %v", err)
 		}
 	}
+	if err := o.reconcileUploads(ctx, r, s); err != nil {
+		s.SyncStatus = models.SyncFailed
+		o.save(r, s, "sync_status")
+		return fmt.Errorf("vpn-pannel: %w", err)
+	}
 	return nil
 }
 
@@ -855,7 +862,105 @@ func (o *Orchestrator) uploadTo(ctx context.Context, r *jobs.Run, s *models.Serv
 	}
 	now := time.Now()
 	s.UploadedIP, s.UploadedAt = LinkHost(s), &now
-	o.save(r, s, "uploaded_ip", "uploaded_at")
+	s.UploadedInbounds = joinIDs(uploadIDs(us))
+	o.save(r, s, "uploaded_ip", "uploaded_at", "uploaded_inbounds")
+	return nil
+}
+
+// uploadIDs are the IDs of the inbounds whose links go to vpn-pannel.
+func uploadIDs(snap *Snapshot) map[uint]bool {
+	ids := map[uint]bool{}
+	for _, t := range snap.Inbounds {
+		if t.Enabled && t.Upload {
+			ids[t.ID] = true
+		}
+	}
+	return ids
+}
+
+func joinIDs(ids map[uint]bool) string {
+	list := make([]int, 0, len(ids))
+	for id := range ids {
+		list = append(list, int(id))
+	}
+	sort.Ints(list)
+	parts := make([]string, len(list))
+	for i, id := range list {
+		parts[i] = strconv.Itoa(id)
+	}
+	return strings.Join(parts, ",")
+}
+
+func splitIDs(v string) map[uint]bool {
+	ids := map[uint]bool{}
+	for _, p := range strings.Split(v, ",") {
+		if n, err := strconv.Atoi(strings.TrimSpace(p)); err == nil && n > 0 {
+			ids[uint(n)] = true
+		}
+	}
+	return ids
+}
+
+// reconcileUploads takes inbounds that were removed from the template (or
+// disabled, or unmarked for upload) out of vpn-pannel. vpn-pannel cannot
+// delete one config, so the server's address is cleared and what is still
+// wanted goes up again. A server whose uploaded set is unknown (uploaded
+// before this was tracked) is left alone.
+func (o *Orchestrator) reconcileUploads(ctx context.Context, r *jobs.Run, s *models.Server) error {
+	if s.UploadedAt == nil || s.UploadedIP == "" || s.UploadedInbounds == "" {
+		return nil
+	}
+	dests := o.Dests()
+	if len(dests) == 0 {
+		return nil
+	}
+	snap, err := LoadSnapshot(o.DB)
+	if err != nil {
+		return err
+	}
+	wanted := uploadIDs(o.forUpload(snap, s))
+	keep := map[uint]bool{}
+	removed := 0
+	for id := range splitIDs(s.UploadedInbounds) {
+		if wanted[id] {
+			keep[id] = true
+		} else {
+			removed++
+		}
+	}
+	if removed == 0 {
+		return nil
+	}
+	r.Step("remove dropped inbounds from vpn-pannel")
+	r.Info("%d inbound(s) left the template; clearing %s in vpn-pannel", removed, s.UploadedIP)
+	var errs []error
+	for _, d := range dests {
+		if err := d.DeleteAddress(ctx, s.UploadedIP); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", d.Name, err))
+			continue
+		}
+		if hd, ok := d.Destination.(HostDestination); ok && s.CDNHostname != "" {
+			if err := hd.DeleteHost(ctx, s.CDNHostname); err != nil && !errors.Is(err, destination.ErrNoHostRoute) {
+				r.Logf("warn", "%s: clean-IP configs: %v", d.Name, err)
+			}
+		}
+	}
+	if len(errs) > 0 {
+		// The old set may still be there; the stored list stays, so the
+		// next sync tries again.
+		return errors.Join(errs...)
+	}
+	if len(keep) == 0 {
+		s.UploadedInbounds = ""
+		o.save(r, s, "uploaded_inbounds")
+		r.Info("no inbound is marked for upload any more; vpn-pannel cleared")
+		return nil
+	}
+	if err := o.uploadTo(ctx, r, s, "", dests, keep); err != nil {
+		// Cleared but not re-sent: keep the old list so the next sync
+		// uploads again instead of thinking nothing changed.
+		return fmt.Errorf("re-upload after removal: %w", err)
+	}
 	return nil
 }
 
