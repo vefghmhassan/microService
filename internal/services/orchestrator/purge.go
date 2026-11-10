@@ -18,6 +18,34 @@ type PurgeParams struct {
 	AccountID uint `json:"account_id"`
 }
 
+// CancelServerJobs cancels the queued and running jobs of the given servers,
+// except those of kind keep.
+func (o *Orchestrator) CancelServerJobs(serverIDs []uint, keep string) {
+	if len(serverIDs) == 0 {
+		return
+	}
+	var active []models.Job
+	o.DB.Where("server_id IN ? AND status IN ? AND kind <> ?", serverIDs, []string{models.JobQueued, models.JobRunning}, keep).Find(&active)
+	for _, j := range active {
+		_ = o.Engine.Cancel(j.ID)
+	}
+}
+
+// DeleteServer queues the deletion of a server. Whatever else is queued or
+// running on it is canceled first, so a job stuck on a server that is already
+// gone (deleted in the provider's console) cannot hold the deletion back, and
+// asking twice does not queue it twice.
+func (o *Orchestrator) DeleteServer(serverID uint, source string) (*models.Job, error) {
+	o.CancelServerJobs([]uint{serverID}, KindDelete)
+	var pending []models.Job
+	o.DB.Where("server_id = ? AND kind = ? AND status IN ?", serverID, KindDelete, []string{models.JobQueued, models.JobRunning}).
+		Order("id").Limit(1).Find(&pending)
+	if len(pending) > 0 {
+		return &pending[0], nil
+	}
+	return o.Engine.Enqueue(KindDelete, &serverID, struct{}{}, source)
+}
+
 // purgeProvider removes a provider account and everything built with it:
 // each server is deleted at the provider when its API still answers, its DNS
 // record and vpn-pannel configs are removed, and then the rows go. The API is
@@ -40,14 +68,8 @@ func (o *Orchestrator) purgeProvider(ctx context.Context, r *jobs.Run) error {
 	for i := range servers {
 		ids = append(ids, servers[i].ID)
 	}
-	if len(ids) > 0 {
-		// Nothing else may keep working on these servers.
-		var active []models.Job
-		o.DB.Where("server_id IN ? AND status IN ?", ids, []string{models.JobQueued, models.JobRunning}).Find(&active)
-		for _, j := range active {
-			_ = o.Engine.Cancel(j.ID)
-		}
-	}
+	// Nothing else may keep working on these servers.
+	o.CancelServerJobs(ids, "")
 
 	prov, perr := o.Provider(&acc)
 	if perr != nil {

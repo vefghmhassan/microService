@@ -414,7 +414,15 @@ func (m *Manager) callback(ctx context.Context, b *tg.Bot, u *tgm.Update) {
 			{Text: "انصراف", CallbackData: fmt.Sprintf("srv:%d", id)},
 		}})
 	case "delok":
-		enqueue(orchestrator.KindDelete, struct{}{}, "🗑 حذف در صف قرار گرفت.")
+		if m.Orch == nil {
+			enqueue(orchestrator.KindDelete, struct{}{}, "🗑 حذف در صف قرار گرفت.")
+			return
+		}
+		if _, err := m.Orch.DeleteServer(id, "telegram"); err != nil {
+			m.send(ctx, b, chat, "خطا: "+html.EscapeString(err.Error()), nil)
+			return
+		}
+		m.send(ctx, b, chat, "🗑 حذف در صف قرار گرفت.", nil)
 	case "new":
 		var a models.ProviderAccount
 		if m.DB.First(&a, id).Error != nil {

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -112,11 +113,41 @@ func (f *fakeProvider) ReleaseIP(_ context.Context, ref string) error {
 	return nil
 }
 
-type fakeRemote struct{ cmds []string }
+type fakeRemote struct {
+	cmds []string
+	// broken says which configs (by their place in the config test) do not
+	// work on this server; nil means all of them work.
+	broken func(i int) bool
+}
 
 func (r *fakeRemote) Run(_ context.Context, cmd string, _ func(string)) (string, error) {
 	r.cmds = append(r.cmds, cmd)
+	if n := configTestTargets(cmd); n > 0 {
+		var b strings.Builder
+		for i := 0; i < n; i++ {
+			if r.broken != nil && r.broken(i) {
+				fmt.Fprintf(&b, "R %d 000 10 \n", i)
+			} else {
+				fmt.Fprintf(&b, "R %d 204 0.05 \n", i)
+			}
+		}
+		return b.String(), nil
+	}
 	return "", nil
+}
+
+// configTestTargets is how many configs cmd tests, when it is the config
+// test's script.
+func configTestTargets(cmd string) int {
+	b64, ok := strings.CutPrefix(cmd, "echo ")
+	if !ok || !strings.HasSuffix(cmd, "| base64 -d | bash") {
+		return 0
+	}
+	dec, err := base64.StdEncoding.DecodeString(strings.Fields(b64)[0])
+	if err != nil {
+		return 0
+	}
+	return strings.Count(string(dec), "-x socks5h://")
 }
 func (r *fakeRemote) ReadFile(_ context.Context, path string) (string, error) {
 	if path != installResultPath {
@@ -316,6 +347,9 @@ func setup(t *testing.T) (*Orchestrator, *fakeProvider, *fakePanel, *fakeDest, *
 	engine := jobs.NewEngine(db, 2)
 	o := New(db, st, key, engine)
 	o.RetryDelay = time.Millisecond
+	oldGap := autoTestGap
+	autoTestGap = time.Millisecond
+	t.Cleanup(func() { autoTestGap = oldGap })
 	prov, panel, dest := &fakeProvider{}, &fakePanel{}, &fakeDest{}
 	filtered := map[string]bool{}
 	o.Provider = func(*models.ProviderAccount) (providers.Provider, error) { return prov, nil }

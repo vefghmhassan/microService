@@ -96,6 +96,13 @@ func (a *App) ServerAction(kind string) fiber.Handler {
 		if s.Status == models.ServerDeleted {
 			return errJSON(c, fiber.StatusConflict, "server is deleted")
 		}
+		if kind == orchestrator.KindDelete {
+			j, err := a.Orch.DeleteServer(s.ID, source(c))
+			if err != nil {
+				return err
+			}
+			return c.Status(fiber.StatusAccepted).JSON(j)
+		}
 		var params map[string]any
 		if len(c.Body()) > 0 {
 			if err := c.BodyParser(&params); err != nil {

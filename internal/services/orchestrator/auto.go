@@ -36,6 +36,9 @@ type AutoParams struct {
 	Reason               string `json:"reason"`
 	// IPFamily ("v4"/"v6") overrides the family each location builds with.
 	IPFamily string `json:"ip_family"`
+	// Attempt counts the servers already built and deleted for this request
+	// because none of their configs worked.
+	Attempt int `json:"attempt,omitempty"`
 }
 
 // InstallParams are the install job's parameters.
@@ -44,6 +47,41 @@ type InstallParams struct {
 	Upload          *bool  `json:"upload"`
 	BaseName        string `json:"base_name"`
 	ReplaceServerID uint   `json:"replace_server_id"`
+	// Fresh marks a server built for this job: one on which no config works
+	// is deleted and another is built. A reinstall never deletes its server.
+	Fresh   bool `json:"fresh,omitempty"`
+	Attempt int  `json:"attempt,omitempty"`
+}
+
+// maxConfigRetries is how many more servers are built after one on which no
+// config worked.
+const maxConfigRetries = 2
+
+// rejectNewServer gives up on a new server on which no config works: it is
+// deleted, and requeue builds the next one unless enough have been tried.
+// Nothing of it reached vpn-pannel, and a server it was to replace is left
+// as it is. The returned error fails the job.
+func (o *Orchestrator) rejectNewServer(r *jobs.Run, s *models.Server, attempt int, replaceID uint, requeue func(next int) error) error {
+	s.Status, s.LastError = models.ServerError, "no config worked on this server"
+	o.save(r, s, "status", "last_error")
+	id := s.ID
+	// Queued behind this job, which holds the server until it returns.
+	if _, err := o.Engine.Enqueue(KindDelete, &id, struct{}{}, r.Job.Source); err != nil {
+		r.Logf("warn", "delete %s: %v", s.Name, err)
+	}
+	if attempt < maxConfigRetries {
+		if err := requeue(attempt + 1); err != nil {
+			return fmt.Errorf("no config worked on %s; it is being deleted, but the next server could not be queued: %w", s.Name, err)
+		}
+		o.notify("⚠️ روی سرور %s هیچ کانفیگی کار نکرد؛ حذف شد و سرور بعدی (%d از %d) ساخته می‌شود", s.Name, attempt+1, maxConfigRetries)
+		return fmt.Errorf("no config worked on %s: it is being deleted and replacement %d of %d is queued", s.Name, attempt+1, maxConfigRetries)
+	}
+	if replaceID != 0 {
+		// Let the server that was to be replaced be replaced again later.
+		o.DB.Model(&models.Server{}).Where("id = ?", replaceID).Update("replacing_at", nil)
+	}
+	o.notify("❌ روی %d سرور پشت‌سرهم هیچ کانفیگی کار نکرد؛ ساخت متوقف شد. تمپلیت را بررسی کنید.", maxConfigRetries+1)
+	return fmt.Errorf("no config worked on %d servers in a row; giving up (check the template)", maxConfigRetries+1)
 }
 
 // candidate is one server built while probing a location.
@@ -118,7 +156,7 @@ func (o *Orchestrator) provisionAuto(ctx context.Context, r *jobs.Run) error {
 			r.Logf("warn", "%s/%s: %v", loc.ProviderAccount.Name, loc.Region, err)
 		}
 		for _, s := range kept {
-			ip := InstallParams{Upload: p.Upload, BaseName: p.BaseName, ReplaceServerID: p.ReplaceServerID}
+			ip := InstallParams{Upload: p.Upload, BaseName: p.BaseName, ReplaceServerID: p.ReplaceServerID, Fresh: true, Attempt: p.Attempt}
 			if ip.Upload == nil {
 				up := o.Settings.Bool(settings.VPNPanelAuto)
 				ip.Upload = &up
@@ -300,12 +338,13 @@ func (o *Orchestrator) discardCandidate(ctx context.Context, r *jobs.Run, prov p
 	r.Info("deleted candidate %s (%s): %s", s.Name, s.PublicIP(), reason)
 }
 
-// finishInstall runs after an install job's 3x-ui install: either hand over a
-// replaced server's configs in vpn-pannel, or upload fresh links.
-func (o *Orchestrator) finishInstall(ctx context.Context, r *jobs.Run, s *models.Server, p InstallParams) {
-	if s.Hostname != "" {
-		r.Step("DNS " + s.Hostname)
-		_ = o.syncDNS(ctx, r, s)
+// handOver runs after an install job's config test: either hand over a
+// replaced server's configs in vpn-pannel, or upload fresh links. Only the
+// inbounds the test passed (g) end up there.
+func (o *Orchestrator) handOver(ctx context.Context, r *jobs.Run, s *models.Server, p InstallParams, g gateResult) {
+	if len(g.Failed) > 0 {
+		o.notify("⚠️ سرور %s: %d از %d کانفیگ در تست کار کرد و فقط همان‌ها روی پنل می‌روند.\nردشده: %s",
+			s.Name, len(g.Passed), g.Total, strings.Join(g.Failed, "، "))
 	}
 	if p.ReplaceServerID != 0 {
 		var old models.Server
@@ -318,13 +357,23 @@ func (o *Orchestrator) finishInstall(ctx context.Context, r *jobs.Run, s *models
 			s.PanelName = old.PanelName
 			o.save(r, s, "panel_name")
 		}
-		if old.UploadedIP != "" {
+		switch {
+		case old.UploadedIP != "" && len(g.Failed) == 0:
 			r.Step("move vpn-pannel configs from " + old.Name)
 			if err := o.moveDestination(ctx, r, s, old.UploadedIP); err != nil {
 				r.Logf("warn", "vpn-pannel: %v", err)
 			}
-		} else if p.Upload != nil && *p.Upload {
-			if err := o.uploadLinks(ctx, r, s, p.BaseName); err != nil {
+		case old.UploadedIP != "":
+			// vpn-pannel can only move an address as a whole, which would
+			// carry the broken configs along.
+			if err := o.replaceWithWorking(ctx, r, s, &old, p.BaseName, g.only()); err != nil {
+				r.Logf("error", "vpn-pannel: %v; %s is kept", err, old.Name)
+				o.DB.Model(&old).Update("replacing_at", nil)
+				o.notify("❌ کانفیگ‌های سالم %s روی پنل نرفت (%s)؛ سرور قبلی %s حذف نشد.", s.Name, truncate(err.Error(), 200), old.Name)
+				return
+			}
+		case p.Upload != nil && *p.Upload:
+			if err := o.uploadLinks(ctx, r, s, p.BaseName, g.only()); err != nil {
 				r.Logf("warn", "upload to vpn-pannel failed: %v", err)
 			}
 		}
@@ -339,8 +388,49 @@ func (o *Orchestrator) finishInstall(ctx context.Context, r *jobs.Run, s *models
 		return
 	}
 	if p.Upload != nil && *p.Upload {
-		if err := o.uploadLinks(ctx, r, s, p.BaseName); err != nil {
+		if err := o.uploadLinks(ctx, r, s, p.BaseName, g.only()); err != nil {
 			r.Logf("warn", "upload to vpn-pannel failed: %v", err)
 		}
 	}
+}
+
+// replaceWithWorking is the hand-over of a replaced server when some of the
+// new server's configs do not work: the old address's configs are removed
+// from vpn-pannel and only the working ones are uploaded for the new server.
+// When both servers share a name the old configs must go first, or the delete
+// would take the new ones with it; otherwise they go only after the upload
+// succeeded.
+func (o *Orchestrator) replaceWithWorking(ctx context.Context, r *jobs.Run, s *models.Server, old *models.Server, baseName string, only map[uint]bool) error {
+	dests := o.Dests()
+	if len(dests) == 0 {
+		r.Info("vpn-pannel is not configured; skipped")
+		return nil
+	}
+	oldAddr := old.UploadedIP
+	r.Step("replace vpn-pannel configs on " + oldAddr + " with the working ones")
+	if old.CDNHostname != "" {
+		// Clean-IP configs are matched by the orange name, which the new
+		// server may share: they go before anything new is uploaded.
+		o.retireCleanConfigs(ctx, r, old.CDNHostname, true)
+	}
+	drop := func() {
+		for _, d := range dests {
+			if err := d.DeleteAddress(ctx, oldAddr); err != nil {
+				r.Logf("warn", "%s: could not delete configs on %s: %v", d.Name, oldAddr, err)
+			} else {
+				r.Info("%s: configs on %s deleted", d.Name, oldAddr)
+			}
+		}
+	}
+	same := oldAddr == LinkHost(s)
+	if same {
+		drop()
+	}
+	if err := o.uploadTo(ctx, r, s, baseName, dests, only); err != nil {
+		return err
+	}
+	if !same {
+		drop()
+	}
+	return nil
 }

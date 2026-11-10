@@ -93,7 +93,49 @@ func Dial(ctx context.Context, host string, port int, kp *Keypair, knownHostKey 
 		conn.Close()
 		return nil, err
 	}
-	return &Client{c: ssh.NewClient(sc, chans, reqs), HostKey: seen}, nil
+	c := ssh.NewClient(sc, chans, reqs)
+	go keepAlive(c, keepAliveEvery)
+	return &Client{c: c, HostKey: seen}, nil
+}
+
+// keepAliveEvery is how often a connection is probed (shortened by tests).
+var keepAliveEvery = 15 * time.Second
+
+// keepAlive probes the connection and closes it once the server stops
+// answering. A server deleted at its provider sends no reset, so without this
+// a command running on it would wait forever.
+func keepAlive(c *ssh.Client, every time.Duration) {
+	closed := make(chan struct{})
+	go func() {
+		_ = c.Wait()
+		close(closed)
+	}()
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-closed:
+			return
+		case <-t.C:
+		}
+		res := make(chan error, 1)
+		go func() {
+			_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
+			res <- err
+		}()
+		select {
+		case err := <-res:
+			if err != nil {
+				c.Close()
+				return
+			}
+		case <-time.After(2 * every):
+			c.Close()
+			return
+		case <-closed:
+			return
+		}
+	}
 }
 
 // DialRetry keeps trying until the server's sshd accepts our key; fresh
@@ -165,6 +207,8 @@ func (c *Client) Run(ctx context.Context, cmd string, logLine func(string)) (str
 	case err = <-waitErr:
 	case <-ctx.Done():
 		_ = sess.Signal(ssh.SIGKILL)
+		// Do not depend on the server acknowledging anything.
+		_ = sess.Close()
 		err = ctx.Err()
 	}
 	pw.Close()

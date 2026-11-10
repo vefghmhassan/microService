@@ -181,10 +181,13 @@ XRAY_LOCATION_ASSET=/usr/local/x-ui/bin "$X" run -c "$D/c.json" > "$D/log" 2>&1 
 sleep 1.5
 kill -0 $P 2>/dev/null || { echo "ERR $(tail -c 400 "$D/log" | tr '\n' ' ')"; exit 0; }
 `)
+	b.WriteString("W=\n")
 	for i := range targets {
-		fmt.Fprintf(&b, `( r=$(curl -s -o "$D/b%d" -w '%%{http_code} %%{time_total}' --max-time 10 -x socks5h://127.0.0.1:%d '%s'); echo "R %d $r $(head -c 600 "$D/b%d" 2>/dev/null | base64 | tr -d '\n')" ) &`+"\n", i, base+i, target, i, i)
+		fmt.Fprintf(&b, `( r=$(curl -s -o "$D/b%d" -w '%%{http_code} %%{time_total}' --max-time 10 -x socks5h://127.0.0.1:%d '%s'); echo "R %d $r $(head -c 600 "$D/b%d" 2>/dev/null | base64 | tr -d '\n')" ) & W="$W $!"`+"\n", i, base+i, target, i, i)
 	}
-	b.WriteString("wait\n")
+	// Only the requests are waited for: a bare wait would also wait for xray,
+	// which never exits, and the script would run until its caller gave up.
+	b.WriteString("wait $W\n")
 	return b.String(), nil
 }
 

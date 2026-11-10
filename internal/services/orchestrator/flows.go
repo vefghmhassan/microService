@@ -31,6 +31,9 @@ type ProvisionParams struct {
 	BaseName  string `json:"base_name"`
 	// IPFamily is "v4" (default) or "v6": what the server's configs use.
 	IPFamily string `json:"ip_family"`
+	// Attempt counts the servers already built and deleted for this request
+	// because none of their configs worked.
+	Attempt int `json:"attempt,omitempty"`
 }
 
 type RotateParams struct {
@@ -149,12 +152,27 @@ func (o *Orchestrator) provision(ctx context.Context, r *jobs.Run) error {
 		r.Mark("install")
 	}
 
+	// Only configs that really work go to vpn-pannel; a server on which none
+	// works is deleted and built again in the same place.
+	g, err := o.gate(ctx, r, &s)
+	if err != nil {
+		return err
+	}
+	if g.none() && !r.Done("upload") {
+		return o.rejectNewServer(r, &s, p.Attempt, 0, func(next int) error {
+			np := p
+			np.Attempt, np.Name = next, ""
+			_, err := o.Engine.Enqueue(KindProvision, nil, np, r.Job.Source)
+			return err
+		})
+	}
+
 	upload := o.Settings.Bool(settings.VPNPanelAuto)
 	if p.Upload != nil {
 		upload = *p.Upload
 	}
 	if upload && !r.Done("upload") {
-		if err := o.uploadLinks(ctx, r, &s, p.BaseName); err != nil {
+		if err := o.uploadLinks(ctx, r, &s, p.BaseName, g.only()); err != nil {
 			// The server works; only the hand-off failed and can be retried.
 			r.Logf("warn", "upload to vpn-pannel failed: %v", err)
 		} else {
@@ -539,7 +557,7 @@ func (o *Orchestrator) moveDestination(ctx context.Context, r *jobs.Run, s *mode
 		}
 	}
 	if len(fresh) > 0 {
-		if err := o.uploadTo(ctx, r, s, "", fresh); err != nil {
+		if err := o.uploadTo(ctx, r, s, "", fresh, nil); err != nil {
 			errs = append(errs, err)
 		} else {
 			moved += len(fresh)
@@ -570,13 +588,34 @@ func (o *Orchestrator) install(ctx context.Context, r *jobs.Run) error {
 		}
 		r.Mark("install")
 	}
-	if !r.Done("finish") {
-		o.finishInstall(ctx, r, s, p)
-		r.Mark("finish")
+	// Jobs started before the config test moved ahead of the upload have
+	// already handed their configs over; they are only tested.
+	handed := r.Done("finish")
+	if !r.Done("dns") && !handed {
+		if s.Hostname != "" {
+			r.Step("DNS " + s.Hostname)
+			_ = o.syncDNS(ctx, r, s)
+		}
+		r.Mark("dns")
 	}
-	if !r.Done("test") {
-		o.autoTestConfigs(ctx, r, s)
-		r.Mark("test")
+	// Only configs that really work go to vpn-pannel, and a new server on
+	// which none works is not kept.
+	g, err := o.gate(ctx, r, s)
+	if err != nil {
+		return err
+	}
+	if p.Fresh && g.none() && !handed {
+		return o.rejectNewServer(r, s, p.Attempt, p.ReplaceServerID, func(next int) error {
+			_, err := o.Engine.Enqueue(KindProvisionAuto, nil, AutoParams{
+				Count: 1, Upload: p.Upload, BaseName: p.BaseName, ReplaceServerID: p.ReplaceServerID,
+				IPFamily: s.Family(), Reason: "no config worked on " + s.Name, Attempt: next,
+			}, r.Job.Source)
+			return err
+		})
+	}
+	if !handed {
+		o.handOver(ctx, r, s, p, g)
+		r.Mark("finish")
 	}
 	s.Status = models.ServerActive
 	s.LastError = ""
@@ -733,17 +772,19 @@ func (o *Orchestrator) upload(ctx context.Context, r *jobs.Run) error {
 	if err != nil {
 		return err
 	}
-	return o.uploadLinks(ctx, r, s, p.BaseName)
+	return o.uploadLinks(ctx, r, s, p.BaseName, nil)
 }
 
-func (o *Orchestrator) uploadLinks(ctx context.Context, r *jobs.Run, s *models.Server, baseName string) error {
+// uploadLinks sends the server's links to every vpn-pannel. only narrows
+// them to the given inbounds (those a config test passed); nil sends all.
+func (o *Orchestrator) uploadLinks(ctx context.Context, r *jobs.Run, s *models.Server, baseName string, only map[uint]bool) error {
 	r.Step("upload links to vpn-pannel")
 	dests := o.Dests()
 	if len(dests) == 0 {
 		r.Info("vpn-pannel is not configured; skipped")
 		return nil
 	}
-	return o.uploadTo(ctx, r, s, baseName, dests)
+	return o.uploadTo(ctx, r, s, baseName, dests, only)
 }
 
 // AdsBaseName tells the two sets of a "both" panel apart: the ads set gets
@@ -757,16 +798,31 @@ func AdsBaseName(base string, ads, both bool) string {
 
 // uploadTo sends the server's links to each of dests. It fails only when
 // none of them took the upload.
-func (o *Orchestrator) uploadTo(ctx context.Context, r *jobs.Run, s *models.Server, baseName string, dests []NamedDest) error {
+func (o *Orchestrator) uploadTo(ctx context.Context, r *jobs.Run, s *models.Server, baseName string, dests []NamedDest, only map[uint]bool) error {
 	snap, err := LoadSnapshot(o.DB)
 	if err != nil {
 		return err
 	}
-	urls, err := UploadEntries(o.forUpload(snap, s), LinkHost(s))
+	us := o.forUpload(snap, s)
+	if only != nil {
+		var keep []models.InboundTemplate
+		for _, t := range us.Inbounds {
+			if only[t.ID] {
+				keep = append(keep, t)
+			} else if t.Enabled && t.Upload {
+				r.Logf("warn", "%s did not pass the config test; left out of vpn-pannel", t.Remark)
+			}
+		}
+		us.Inbounds = keep
+	}
+	urls, err := UploadEntries(us, LinkHost(s))
 	if err != nil {
 		r.Logf("warn", "some links could not be built: %v", err)
 	}
 	if len(urls) == 0 {
+		if only != nil {
+			return errors.New("no inbound marked for upload passed the config test")
+		}
 		return errors.New("no inbound is marked for upload")
 	}
 	if baseName == "" {
@@ -859,6 +915,10 @@ func (o *Orchestrator) delete(ctx context.Context, r *jobs.Run) error {
 	if err != nil {
 		return err
 	}
+	if s.Status == models.ServerDeleted {
+		r.Info("server is already deleted")
+		return nil
+	}
 	r.Step("delete server")
 	o.setStatus(r, s, models.ServerDeleting)
 	if s.ProviderRef != "" {
@@ -866,7 +926,12 @@ func (o *Orchestrator) delete(ctx context.Context, r *jobs.Run) error {
 		if err != nil {
 			return err
 		}
-		if err := prov.Delete(ctx, s.ProviderRef); err != nil && !errors.Is(err, providers.ErrNotFound) {
+		err = prov.Delete(ctx, s.ProviderRef)
+		switch {
+		case errors.Is(err, providers.ErrNotFound):
+			// Deleted in the provider's console: only the panel's side is left.
+			r.Logf("warn", "%s no longer exists at %s; removing it from the panel only", s.ProviderRef, s.ProviderAccount.Name)
+		case err != nil:
 			return o.fail(r, s, fmt.Errorf("delete: %w", err))
 		}
 		// IPs that belonged to the account separately (DigitalOcean reserved

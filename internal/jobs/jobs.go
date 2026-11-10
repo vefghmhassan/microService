@@ -28,7 +28,8 @@ type Engine struct {
 	workers  int
 
 	mu       sync.Mutex
-	locks    map[uint]*sync.Mutex
+	busy     map[uint]bool   // servers with a job running
+	waiting  map[uint][]uint // jobs parked until their server is free
 	cancels  map[uint]context.CancelFunc
 	onFinish []func(*models.Job)
 }
@@ -37,7 +38,7 @@ func NewEngine(db *gorm.DB, workers int) *Engine {
 	return &Engine{
 		db: db, Broker: NewBroker(), handlers: map[string]Handler{},
 		queue: make(chan uint, 1024), workers: workers,
-		locks: map[uint]*sync.Mutex{}, cancels: map[uint]context.CancelFunc{},
+		busy: map[uint]bool{}, waiting: map[uint][]uint{}, cancels: map[uint]context.CancelFunc{},
 	}
 }
 
@@ -99,15 +100,34 @@ func (e *Engine) Cancel(id uint) error {
 	return nil
 }
 
-func (e *Engine) serverLock(id uint) *sync.Mutex {
+// acquire takes the server for a job. When another job holds it, the job is
+// parked and the worker stays free: a worker waiting here would be lost to
+// every other server for as long as that job runs.
+func (e *Engine) acquire(serverID, jobID uint) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	l, ok := e.locks[id]
-	if !ok {
-		l = &sync.Mutex{}
-		e.locks[id] = l
+	if e.busy[serverID] {
+		e.waiting[serverID] = append(e.waiting[serverID], jobID)
+		return false
 	}
-	return l
+	e.busy[serverID] = true
+	return true
+}
+
+// release frees the server and puts its parked jobs back in the queue.
+func (e *Engine) release(serverID uint) {
+	e.mu.Lock()
+	ids := e.waiting[serverID]
+	delete(e.waiting, serverID)
+	delete(e.busy, serverID)
+	e.mu.Unlock()
+	if len(ids) > 0 {
+		go func() {
+			for _, id := range ids {
+				e.queue <- id
+			}
+		}()
+	}
 }
 
 func (e *Engine) worker(ctx context.Context) {
@@ -129,9 +149,11 @@ func (e *Engine) run(parent context.Context, id uint) {
 	// One job per server at a time: two rotations racing on one machine
 	// would each think they own its IP.
 	if j.ServerID != nil {
-		l := e.serverLock(*j.ServerID)
-		l.Lock()
-		defer l.Unlock()
+		sid := *j.ServerID
+		if !e.acquire(sid, id) {
+			return
+		}
+		defer e.release(sid)
 		if err := e.db.First(&j, id).Error; err != nil || j.Status != models.JobQueued {
 			return
 		}

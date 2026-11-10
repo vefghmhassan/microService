@@ -10,6 +10,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"microserver/internal/jobs"
 	"microserver/internal/models"
@@ -32,12 +33,41 @@ type ConfigTest struct {
 	OK    bool   `json:"ok"`
 	MS    int    `json:"ms"`
 	Error string `json:"error,omitempty"`
+	// InboundID is the template inbound the config belongs to. Variant is
+	// empty for the inbound's own config, or names an extra one built from it.
+	InboundID uint   `json:"inbound_id,omitempty"`
+	Variant   string `json:"variant,omitempty"`
 }
+
+// Extra configs tested for an inbound besides its own.
+const (
+	VariantFragment = "fragment"
+	VariantClean    = "clean"
+)
 
 // testLink is one client config to test.
 type testLink struct {
 	name, url, via string
 	fragment       bool
+	inbound        uint
+	variant        string
+}
+
+func (l testLink) result() ConfigTest {
+	return ConfigTest{Name: l.name, Via: l.via, InboundID: l.inbound, Variant: l.variant}
+}
+
+// passedInbounds are the inbounds whose own config works. The Fragment and
+// clean-IP variants do not count either way: they are extras of an inbound,
+// and a clean address failing says nothing about the server.
+func passedInbounds(res []ConfigTest) map[uint]bool {
+	out := map[uint]bool{}
+	for _, t := range res {
+		if t.OK && t.Variant == "" && t.InboundID != 0 {
+			out[t.InboundID] = true
+		}
+	}
+	return out
 }
 
 // configTestLinks are the links a config test tries on a server: the first
@@ -60,9 +90,9 @@ func configTestLinks(snap *Snapshot, s *models.Server) []testLink {
 		if (t.AddonID != 0 && t.Route == models.RouteCDN) || (t.AddonID == 0 && t.CDN && s.DNSProxied) {
 			via = ViaCDN
 		}
-		out = append(out, testLink{name: t.Remark, url: ls[0].URL, via: via})
+		out = append(out, testLink{name: t.Remark, url: ls[0].URL, via: via, inbound: t.ID})
 		if t.Fragment && linkgen.Security(t.StreamSettings) == "tls" && t.Protocol != "hysteria" {
-			out = append(out, testLink{name: t.Remark + " · Fragment", url: ls[0].URL, via: via, fragment: true})
+			out = append(out, testLink{name: t.Remark + " · Fragment", url: ls[0].URL, via: via, fragment: true, inbound: t.ID, variant: VariantFragment})
 		}
 		if cleanDone {
 			continue
@@ -73,7 +103,7 @@ func configTestLinks(snap *Snapshot, s *models.Server) []testLink {
 		}
 		cleanDone = true
 		for i, l := range cl {
-			out = append(out, testLink{name: t.Remark + " · " + snap.Clean[i%len(snap.Clean)].Address, url: l.URL, via: ViaClean})
+			out = append(out, testLink{name: t.Remark + " · " + snap.Clean[i%len(snap.Clean)].Address, url: l.URL, via: ViaClean, inbound: t.ID, variant: VariantClean})
 		}
 	}
 	return out
@@ -136,7 +166,9 @@ func TestConfigs(ctx context.Context, remote Remote, snap *Snapshot, s *models.S
 	for _, l := range links {
 		o, f, err := clientOutbound(l, fmt.Sprintf("c%d", len(targets)))
 		if err != nil {
-			res = append(res, ConfigTest{Name: l.name, Via: l.via, Error: err.Error()})
+			ct := l.result()
+			ct.Error = err.Error()
+			res = append(res, ct)
 			continue
 		}
 		if f != nil {
@@ -165,7 +197,9 @@ func TestConfigs(ctx context.Context, remote Remote, snap *Snapshot, s *models.S
 		return nil, err
 	}
 	for i, g := range got {
-		res = append(res, ConfigTest{Name: tested[i].name, Via: tested[i].via, OK: g.OK, MS: g.MS, Error: g.Error})
+		ct := tested[i].result()
+		ct.OK, ct.MS, ct.Error = g.OK, g.MS, g.Error
+		res = append(res, ct)
 	}
 	return res, nil
 }
@@ -288,30 +322,115 @@ true
 	return b.String()
 }
 
-// autoTestConfigs runs the config test at the end of an install, as the
-// reference script does, and logs OK/FAIL per config. A failure is only a
-// warning: a fresh orange name can take a few minutes to resolve.
-func (o *Orchestrator) autoTestConfigs(ctx context.Context, r *jobs.Run, s *models.Server) {
+// The config test of a new server (all shortened by tests): each round is
+// bounded, so a server that stopped answering cannot hold the install open,
+// and failures are tried again because a fresh orange name can take a few
+// minutes to resolve.
+var (
+	autoTestTimeout = 2 * time.Minute
+	autoTestRounds  = 3
+	autoTestGap     = 30 * time.Second
+)
+
+// gateResult is what the config test of a server decided: which inbounds may
+// go to vpn-pannel.
+type gateResult struct {
+	Passed []uint   `json:"passed"`
+	Total  int      `json:"total"`  // inbounds tested; 0 when there was nothing to test
+	Failed []string `json:"failed"` // remarks of the inbounds that do not work
+}
+
+// none reports a server on which not a single config works.
+func (g gateResult) none() bool { return g.Total > 0 && len(g.Passed) == 0 }
+
+// only is the upload filter: nil (everything) when nothing was tested.
+func (g gateResult) only() map[uint]bool {
+	if g.Total == 0 {
+		return nil
+	}
+	out := map[uint]bool{}
+	for _, id := range g.Passed {
+		out[id] = true
+	}
+	return out
+}
+
+// gate runs the config test of a server once per job (a resumed job reuses
+// the stored result) and reports which inbounds work.
+func (o *Orchestrator) gate(ctx context.Context, r *jobs.Run, s *models.Server) (gateResult, error) {
+	var g gateResult
+	if raw := r.GetString("gate"); raw != "" && json.Unmarshal([]byte(raw), &g) == nil {
+		return g, nil
+	}
+	g = o.testNewServer(ctx, r, s)
+	// A canceled job must not act on a test that was cut short.
+	if err := ctx.Err(); err != nil {
+		return g, err
+	}
+	b, _ := json.Marshal(g)
+	r.Set("gate", string(b))
+	return g, nil
+}
+
+// testNewServer runs every client config of s from the server itself, as the
+// reference script checks its work, and logs OK/FAIL per config. A test that
+// cannot run at all counts as nothing working.
+func (o *Orchestrator) testNewServer(ctx context.Context, r *jobs.Run, s *models.Server) gateResult {
 	r.Step("test every config")
 	snap, err := LoadSnapshot(o.DB)
 	if err != nil {
 		r.Logf("warn", "config test: %v", err)
-		return
+		return gateResult{}
 	}
 	ns := snap.For(s)
 	if ns.CDNHost != "" {
 		ns.Clean, _ = cleanip.Pick(o.DB, 2)
 	}
-	remote, _, err := o.Connect(ctx, s)
-	if err != nil {
-		r.Logf("warn", "config test: ssh: %v", err)
-		return
+	names := map[uint]string{}
+	var order []uint
+	for _, l := range configTestLinks(ns, s) {
+		if l.variant == "" {
+			names[l.inbound] = l.name
+			order = append(order, l.inbound)
+		}
 	}
-	defer remote.Close()
-	res, err := TestConfigs(ctx, remote, ns, s)
+	if len(order) == 0 {
+		r.Info("this server has no config to test")
+		return gateResult{}
+	}
+
+	once := func() ([]ConfigTest, error) {
+		tctx, cancel := context.WithTimeout(ctx, autoTestTimeout)
+		defer cancel()
+		remote, _, err := o.Connect(tctx, s)
+		if err != nil {
+			return nil, fmt.Errorf("ssh: %w", err)
+		}
+		defer remote.Close()
+		return TestConfigs(tctx, remote, ns, s)
+	}
+	var res []ConfigTest
+	for round := 1; ; round++ {
+		res, err = once()
+		failed := err != nil
+		for _, t := range res {
+			failed = failed || !t.OK
+		}
+		if !failed || round >= autoTestRounds || ctx.Err() != nil {
+			break
+		}
+		if err != nil {
+			r.Logf("warn", "config test (round %d of %d): %v", round, autoTestRounds, err)
+		} else {
+			r.Info("round %d of %d: not every config works yet; trying again in %s", round, autoTestRounds, autoTestGap)
+		}
+		if sleep(ctx, autoTestGap) != nil {
+			break
+		}
+	}
 	if err != nil {
 		r.Logf("warn", "config test: %v", err)
-		return
+		res = nil
 	}
 	ok := 0
 	for _, t := range res {
@@ -323,4 +442,15 @@ func (o *Orchestrator) autoTestConfigs(ctx context.Context, r *jobs.Run, s *mode
 		}
 	}
 	r.Info("%d/%d configs work", ok, len(res))
+
+	passed := passedInbounds(res)
+	g := gateResult{Total: len(order)}
+	for _, id := range order {
+		if passed[id] {
+			g.Passed = append(g.Passed, id)
+		} else {
+			g.Failed = append(g.Failed, names[id])
+		}
+	}
+	return g
 }
