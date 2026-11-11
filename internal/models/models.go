@@ -76,10 +76,13 @@ type Location struct {
 	NamePrefix string `gorm:"size:40" json:"name_prefix"`
 	// CDNAddonID turns the CDN add-on on for servers built here (0 = off). It
 	// replaces the DNS fields above: the add-on brings its own zone.
-	CDNAddonID uint      `gorm:"column:cdn_addon_id;index" json:"cdn_addon_id"`
-	Note       string    `gorm:"size:255" json:"note"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	CDNAddonID uint `gorm:"column:cdn_addon_id;index" json:"cdn_addon_id"`
+	// PanelJSON uploads the 3x-ui panel's own JSON subscription configs to
+	// vpn-pannel for servers built here, instead of share links (off = links).
+	PanelJSON bool      `gorm:"column:panel_json" json:"panel_json"`
+	Note      string    `gorm:"size:255" json:"note"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // CDNAddon is the CDN add-on: every server built in a location that uses it

@@ -173,6 +173,7 @@ interface FormValues {
   ip_family: 'v4' | 'v6'
   name_prefix?: string
   cdn_addon_id?: number
+  panel_json?: boolean
 }
 
 /** CapInput edits a cap stored in GB, typed in GB or TB (1 TB = 1024 GB). */
@@ -234,7 +235,7 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
       onOk={() => form.validateFields().then((v) => save.mutate(v))}
       destroyOnHidden
     >
-      <Form form={form} layout="vertical" requiredMark={false} initialValues={{ capacity: 0, traffic_limit_gb: 0, enabled: true, ip_family: 'v4', dns_proxied: false, ssl: true, dns_pattern: '' }}>
+      <Form form={form} layout="vertical" requiredMark={false} initialValues={{ capacity: 0, traffic_limit_gb: 0, enabled: true, ip_family: 'v4', dns_proxied: false, ssl: true, dns_pattern: '', panel_json: false }}>
         <Form.Item name="provider_account_id" label="حساب ارائه‌دهنده" rules={[{ required: true, message: 'حساب را انتخاب کنید' }]}>
           <Select
             options={accounts?.map((a) => ({ value: a.id, label: `${a.name} (${a.type})` }))}
@@ -274,6 +275,12 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
             <Form.Item name="name_prefix" label="پیشوند نام در vpn-pannel" tooltip="کانفیگ‌های سرورهای این لوکیشن sama-1، sama-2، … نام می‌گیرند. خالی = نام پیش‌فرض"
               rules={[{ pattern: /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/, message: 'فقط حروف انگلیسی، عدد، - و _' }]}>
               <Input dir="ltr" maxLength={30} placeholder="sama" />
+            </Form.Item>
+          </Col>
+          <Col xs={24} sm={12}>
+            <Form.Item name="panel_json" label="ارسال JSON پنل به vpn-pannel" valuePropName="checked"
+              tooltip="روشن: کانفیگ‌های JSON خود پنل 3x-ui (همان /json/…) به‌جای لینک در vpn-pannel گذاشته می‌شود. خاموش: مثل قبل لینک">
+              <Switch />
             </Form.Item>
           </Col>
           <Col xs={12} sm={4}>

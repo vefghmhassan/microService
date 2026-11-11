@@ -93,6 +93,8 @@ export interface Location extends DNSFields {
   name_prefix: string
   /** The CDN add-on servers built here get (0 = none). */
   cdn_addon_id: number
+  /** Upload the panel's own JSON configs to vpn-pannel instead of links. */
+  panel_json: boolean
 }
 
 /** What a server's configs, DNS and checks use. Every server is dual-stack. */

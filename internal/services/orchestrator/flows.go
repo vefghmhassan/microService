@@ -822,9 +822,19 @@ func (o *Orchestrator) uploadTo(ctx context.Context, r *jobs.Run, s *models.Serv
 		}
 		us.Inbounds = keep
 	}
-	urls, err := UploadEntries(us, LinkHost(s))
-	if err != nil {
-		r.Logf("warn", "some links could not be built: %v", err)
+	var urls []string
+	if o.locationPanelJSON(s) {
+		// The location sends the panel's own JSON configs; no fallback to
+		// links, which are what do not work there.
+		urls, err = o.panelJSONEntries(ctx, us, s)
+		if err != nil {
+			return fmt.Errorf("panel JSON configs: %w", err)
+		}
+	} else {
+		urls, err = UploadEntries(us, LinkHost(s))
+		if err != nil {
+			r.Logf("warn", "some links could not be built: %v", err)
+		}
 	}
 	if len(urls) == 0 {
 		if only != nil {

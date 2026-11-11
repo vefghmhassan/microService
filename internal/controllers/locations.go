@@ -40,6 +40,7 @@ type locationInput struct {
 	IPFamily          string `json:"ip_family"`
 	NamePrefix        string `json:"name_prefix"`
 	CDNAddonID        uint   `json:"cdn_addon_id"`
+	PanelJSON         bool   `json:"panel_json"`
 }
 
 func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
@@ -74,6 +75,7 @@ func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
 		}
 	}
 	l.CDNAddonID = in.CDNAddonID
+	l.PanelJSON = in.PanelJSON
 	dns := models.DNS{}
 	if in.CFAccountID != 0 {
 		var cf models.CloudflareAccount
