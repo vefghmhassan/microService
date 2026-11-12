@@ -23,6 +23,7 @@ import { Locations } from './pages/Locations'
 import { Cloudflare } from './pages/Cloudflare'
 import { CleanIPs } from './pages/CleanIPs'
 import { CDNAddonPage } from './pages/CDNAddon'
+import { SmartConfigs } from './pages/SmartConfigs'
 import { Update } from './pages/Update'
 
 export default function App() {
@@ -60,6 +61,7 @@ export default function App() {
             <Route path="/servers/:id" element={<ServerDetail />} />
             <Route path="/templates" element={<Templates />} />
             <Route path="/configs" element={<ConfigBuilder />} />
+            <Route path="/smart-configs" element={<SmartConfigs />} />
             <Route path="/checks" element={<Checks />} />
             <Route path="/ips" element={<IPPool />} />
             <Route path="/geo" element={<GeoReport />} />

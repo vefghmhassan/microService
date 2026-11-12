@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Badge, Button, Drawer, Flex, Grid, Layout, Menu, Tooltip, Typography } from 'antd'
 import {
-  CodeOutlined,
+  CodeOutlined, BranchesOutlined,
   ApiOutlined, AppstoreOutlined, ThunderboltOutlined, CloudOutlined, CloudServerOutlined, DashboardOutlined, EnvironmentOutlined, GlobalOutlined,
   LogoutOutlined, MenuOutlined, MoonOutlined, NodeIndexOutlined, OrderedListOutlined, RadarChartOutlined,
   CloudSyncOutlined, SettingOutlined, SunOutlined, UnorderedListOutlined,
@@ -17,6 +17,7 @@ const items = [
   { key: '/servers', icon: <CloudServerOutlined />, label: 'سرورها' },
   { key: '/templates', icon: <NodeIndexOutlined />, label: 'تمپلیت مشترک' },
   { key: '/configs', icon: <CodeOutlined />, label: 'ساخت کانفیگ JSON' },
+  { key: '/smart-configs', icon: <BranchesOutlined />, label: 'کانفیگ هوشمند' },
   { key: '/geo', icon: <EnvironmentOutlined />, label: 'کاربران و موقعیت' },
   { key: '/checks', icon: <RadarChartOutlined />, label: 'چک از ایران' },
   { key: '/ips', icon: <GlobalOutlined />, label: 'استخر IP' },

@@ -115,23 +115,13 @@ func configTestLinks(snap *Snapshot, s *models.Server) []testLink {
 // their own public address. CDN configs keep their address so they really
 // cross Cloudflare.
 func clientOutbound(l testLink, tag string) (proxy, fragment map[string]any, err error) {
-	j, err := linkgen.ClientJSONWith(l.url, linkgen.JSONOptions{Fragment: l.fragment})
+	o, frag, _, err := linkgen.OutboundFromLink(l.url, tag, linkgen.JSONOptions{Fragment: l.fragment})
 	if err != nil {
 		return nil, nil, err
 	}
-	var cfg struct {
-		Outbounds []map[string]any `json:"outbounds"`
+	if frag {
+		fragment = linkgen.FragmentOutbound()
 	}
-	if err := json.Unmarshal([]byte(j), &cfg); err != nil || len(cfg.Outbounds) == 0 {
-		return nil, nil, errors.New("no proxy outbound")
-	}
-	for _, o := range cfg.Outbounds[1:] {
-		if o["tag"] == "fragment" {
-			fragment = o
-		}
-	}
-	o := cfg.Outbounds[0]
-	o["tag"] = tag
 	delete(o, "mux")
 	if l.via == ViaDirect {
 		st, _ := o["settings"].(map[string]any)

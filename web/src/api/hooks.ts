@@ -4,7 +4,7 @@ import { App } from 'antd'
 import { del, get, post, put } from './client'
 import type {
   CDNAddon, Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, Option, ProviderAccount,
-  ProviderType, Server, ServerEvent, ServerInbounds, Settings, TemplateResponse,
+  ProviderType, Server, ServerEvent, ServerInbounds, Settings, SmartProfile, SmartRule, SmartUpload, TemplateResponse,
   UpdateBackup, UpdateBranch, UpdateCommit, UpdateOp, UpdateStatus, UpdateVersion,
 } from './types'
 
@@ -27,6 +27,9 @@ export const keys = {
   certificates: ['cloudflare', 'certificates'] as const,
   cleanIPs: ['clean-ips'] as const,
   cdnAddons: ['cdn-addons'] as const,
+  smartProfiles: ['smart', 'profiles'] as const,
+  smartRules: ['smart', 'rules'] as const,
+  smartUploads: ['smart', 'uploads'] as const,
   sub: ['sub'] as const,
   update: ['update'] as const,
   updateStatus: ['update', 'status'] as const,
@@ -71,6 +74,10 @@ export const useCloudflareZones = (accountId?: number) =>
     enabled: !!accountId, staleTime: 300_000, retry: false,
   })
 export const useCDNAddons = () => useQuery({ queryKey: keys.cdnAddons, queryFn: () => get<CDNAddon[]>('/cdn-addons') })
+export const useSmartProfiles = () => useQuery({ queryKey: keys.smartProfiles, queryFn: () => get<SmartProfile[]>('/smart-profiles') })
+export const useSmartRules = () => useQuery({ queryKey: keys.smartRules, queryFn: () => get<SmartRule[]>('/smart-rules') })
+export const useSmartUploads = () =>
+  useQuery({ queryKey: keys.smartUploads, queryFn: () => get<SmartUpload[]>('/smart-uploads'), refetchInterval: 15_000 })
 export const useCertificates = () => useQuery({ queryKey: keys.certificates, queryFn: () => get<Certificate[]>('/cloudflare/certificates') })
 export const useIPs = () => useQuery({ queryKey: keys.ips, queryFn: () => get<IPAddress[]>('/ips') })
 export const useChecks = () => useQuery({ queryKey: keys.checks, queryFn: () => get<CheckRun[]>('/checks') })

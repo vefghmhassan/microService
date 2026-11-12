@@ -154,6 +154,8 @@ func (a *App) UpdateServer(c *fiber.Ctx) error {
 	if err := a.DB.Model(s).Select("name", "country", "want_panel_ver", "want_xray_ver", "traffic_limit_gb").Updates(s).Error; err != nil {
 		return err
 	}
+	// Smart config names and countries come from the server's.
+	a.Orch.QueueSmartSync(false)
 	return c.JSON(s)
 }
 

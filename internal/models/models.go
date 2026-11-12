@@ -609,5 +609,96 @@ func All() []any {
 		&CheckRun{}, &CheckProbe{}, &XrayTemplate{}, &InboundTemplate{},
 		&Job{}, &JobLog{}, &Setting{}, &ClientIP{}, &IPGeo{}, &Destination{},
 		&CloudflareAccount{}, &Certificate{}, &CleanIP{}, &CleanIPSource{}, &CDNAddon{},
+		&SmartProfile{}, &SmartRule{}, &SmartUpload{},
 	}
+}
+
+// Smart profile scopes.
+const (
+	SmartScopeServer = "server" // one config per server, with all its nodes
+	SmartScopeAll    = "all"    // one config with every server
+)
+
+// SmartProfile defines "smart" client configs: one xray JSON holding many
+// proxy outbounds (proxy-1..N) behind an observatory and a balancer, pushed
+// to vpn-pannel and rebuilt whenever the servers change.
+type SmartProfile struct {
+	ID      uint   `gorm:"primaryKey" json:"id"`
+	Name    string `gorm:"size:100;not null" json:"name"`
+	Enabled bool   `json:"enabled"`
+	Scope   string `gorm:"size:10" json:"scope"`
+	// Family filters servers by IP family for scope "all": v4, v6 or both.
+	Family string `gorm:"size:4" json:"family"`
+	// Countries (comma separated, upper case) limits the servers; empty = all.
+	Countries string `gorm:"size:255" json:"countries"`
+	// InboundIDs (comma separated) limits the template inbounds; empty = all.
+	InboundIDs string `gorm:"column:inbound_ids;size:512" json:"inbound_ids"`
+	// NameTemplate is the vpn-pannel node name; {base} is the server's base
+	// name, {country} its country (lower case), {name} the profile name.
+	NameTemplate string `gorm:"size:100" json:"name_template"`
+	// Country is the vpn-pannel country of a scope "all" config.
+	Country string `gorm:"size:2" json:"country"`
+
+	// Observatory: "observatory" or "burst" (burstObservatory).
+	ObsKind       string `gorm:"size:12" json:"obs_kind"`
+	ProbeURL      string `gorm:"size:255" json:"probe_url"`
+	ProbeInterval string `gorm:"size:16" json:"probe_interval"`
+	Timeout       string `gorm:"size:16" json:"timeout"`
+	Sampling      int    `json:"sampling"`
+	HTTPMethod    string `gorm:"column:http_method;size:8" json:"http_method"`
+
+	// Balancer: leastPing, leastLoad, random or roundRobin.
+	Strategy string `gorm:"size:12" json:"strategy"`
+	Expected int    `json:"expected"`
+	MaxRTT   string `gorm:"column:max_rtt;size:16" json:"max_rtt"`
+
+	Fragment    bool   `json:"fragment"`
+	DNSPreset   string `gorm:"column:dns_preset;size:12" json:"dns_preset"`
+	IranDirect  bool   `json:"iran_direct"`
+	BlockAds    bool   `json:"block_ads"`
+	BlockUDP443 bool   `gorm:"column:block_udp443" json:"block_udp443"`
+	// RuleIDs are the SmartRules sent through the balancer, in order.
+	RuleIDs string `gorm:"column:rule_ids;size:512" json:"rule_ids"`
+	// DestinationIDs limits the vpn-pannels; empty = every enabled one.
+	DestinationIDs string `gorm:"column:destination_ids;size:255" json:"destination_ids"`
+	// MaxOutbounds caps the proxies in one config (0 = no cap).
+	MaxOutbounds int       `json:"max_outbounds"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// SmartRule is a routing rule smart profiles can send through their
+// balancer (Instagram, Telegram, ...).
+type SmartRule struct {
+	ID      uint   `gorm:"primaryKey" json:"id"`
+	Key     string `gorm:"size:40;index" json:"key"` // built-in preset key, empty for custom
+	Name    string `gorm:"size:100;not null" json:"name"`
+	Enabled bool   `json:"enabled"`
+	Builtin bool   `json:"builtin"`
+	// Domains and IPs hold one xray matcher per line (geosite:, domain:,
+	// full:, regexp:, keyword: / geoip:, CIDR).
+	Domains   string    `gorm:"type:text" json:"domains"`
+	IPs       string    `gorm:"column:ips;type:text" json:"ips"`
+	Ports     string    `gorm:"size:100" json:"ports"`
+	Network   string    `gorm:"size:10" json:"network"`
+	Order     int       `gorm:"column:sort_order" json:"order"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// SmartUpload is one smart config node in one vpn-pannel.
+type SmartUpload struct {
+	ID            uint       `gorm:"primaryKey" json:"id"`
+	ProfileID     uint       `gorm:"uniqueIndex:idx_smart_upload" json:"profile_id"`
+	ServerID      uint       `gorm:"uniqueIndex:idx_smart_upload" json:"server_id"` // 0 for scope "all"
+	DestinationID uint       `gorm:"uniqueIndex:idx_smart_upload" json:"destination_id"`
+	Ads           bool       `gorm:"uniqueIndex:idx_smart_upload" json:"ads"`
+	Name          string     `gorm:"size:100" json:"name"`
+	PanelNodeID   uint       `json:"panel_node_id"`
+	Hash          string     `gorm:"size:64" json:"hash"`
+	Outbounds     int        `json:"outbounds"`
+	Active        bool       `json:"active"`
+	PushedAt      *time.Time `json:"pushed_at"`
+	Error         string     `gorm:"size:512" json:"error"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }

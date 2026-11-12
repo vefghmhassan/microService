@@ -81,6 +81,7 @@ type Orchestrator struct {
 	Engine   *jobs.Engine
 
 	nameMu sync.Mutex // serialises panelBaseName number picks
+	smart  smartState
 
 	// Seams, replaced in tests.
 	Provider func(acc *models.ProviderAccount) (providers.Provider, error)
@@ -171,6 +172,7 @@ func (o *Orchestrator) defaultCheck(ctx context.Context, host string, port int) 
 
 // NamedDest is one enabled vpn-pannel with its per-panel upload options.
 type NamedDest struct {
+	ID   uint // models.Destination ID
 	Name string
 	// Ads lists one ads flag per upload: [false], [true], or both for a
 	// panel that keeps a normal and an ads set of every server's configs.
@@ -183,7 +185,7 @@ func (o *Orchestrator) defaultDests() []NamedDest {
 	o.DB.Where("enabled = ?", true).Order("id").Find(&rows)
 	out := make([]NamedDest, 0, len(rows))
 	for _, d := range rows {
-		out = append(out, NamedDest{Name: d.Name, Ads: d.AdsValues(), Destination: destination.NewVPNPanel(d.URL, d.Email, string(d.Password))})
+		out = append(out, NamedDest{ID: d.ID, Name: d.Name, Ads: d.AdsValues(), Destination: destination.NewVPNPanel(d.URL, d.Email, string(d.Password))})
 	}
 	return out
 }
@@ -206,6 +208,7 @@ func (o *Orchestrator) Register() {
 	o.Engine.Register(KindCertPush, o.certPush)
 	o.Engine.Register(KindDNSSync, o.dnsSync)
 	o.Engine.Register(KindPurgeProvider, o.purgeProvider)
+	o.Engine.Register(KindSmartSync, o.smartSync)
 }
 
 func serverEvent(s *models.Server) jobs.Event {

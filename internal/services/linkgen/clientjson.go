@@ -45,11 +45,39 @@ func ClientJSONWith(link string, opt JSONOptions) (string, error) {
 	if remark == "" {
 		remark = strings.ToUpper(f.protocol)
 	}
+	proxy, fragment := outboundFor(f, "proxy", opt)
+	return encodeConfig(clientConfig(remark, proxy, fragment))
+}
 
-	proxy := obj{"tag": "proxy", "protocol": f.protocol}
-	if f.protocol == "hysteria" {
-		return encodeConfig(clientConfig(remark, hysteriaOutbound(f), false))
+// FragmentOutbound returns a copy of the freedom outbound (tag "fragment")
+// that fragmented proxies dial through.
+func FragmentOutbound() map[string]any {
+	var out map[string]any
+	b, _ := json.Marshal(fragmentOutbound)
+	_ = json.Unmarshal(b, &out)
+	return out
+}
+
+// OutboundFromLink turns one share link into the client outbound the JSON
+// configs use, tagged tag. fragment reports whether it dials through the
+// "fragment" outbound (FragmentOutbound), which the caller must then add.
+// remark is the link's own label.
+func OutboundFromLink(link, tag string, opt JSONOptions) (outbound map[string]any, fragment bool, remark string, err error) {
+	f, err := parseLink(link)
+	if err != nil {
+		return nil, false, "", err
 	}
+	o, frag := outboundFor(f, tag, opt)
+	return o, frag, f.remark, nil
+}
+
+func outboundFor(f *linkForm, tag string, opt JSONOptions) (obj, bool) {
+	if f.protocol == "hysteria" {
+		h := hysteriaOutbound(f)
+		h["tag"] = tag
+		return h, false
+	}
+	proxy := obj{"tag": tag, "protocol": f.protocol}
 	switch f.protocol {
 	case "vless":
 		proxy["settings"] = obj{"vnext": []any{obj{"address": f.address, "port": f.port, "users": []any{
@@ -117,7 +145,7 @@ func ClientJSONWith(link string, opt JSONOptions) (string, error) {
 	}
 	proxy["streamSettings"] = stream
 	proxy["mux"] = obj{"concurrency": -1, "enabled": false, "xudpConcurrency": 8, "xudpProxyUDP443": ""}
-	return encodeConfig(clientConfig(remark, proxy, fragment))
+	return proxy, fragment
 }
 
 // hysteriaOutbound is Xray 26's hysteria (v2) outbound for a hysteria2://

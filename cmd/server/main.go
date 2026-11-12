@@ -70,6 +70,10 @@ func main() {
 	engine := jobs.NewEngine(db, 6)
 	orch := orchestrator.New(db, st, key, engine)
 	orch.Register()
+	if err := orchestrator.SeedSmartRules(db); err != nil {
+		log.Printf("smart rules: %v", err)
+	}
+	engine.OnFinish(orch.OnJobFinish)
 	geo := geoip.Open(filepath.Join(cfg.DataDir, "geoip"))
 	orch.Geo = geo
 	cm := certs.New(db)

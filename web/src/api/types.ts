@@ -589,3 +589,79 @@ export interface UpdateBackup {
   created: string
   size_kb: number
 }
+
+// ---- smart (intelligent) configs ----
+
+export interface SmartProfile {
+  id: number
+  name: string
+  enabled: boolean
+  /** server: one config per server; all: one config with every server. */
+  scope: 'server' | 'all'
+  family: 'v4' | 'v6' | 'both'
+  countries: string
+  inbound_ids: string
+  name_template: string
+  country: string
+  obs_kind: 'observatory' | 'burst'
+  probe_url: string
+  probe_interval: string
+  timeout: string
+  sampling: number
+  http_method: 'HEAD' | 'GET'
+  strategy: 'leastPing' | 'leastLoad' | 'random' | 'roundRobin'
+  expected: number
+  max_rtt: string
+  fragment: boolean
+  dns_preset: 'smart' | 'simple'
+  iran_direct: boolean
+  block_ads: boolean
+  block_udp443: boolean
+  rule_ids: string
+  destination_ids: string
+  max_outbounds: number
+  created_at: string
+  updated_at: string
+}
+
+export interface SmartRule {
+  id: number
+  key: string
+  name: string
+  enabled: boolean
+  builtin: boolean
+  domains: string
+  ips: string
+  ports: string
+  network: string
+  order: number
+}
+
+export interface SmartUpload {
+  id: number
+  profile_id: number
+  server_id: number
+  destination_id: number
+  ads: boolean
+  name: string
+  panel_node_id: number
+  outbounds: number
+  active: boolean
+  pushed_at: string | null
+  error: string
+  updated_at: string
+  profile: string
+  server: string
+  destination: string
+}
+
+export interface SmartPreview {
+  server_id: number
+  name: string
+  country: string
+  outbounds: number
+  skipped: string[] | null
+  off: string
+  error: string
+  json: string
+}
