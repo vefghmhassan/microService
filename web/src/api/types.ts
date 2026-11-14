@@ -95,6 +95,10 @@ export interface Location extends DNSFields {
   cdn_addon_id: number
   /** Upload the panel's own JSON configs to vpn-pannel instead of links. */
   panel_json: boolean
+  /** Inbound profile of servers built here ('' = only the inbounds open to all). */
+  profile: string
+  /** Reality targets near this location, one per line; a new server takes one. */
+  reality_snis: string
 }
 
 /** What a server's configs, DNS and checks use. Every server is dual-stack. */
@@ -114,6 +118,10 @@ export interface Option {
 export interface Server extends DNSFields {
   id: number
   location_id: number
+  /** Inbound profile, copied from the location when the server was built. */
+  profile: string
+  /** Reality target picked for this server ('' = the template's). */
+  reality_sni: string
   hostname: string
   dns_record_id: string
   dns_error: string
@@ -287,6 +295,8 @@ export interface InboundTemplate {
   route?: 'direct' | 'cdn'
   fragment?: boolean
   clean_ips?: boolean
+  /** Comma separated profiles the inbound is limited to ('' = every server). */
+  profiles?: string
   created_at: string
   updated_at: string
 }

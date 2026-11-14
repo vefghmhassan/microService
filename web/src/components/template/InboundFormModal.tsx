@@ -28,6 +28,7 @@ interface Model {
   uploadJSON: boolean
   cdn: boolean
   family: TemplateFamily
+  profiles: string
   sync: boolean
   // CDN add-on inbounds only.
   route: 'direct' | 'cdn'
@@ -60,7 +61,7 @@ function setIn(obj: Obj, path: string[], v: unknown): Obj {
 function fromTemplate(t: Partial<InboundTemplate> | null, family: TemplateFamily): Model {
   if (!t) {
     return {
-      remark: '', protocol: 'vless', port: randomPort(), enabled: true, upload: true, uploadJSON: false, cdn: false, family, sync: true,
+      remark: '', protocol: 'vless', port: randomPort(), enabled: true, upload: true, uploadJSON: false, cdn: false, family, profiles: '', sync: true,
       route: 'cdn', fragment: false, cleanIPs: false,
       settings: defaultSettings('vless'), stream: { network: 'tcp', security: 'none', ...defaultNetwork('tcp') },
       sniffing: { ...defaultSniffing },
@@ -74,7 +75,7 @@ function fromTemplate(t: Partial<InboundTemplate> | null, family: TemplateFamily
   }
   return {
     remark: t.remark ?? '', protocol: (t.protocol === 'hysteria' ? 'vless' : t.protocol) ?? 'vless', port: t.port ?? randomPort(), enabled: t.enabled ?? true, upload: t.upload ?? true,
-    uploadJSON: !!t.upload_json, cdn: !!t.cdn, family: t.family || family, sync: true,
+    uploadJSON: !!t.upload_json, cdn: !!t.cdn, family: t.family || family, profiles: t.profiles ?? '', sync: true,
     route: t.route === 'direct' ? 'direct' : 'cdn', fragment: !!t.fragment, cleanIPs: !!t.clean_ips,
     settings: parse(t.settings), stream: { network: 'tcp', security: 'none', ...stream },
     sniffing: Object.keys(parse(t.sniffing)).length ? parse(t.sniffing) : { ...defaultSniffing },
@@ -120,6 +121,7 @@ export function InboundFormModal({ value, initial, servers, family = 'both', add
       remark: m.remark.trim(), protocol: m.protocol, port: m.port, enabled: m.enabled, upload: m.upload, upload_json: m.upload && m.uploadJSON, cdn: m.cdn, family: m.family, sync: m.sync,
       client_count: 0,
       settings: JSON.stringify(m.settings), stream_settings: JSON.stringify(m.stream), sniffing: JSON.stringify(m.sniffing),
+      ...(addon ? {} : { profiles: m.profiles }),
       ...(addon ? { route: m.route, fragment: m.upload && m.uploadJSON && m.fragment, clean_ips: m.route === 'cdn' && m.cleanIPs } : {}),
     }
     if (existing) return put<{ job?: Job }>(`/template/inbounds/${existing.id}`, body)
@@ -189,6 +191,11 @@ export function InboundFormModal({ value, initial, servers, family = 'both', add
                   <Segmented value={m.family} onChange={(v) => set(['family'], v)}
                     options={[{ value: 'v4', label: 'IPv4' }, { value: 'v6', label: 'IPv6' }, { value: 'both', label: 'هر دو' }]} />
                 </F>
+                {!addon && (
+                  <F label="پروفایل‌ها" tip="خالی: روی همهٔ سرورهای این نوع IP. با نام پروفایل (چندتا با کاما): فقط روی سرورهایی که لوکیشن‌شان همان پروفایل را دارد. با این کار هر گروه سرور فقط چند ورودی می‌گیرد.">
+                    <Input dir="ltr" value={m.profiles} onChange={(e) => set(['profiles'], e.target.value)} placeholder="a, b" />
+                  </F>
+                )}
                 <F label="بارگذاری لینک‌ها در vpn-pannel"><Switch checked={m.upload} onChange={(v) => set(['upload'], v)} /></F>
                 <F label="ارسال به‌صورت کانفیگ JSON" tip="به‌جای لینک عادی، برای هر کاربر کانفیگ کامل کلاینت (مثل صفحه «ساخت کانفیگ JSON») ساخته و در پنل مقصد ذخیره می‌شود">
                   <Switch checked={m.upload && m.uploadJSON} disabled={!m.upload} onChange={(v) => set(['uploadJSON'], v)} />

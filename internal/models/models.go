@@ -79,10 +79,17 @@ type Location struct {
 	CDNAddonID uint `gorm:"column:cdn_addon_id;index" json:"cdn_addon_id"`
 	// PanelJSON uploads the 3x-ui panel's own JSON subscription configs to
 	// vpn-pannel for servers built here, instead of share links (off = links).
-	PanelJSON bool      `gorm:"column:panel_json" json:"panel_json"`
-	Note      string    `gorm:"size:255" json:"note"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	PanelJSON bool `gorm:"column:panel_json" json:"panel_json"`
+	// Profile is the inbound profile of servers built here: they get the
+	// template inbounds open to every server plus those listing this profile.
+	Profile string `gorm:"size:32" json:"profile"`
+	// RealitySNIs are Reality targets hosted near this location's servers
+	// (same ASN), one per line or comma separated. A server built here takes
+	// one of them for all its Reality inbounds; empty keeps the template's.
+	RealitySNIs string    `gorm:"column:reality_snis;type:text" json:"reality_snis"`
+	Note        string    `gorm:"size:255" json:"note"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // CDNAddon is the CDN add-on: every server built in a location that uses it
@@ -210,6 +217,16 @@ type Server struct {
 	SSHHostKey string `gorm:"type:text" json:"-"`
 	// LocationID is the placement entry the server was built for (0 = manual).
 	LocationID uint `gorm:"index" json:"location_id"`
+	// IdentitySeed makes the server's Reality inbounds its own: keys, short
+	// IDs, spiderX, client IDs and paths are derived from it, so a config
+	// taken from the app only identifies this one server. Empty (servers
+	// built before the feature) keeps the shared template values.
+	IdentitySeed secret.String `gorm:"column:identity_seed" json:"-"`
+	// RealitySNI is the Reality target picked for this server from its
+	// location's list when the seed was set (empty = the template's).
+	RealitySNI string `gorm:"column:reality_sni;size:255" json:"reality_sni"`
+	// Profile is the inbound profile, copied from the location at creation.
+	Profile string `gorm:"size:32" json:"profile"`
 	// PanelName is the base name this server's configs carry in vpn-pannel
 	// when it came from a location with a name prefix ("sama-3").
 	PanelName string `gorm:"size:80;index" json:"panel_name"`
@@ -523,7 +540,10 @@ type InboundTemplate struct {
 	Fragment bool `gorm:"column:fragment" json:"fragment"`
 	// CleanIPs gives this (CDN) inbound one extra config per clean
 	// Cloudflare address, uploaded to vpn-pannel too.
-	CleanIPs  bool      `gorm:"column:clean_ips" json:"clean_ips"`
+	CleanIPs bool `gorm:"column:clean_ips" json:"clean_ips"`
+	// Profiles limits the inbound to servers of these profiles (comma
+	// separated); empty puts it on every server of its family.
+	Profiles  string    `gorm:"size:255" json:"profiles"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

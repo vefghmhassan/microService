@@ -176,6 +176,12 @@ func clientConfig(remark string, proxy obj, fragment bool) obj {
 	if fragment {
 		outbounds = append(outbounds, fragmentOutbound)
 	}
+	rules := []any{obj{"ip": []string{"1.1.1.1"}, "outboundTag": "proxy", "port": "53", "type": "field"}}
+	if usesVision(proxy) {
+		// Vision only hides TLS over TCP; QUIC would ride the tunnel as plain
+		// UDP-over-TCP. Refusing UDP 443 makes apps fall back to TCP.
+		rules = append(rules, obj{"network": "udp", "port": "443", "outboundTag": "block", "type": "field"})
+	}
 	return obj{
 		"dns": obj{"hosts": obj{"domain:googleapis.cn": "googleapis.com"}, "servers": []string{"1.1.1.1"}},
 		"inbounds": []any{
@@ -196,10 +202,26 @@ func clientConfig(remark string, proxy obj, fragment bool) obj {
 		"remarks": remark,
 		"routing": obj{
 			"domainStrategy": "IPIfNonMatch",
-			"rules":          []any{obj{"ip": []string{"1.1.1.1"}, "outboundTag": "proxy", "port": "53", "type": "field"}},
+			"rules":          rules,
 		},
 		"stats": obj{},
 	}
+}
+
+// usesVision reports whether a proxy outbound carries the XTLS Vision flow.
+func usesVision(proxy obj) bool {
+	settings, _ := proxy["settings"].(obj)
+	vnext, _ := settings["vnext"].([]any)
+	for _, v := range vnext {
+		vm, _ := v.(obj)
+		users, _ := vm["users"].([]any)
+		for _, u := range users {
+			if um, _ := u.(obj); um != nil && um["flow"] == "xtls-rprx-vision" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func encodeConfig(cfg obj) (string, error) {

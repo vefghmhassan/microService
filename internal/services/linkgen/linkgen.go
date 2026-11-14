@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -408,6 +409,15 @@ func X25519() (private, public string, err error) {
 	if _, err = rand.Read(priv); err != nil {
 		return
 	}
+	return X25519From(priv)
+}
+
+// X25519From is the Reality key pair of a 32-byte seed, clamped as xray does.
+func X25519From(seed []byte) (private, public string, err error) {
+	if len(seed) != 32 {
+		return "", "", errors.New("x25519: seed must be 32 bytes")
+	}
+	priv := append([]byte(nil), seed...)
 	priv[0] &= 248
 	priv[31] &= 127
 	priv[31] |= 64

@@ -174,6 +174,8 @@ interface FormValues {
   name_prefix?: string
   cdn_addon_id?: number
   panel_json?: boolean
+  profile?: string
+  reality_snis?: string
 }
 
 /** CapInput edits a cap stored in GB, typed in GB or TB (1 TB = 1024 GB). */
@@ -281,6 +283,17 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
             <Form.Item name="panel_json" label="ارسال JSON پنل به vpn-pannel" valuePropName="checked"
               tooltip="روشن: کانفیگ‌های JSON خود پنل 3x-ui (همان /json/…) به‌جای لینک در vpn-pannel گذاشته می‌شود. خاموش: مثل قبل لینک">
               <Switch />
+            </Form.Item>
+          </Col>
+          <Col xs={24} sm={8}>
+            <Form.Item name="profile" label="پروفایل ورودی‌ها" tooltip="سرورهای این لوکیشن، ورودی‌های بدون پروفایل به‌علاوهٔ ورودی‌هایی که این پروفایل را دارند می‌گیرند. خالی = فقط ورودی‌های بدون پروفایل. روی سرورهایی که از این پس ساخته می‌شوند اثر دارد."
+              rules={[{ pattern: /^[a-z0-9_-]{1,32}$/, message: 'فقط حروف کوچک انگلیسی، عدد، - و _' }]}>
+              <Input dir="ltr" maxLength={32} placeholder="a" />
+            </Form.Item>
+          </Col>
+          <Col xs={24} sm={16}>
+            <Form.Item name="reality_snis" label="SNIهای Reality این لوکیشن" tooltip="هر خط یک دامنه که نزدیک سرورهای این لوکیشن (همان دیتاسنتر/ASN) میزبانی می‌شود و TLS 1.3 و H2 دارد؛ با اسکنر Reality در فرم ورودی پیدا کنید. هر سرور جدید یکی را برای همهٔ ورودی‌های Reality خودش برمی‌دارد. خالی = انتخاب خودکار: هنگام نصب، از خود سرور اسکن می‌شود (اول سایت‌های همسایه در همان /24، بعد فهرست پیش‌فرض) و یکی از هدف‌های سالم تصادفی انتخاب می‌شود.">
+              <Input.TextArea dir="ltr" autoSize={{ minRows: 2, maxRows: 6 }} placeholder={'example-one.com\nexample-two.net'} />
             </Form.Item>
           </Col>
           <Col xs={12} sm={4}>

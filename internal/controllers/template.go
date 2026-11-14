@@ -180,6 +180,8 @@ type inboundInput struct {
 	Family         string `json:"family"`
 	ClientCount    int    `json:"client_count"`
 	Sync           bool   `json:"sync"`
+	// Profiles limits the inbound to servers of these profiles (nil = keep).
+	Profiles *string `json:"profiles"`
 	// CDN add-on inbounds only.
 	Route    string `json:"route"`
 	Fragment *bool  `json:"fragment"`
@@ -205,6 +207,15 @@ func (a *App) saveInbound(c *fiber.Ctx, t *models.InboundTemplate) error {
 	}
 	if in.Protocol != "" {
 		t.Protocol = in.Protocol
+	}
+	if in.Profiles != nil && t.AddonID == 0 {
+		list := orchestrator.ProfileList(*in.Profiles)
+		for _, p := range list {
+			if err := orchestrator.ValidProfile(p); err != nil {
+				return errJSON(c, fiber.StatusBadRequest, err.Error())
+			}
+		}
+		t.Profiles = strings.Join(list, ",")
 	}
 	if t.AddonID != 0 {
 		if !addonProtocols[t.Protocol] {

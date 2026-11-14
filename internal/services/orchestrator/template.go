@@ -163,6 +163,11 @@ func (snap *Snapshot) hash(family string) string {
 		if in.CDN {
 			fmt.Fprint(h, "cdn\x00")
 		}
+		// Only inbounds limited to profiles add to the hash, so templates
+		// without profiles hash as before.
+		if pl := ProfileList(in.Profiles); len(pl) > 0 {
+			fmt.Fprintf(h, "profiles:%s\x00", strings.Join(pl, ","))
+		}
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
@@ -178,7 +183,9 @@ func NeedsCert(t models.InboundTemplate) bool {
 }
 
 // For is the snapshot as it applies to one server: the inbounds and xray
-// template of its IP family, with Hash its family's hash. CDN inbounds that
+// template of its IP family and profile, with Hash its family's hash. The
+// Reality inbounds of a server with an identity seed carry its own keys,
+// IDs and target (see personalize). CDN inbounds that
 // need the zone certificate are left out where the server has none, since
 // xray would not start with a missing certificate file; the hash stays the
 // family's, so such a server is still in sync.
@@ -192,8 +199,8 @@ func (snap *Snapshot) For(s *models.Server) *Snapshot {
 	out.HashV6 = out.Hash
 	out.Inbounds = nil
 	for _, t := range snap.Inbounds {
-		if forFamily(t, fam) && (certOK || !NeedsCert(t)) {
-			out.Inbounds = append(out.Inbounds, t)
+		if forFamily(t, fam) && forProfile(t, s.Profile) && (certOK || !NeedsCert(t)) {
+			out.Inbounds = append(out.Inbounds, personalize(t, s))
 		}
 	}
 	out.DirectHost, out.CDNHost, out.AddonHash, out.Clean = "", "", "", nil

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -264,6 +265,19 @@ func (o *Orchestrator) fail(r *jobs.Run, s *models.Server, err error) error {
 
 // recordCheck stores a check and updates the server's last-check fields.
 func (o *Orchestrator) recordCheck(r *jobs.Run, s *models.Server, res *checker.Result) {
+	o.storeCheck(r, s, res)
+	if s != nil {
+		now := time.Now()
+		ok := res.OK
+		s.LastCheckAt, s.LastCheckOK, s.LastCheckNote = &now, &ok, truncate(res.Summary, 255)
+		o.save(r, s, "last_check_at", "last_check_ok", "last_check_note")
+		o.DB.Model(&models.IPAddress{}).Where("address = ? AND server_id = ?", s.IPv4, s.ID).
+			Updates(map[string]any{"last_check_at": now, "last_check_ok": ok})
+	}
+}
+
+// storeCheck keeps a check in the history and the job log, nothing else.
+func (o *Orchestrator) storeCheck(r *jobs.Run, s *models.Server, res *checker.Result) {
 	run := models.CheckRun{Host: res.Host, Port: res.Port, Verdict: res.Verdict, OK: res.OK, Summary: truncate(res.Summary, 255)}
 	if s != nil {
 		run.ServerID = &s.ID
@@ -281,38 +295,86 @@ func (o *Orchestrator) recordCheck(r *jobs.Run, s *models.Server, res *checker.R
 			r.Logf("warn", "check source error: %s", e)
 		}
 	}
-	if s != nil {
-		now := time.Now()
-		ok := res.OK
-		s.LastCheckAt, s.LastCheckOK, s.LastCheckNote = &now, &ok, truncate(res.Summary, 255)
-		o.save(r, s, "last_check_at", "last_check_ok", "last_check_note")
-		o.DB.Model(&models.IPAddress{}).Where("address = ? AND server_id = ?", s.IPv4, s.ID).
-			Updates(map[string]any{"last_check_at": now, "last_check_ok": ok})
-	}
 }
 
 // checkPort is where reachability is measured: the first enabled inbound once
 // 3x-ui is configured, else sshd (the only thing listening on a fresh server).
 // Iranian filtering is usually per IP, so either port answers the question.
 func (o *Orchestrator) checkPort(s *models.Server) int {
-	if s.AppliedHash != "" {
-		var ins []models.InboundTemplate
-		// A CDN inbound may be missing on a server without SSL; prefer the
-		// others. The check is TCP, so Hysteria2 (UDP only) never counts,
-		// and only this server's add-on inbounds do.
-		o.DB.Where("enabled = ? AND family IN ? AND protocol <> ? AND (addon_id = 0 OR addon_id = ?)", true, TemplateFamilies(s.Family()), "hysteria", s.CDNAddonID).
-			Order("cdn, id").Find(&ins)
-		certOK := s.SSL && s.Hostname != ""
-		for _, in := range ins {
-			if certOK || !NeedsCert(in) {
-				return in.Port
-			}
-		}
+	if ports := o.inboundPorts(s); len(ports) > 0 {
+		return ports[0]
 	}
 	if p := o.Settings.Int(settings.CheckPreInstall); p > 0 {
 		return p
 	}
 	return 22
+}
+
+// inboundPorts are the TCP ports of the inbounds a configured server
+// listens on, the one reachability is measured on first.
+func (o *Orchestrator) inboundPorts(s *models.Server) []int {
+	if s.AppliedHash == "" {
+		return nil
+	}
+	var ins []models.InboundTemplate
+	// A CDN inbound may be missing on a server without SSL; prefer the
+	// others. The check is TCP, so Hysteria2 (UDP only) never counts,
+	// and only this server's add-on inbounds do.
+	o.DB.Where("enabled = ? AND family IN ? AND protocol <> ? AND (addon_id = 0 OR addon_id = ?)", true, TemplateFamilies(s.Family()), "hysteria", s.CDNAddonID).
+		Order("cdn, id").Find(&ins)
+	certOK := s.SSL && s.Hostname != ""
+	var ports []int
+	for _, in := range ins {
+		if forProfile(in, s.Profile) && (certOK || !NeedsCert(in)) {
+			ports = append(ports, in.Port)
+		}
+	}
+	return ports
+}
+
+// maxPortChecks bounds the extra checks of portBreakdown; every one spends
+// probes of the check sources.
+const maxPortChecks = 8
+
+// portBreakdown checks the server's other inbound ports after its main one
+// came back filtered, and says which answer from Iran: all closed means the
+// IP is blocked, some open means one inbound was singled out. Each check is
+// stored as a CheckRun; the server's last-check fields stay the main port's.
+func (o *Orchestrator) portBreakdown(ctx context.Context, r *jobs.Run, s *models.Server, mainPort int) string {
+	var open, closed, unknown []string
+	closed = append(closed, strconv.Itoa(mainPort))
+	n := 0
+	for _, port := range o.inboundPorts(s) {
+		if port == mainPort {
+			continue
+		}
+		if n++; n > maxPortChecks {
+			break
+		}
+		res := o.Check(ctx, s.PublicIP(), port)
+		o.storeCheck(r, s, res)
+		switch res.Verdict {
+		case checker.Healthy:
+			open = append(open, strconv.Itoa(port))
+		case checker.Filtered:
+			closed = append(closed, strconv.Itoa(port))
+		default:
+			unknown = append(unknown, strconv.Itoa(port))
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	out := "پورت‌های بسته: " + strings.Join(closed, "، ")
+	if len(open) > 0 {
+		out += " | باز: " + strings.Join(open, "، ")
+	} else if len(unknown) == 0 {
+		out += " (کل IP بسته است)"
+	}
+	if len(unknown) > 0 {
+		out += " | نامشخص: " + strings.Join(unknown, "، ")
+	}
+	return out
 }
 
 func (o *Orchestrator) poolUse(s *models.Server) {

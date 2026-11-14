@@ -41,6 +41,8 @@ type locationInput struct {
 	NamePrefix        string `json:"name_prefix"`
 	CDNAddonID        uint   `json:"cdn_addon_id"`
 	PanelJSON         bool   `json:"panel_json"`
+	Profile           string `json:"profile"`
+	RealitySNIs       string `json:"reality_snis"`
 }
 
 func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
@@ -74,8 +76,14 @@ func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
 			return errJSON(c, fiber.StatusBadRequest, "افزونه CDN پیدا نشد")
 		}
 	}
+	profile := strings.ToLower(strings.TrimSpace(in.Profile))
+	if err := orchestrator.ValidProfile(profile); err != nil {
+		return errJSON(c, fiber.StatusBadRequest, err.Error())
+	}
 	l.CDNAddonID = in.CDNAddonID
 	l.PanelJSON = in.PanelJSON
+	l.Profile = profile
+	l.RealitySNIs = strings.Join(orchestrator.SNIList(in.RealitySNIs), "\n")
 	dns := models.DNS{}
 	if in.CFAccountID != 0 {
 		var cf models.CloudflareAccount

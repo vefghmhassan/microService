@@ -249,6 +249,7 @@ function Inbounds({ list, all, servers, family }: { list: InboundTemplate[]; all
               {r}
               {t.cdn && <Tag color="orange" icon={<CloudOutlined />}>CDN</Tag>}
               {(t.family || 'both') === 'both' ? <Tag>هر دو</Tag> : <Tag color={t.family === 'v6' ? 'purple' : 'blue'}>{t.family === 'v6' ? 'IPv6' : 'IPv4'}</Tag>}
+              {(t.profiles || '').split(',').filter(Boolean).map((p) => <Tag key={p} color="gold">پروفایل {p}</Tag>)}
             </Flex>
           ) },
           { title: 'پروتکل', dataIndex: 'protocol' },

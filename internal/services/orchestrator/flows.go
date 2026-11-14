@@ -84,6 +84,7 @@ func (o *Orchestrator) provision(ctx context.Context, r *jobs.Run) error {
 			Status:  models.ServerCreating, SyncStatus: models.SyncPending, XUIScheme: "http",
 			IPFamily: models.NormFamily(p.IPFamily),
 		}
+		newIdentity(&s, nil)
 		if s.Region == "" || s.Plan == "" {
 			return errors.New("region and plan are required (set them on the request or as account defaults)")
 		}
@@ -381,6 +382,9 @@ func (o *Orchestrator) rotateOnce(ctx context.Context, r *jobs.Run, prov provide
 		s.SyncStatus = models.SyncPending
 		s.XUIPort = 0
 		s.XUIToken = ""
+		// A rebuilt machine is installed and applied from scratch, so it
+		// can take a new identity; an IP swapped in place keeps its own.
+		o.renewIdentity(s)
 	}
 	s.RotateCount++
 	s.Status = prevStatus
@@ -696,6 +700,8 @@ func (o *Orchestrator) applyWith(ctx context.Context, r *jobs.Run, s *models.Ser
 			s.XrayVersion = st.Xray.Version
 		}
 	}
+	// A server whose location lists no Reality SNI picks one it can reach.
+	o.autoSNI(ctx, r, s, panel, snap)
 	if err := Apply(ctx, panel, snap.For(s), r.Info); err != nil {
 		s.SyncStatus = models.SyncFailed
 		o.save(r, s, "sync_status")
@@ -1038,13 +1044,20 @@ func (o *Orchestrator) check(ctx context.Context, r *jobs.Run) error {
 		return fmt.Errorf("server has no IP%s", s.Family())
 	}
 	r.Step("check reachability from Iran")
-	res := o.Check(ctx, s.PublicIP(), o.checkPort(s))
+	port := o.checkPort(s)
+	res := o.Check(ctx, s.PublicIP(), port)
 	o.recordCheck(r, s, res)
 	switch res.Verdict {
 	case checker.Filtered:
 		if s.Status != models.ServerFiltered {
 			o.setStatus(r, s, models.ServerFiltered)
-			o.notify("⛔️ سرور %s (%s) فیلتر شده است\n%s", s.Name, s.PublicIP(), res.Summary)
+			// Once per block: which of the other inbound ports still answer.
+			ports := o.portBreakdown(ctx, r, s, port)
+			if ports != "" {
+				r.Info("%s", ports)
+				ports = "\n" + ports
+			}
+			o.notify("⛔️ سرور %s (%s) فیلتر شده است\n%s%s", s.Name, s.PublicIP(), res.Summary, ports)
 		}
 		if o.Settings.Bool(settings.AutoRotate) && s.DeleteAt == nil {
 			id := s.ID
