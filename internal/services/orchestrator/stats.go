@@ -174,7 +174,7 @@ func (o *Orchestrator) checkGone(ctx context.Context, s *models.Server, err erro
 // its cap, if automatic replacement is on. It fires once per server.
 func (o *Orchestrator) enforceTrafficCap(s *models.Server) {
 	limit := o.TrafficLimit(s)
-	if limit <= 0 || s.ReplacingAt != nil || s.TrafficUp+s.TrafficDown < limit {
+	if limit <= 0 || s.ReplacingAt != nil || s.DeleteAt != nil || s.TrafficUp+s.TrafficDown < limit {
 		return
 	}
 	if !o.Settings.Bool(settings.TrafficAuto) {

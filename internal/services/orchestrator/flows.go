@@ -873,7 +873,8 @@ func (o *Orchestrator) uploadTo(ctx context.Context, r *jobs.Run, s *models.Serv
 	now := time.Now()
 	s.UploadedIP, s.UploadedAt = LinkHost(s), &now
 	s.UploadedInbounds = joinIDs(uploadIDs(us))
-	o.save(r, s, "uploaded_ip", "uploaded_at", "uploaded_inbounds")
+	s.PanelRemovedAt = nil
+	o.save(r, s, "uploaded_ip", "uploaded_at", "uploaded_inbounds", "panel_removed_at")
 	return nil
 }
 
@@ -974,6 +975,58 @@ func (o *Orchestrator) reconcileUploads(ctx context.Context, r *jobs.Run, s *mod
 	return nil
 }
 
+// ---- unpublish ----
+
+// unpublish deletes the server's configs from every vpn-pannel (links on its
+// address and its CDN name, clean-IP configs matched by the CDN name) and
+// forgets the upload; the server itself stays. The smart sync that follows
+// the job drops its smart configs.
+func (o *Orchestrator) unpublish(ctx context.Context, r *jobs.Run) error {
+	s, err := o.loadServer(r)
+	if err != nil {
+		return err
+	}
+	r.Step("remove configs from vpn-pannel")
+	addrs := []string{}
+	seen := map[string]bool{}
+	for _, a := range []string{s.UploadedIP, LinkHost(s), s.PublicIP(), s.CDNHostname} {
+		if a != "" && !seen[a] {
+			seen[a] = true
+			addrs = append(addrs, a)
+		}
+	}
+	dests := o.Dests()
+	var errs []error
+	ok := 0
+	for _, d := range dests {
+		var derrs []error
+		for _, addr := range addrs {
+			if err := d.DeleteAddress(ctx, addr); err != nil {
+				derrs = append(derrs, fmt.Errorf("%s: %s: %w", d.Name, addr, err))
+				r.Logf("warn", "%s: could not delete configs on %s: %v", d.Name, addr, err)
+				continue
+			}
+			r.Info("%s: configs on %s deleted", d.Name, addr)
+		}
+		if len(derrs) == len(addrs) && len(addrs) > 0 {
+			errs = append(errs, derrs...)
+			continue
+		}
+		ok++
+	}
+	if len(dests) > 0 && ok == 0 {
+		return errors.Join(errs...)
+	}
+	if s.CDNHostname != "" {
+		o.retireCleanConfigs(ctx, r, s.CDNHostname, true)
+	}
+	now := time.Now()
+	s.UploadedIP, s.UploadedAt, s.UploadedInbounds, s.PanelRemovedAt = "", nil, "", &now
+	o.save(r, s, "uploaded_ip", "uploaded_at", "uploaded_inbounds", "panel_removed_at")
+	o.notify("🧹 کانفیگ‌های سرور %s از پنل‌های مقصد حذف شد", s.Name)
+	return nil
+}
+
 // ---- check ----
 
 func (o *Orchestrator) check(ctx context.Context, r *jobs.Run) error {
@@ -993,7 +1046,7 @@ func (o *Orchestrator) check(ctx context.Context, r *jobs.Run) error {
 			o.setStatus(r, s, models.ServerFiltered)
 			o.notify("⛔️ سرور %s (%s) فیلتر شده است\n%s", s.Name, s.PublicIP(), res.Summary)
 		}
-		if o.Settings.Bool(settings.AutoRotate) {
+		if o.Settings.Bool(settings.AutoRotate) && s.DeleteAt == nil {
 			id := s.ID
 			if _, err := o.Engine.Enqueue(KindRotate, &id, RotateParams{Reason: "auto: filtered"}, "auto"); err != nil {
 				return err

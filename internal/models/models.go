@@ -281,9 +281,14 @@ type Server struct {
 	WatchBase int64      `json:"-"`
 	// ReplacingAt is set once a replacement was queued, so the cap fires once.
 	ReplacingAt *time.Time `json:"replacing_at"`
-	LastError   string     `gorm:"type:text" json:"last_error"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	// PanelRemovedAt is set when the server's configs were taken out of
+	// every vpn-pannel by hand (the server itself stays); an upload clears it.
+	PanelRemovedAt *time.Time `json:"panel_removed_at"`
+	// DeleteAt is when a scheduled full deletion runs (nil = none).
+	DeleteAt  *time.Time `gorm:"index" json:"delete_at"`
+	LastError string     `gorm:"type:text" json:"last_error"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 // IP families.

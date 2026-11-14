@@ -12,6 +12,7 @@ import { StatCard } from '../components/StatCard'
 import { TrafficBar } from '../components/TrafficBar'
 import { PageHeader } from '../components/PageHeader'
 import { StatusTag } from '../components/StatusTag'
+import { ServerMarks } from '../components/ServerMarks'
 import { CopyText } from '../components/CopyText'
 import { HostBadge } from '../components/HostBadge'
 import { ServerActions } from '../components/ServerActions'
@@ -37,7 +38,7 @@ export function ServerDetail() {
     <>
       <PageHeader
         title={<Space><Button type="text" icon={<ArrowRightOutlined />} onClick={() => nav('/servers')} />{flagEmoji(s.country)} {s.name}</Space>}
-        subtitle={<Space wrap><StatusTag map={serverStatus} value={s.status} /><ServerIP server={s} showV4 /><CheckBadge server={s} /></Space>}
+        subtitle={<Space wrap><StatusTag map={serverStatus} value={s.status} /><ServerMarks server={s} /><ServerIP server={s} showV4 /><CheckBadge server={s} /></Space>}
         extra={<ServerActions server={s} onJob={(j) => openJob(j.id)} />}
       />
       {s.last_error && s.status === 'error' && <Alert type="error" showIcon title="خطای آخرین عملیات" description={s.last_error} style={{ marginBottom: 16 }} />}

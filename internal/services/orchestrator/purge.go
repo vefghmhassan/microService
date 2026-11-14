@@ -46,6 +46,55 @@ func (o *Orchestrator) DeleteServer(serverID uint, source string) (*models.Job, 
 	return o.Engine.Enqueue(KindDelete, &serverID, struct{}{}, source)
 }
 
+// ScheduleDelete takes the server's configs out of vpn-pannel now and marks
+// it for full deletion after the given delay (see RunDueDeletes). The time is
+// stored on the row, so a restart does not lose it.
+func (o *Orchestrator) ScheduleDelete(serverID uint, after time.Duration, source string) (*models.Job, error) {
+	at := time.Now().Add(after)
+	if err := o.DB.Model(&models.Server{}).Where("id = ?", serverID).Update("delete_at", at).Error; err != nil {
+		return nil, err
+	}
+	o.publishServer(serverID)
+	j, err := o.Engine.Enqueue(KindUnpublish, &serverID, struct{}{}, source)
+	if err != nil {
+		o.DB.Model(&models.Server{}).Where("id = ?", serverID).Update("delete_at", nil)
+		o.publishServer(serverID)
+		return nil, err
+	}
+	return j, nil
+}
+
+// CancelScheduledDelete drops a scheduled deletion. The configs already
+// removed from vpn-pannel stay removed.
+func (o *Orchestrator) CancelScheduledDelete(serverID uint) error {
+	if err := o.DB.Model(&models.Server{}).Where("id = ?", serverID).Update("delete_at", nil).Error; err != nil {
+		return err
+	}
+	o.publishServer(serverID)
+	return nil
+}
+
+// RunDueDeletes queues the deletion of every server whose scheduled time
+// has come.
+func (o *Orchestrator) RunDueDeletes() {
+	var due []models.Server
+	o.DB.Where("delete_at IS NOT NULL AND delete_at <= ? AND status NOT IN ?", time.Now(),
+		[]string{models.ServerDeleting, models.ServerDeleted}).Find(&due)
+	for _, s := range due {
+		o.DB.Model(&models.Server{}).Where("id = ?", s.ID).Update("delete_at", nil)
+		if _, err := o.DeleteServer(s.ID, "schedule"); err != nil {
+			continue
+		}
+	}
+}
+
+func (o *Orchestrator) publishServer(id uint) {
+	var s models.Server
+	if o.DB.First(&s, id).Error == nil && o.Engine != nil && o.Engine.Broker != nil {
+		o.Engine.Broker.Publish(serverEvent(&s))
+	}
+}
+
 // purgeProvider removes a provider account and everything built with it:
 // each server is deleted at the provider when its API still answers, its DNS
 // record and vpn-pannel configs are removed, and then the rows go. The API is

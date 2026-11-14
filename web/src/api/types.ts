@@ -165,6 +165,8 @@ export interface Server extends DNSFields {
   stats_error: string
   traffic_limit_gb: number
   replacing_at: string | null
+  panel_removed_at?: string | null
+  delete_at?: string | null
   last_error: string
   created_at: string
   updated_at: string

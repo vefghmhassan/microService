@@ -7,6 +7,7 @@ import { TrafficBar } from '../components/TrafficBar'
 import type { Server } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { StatusTag } from '../components/StatusTag'
+import { ServerMarks } from '../components/ServerMarks'
 import { HostBadge } from '../components/HostBadge'
 import { CheckBadge, ServerCard } from '../components/ServerCard'
 import { ServerActions } from '../components/ServerActions'
@@ -79,7 +80,7 @@ export function Servers() {
                 <Flex vertical gap={2}><ServerIP server={s} /><HostBadge server={s} /></Flex>
               ),
             },
-            { title: 'وضعیت', dataIndex: 'status', render: (st: string) => <StatusTag map={serverStatus} value={st} /> },
+            { title: 'وضعیت', dataIndex: 'status', render: (st: string, s) => <><StatusTag map={serverStatus} value={st} /><ServerMarks server={s} /></> },
             { title: 'ایران', render: (_, s) => <CheckBadge server={s} /> },
             { title: 'آنلاین', dataIndex: 'online_count', width: 70, sorter: (a, b) => a.online_count - b.online_count },
             {

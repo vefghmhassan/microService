@@ -141,6 +141,8 @@ export function useAction<TVars = void, TRes = unknown>(
 
 export const serverAction = (id: number, action: string, body?: unknown) => post<Job>(`/servers/${id}/${action}`, body)
 export const deleteServer = (id: number) => del<Job>(`/servers/${id}`)
+export const scheduleDelete = (id: number) => post<Job>(`/servers/${id}/schedule-delete`)
+export const cancelScheduledDelete = (id: number) => del<{ ok: boolean }>(`/servers/${id}/schedule-delete`)
 export { del, get, post, put }
 
 /**

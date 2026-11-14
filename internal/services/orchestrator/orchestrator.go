@@ -46,6 +46,7 @@ const (
 	KindCertPush      = "cert_push"
 	KindDNSSync       = "dns_sync"
 	KindPurgeProvider = "purge_provider"
+	KindUnpublish     = "unpublish"
 )
 
 // Remote is the SSH session the orchestrator needs; sshx.Client satisfies it
@@ -208,6 +209,7 @@ func (o *Orchestrator) Register() {
 	o.Engine.Register(KindCertPush, o.certPush)
 	o.Engine.Register(KindDNSSync, o.dnsSync)
 	o.Engine.Register(KindPurgeProvider, o.purgeProvider)
+	o.Engine.Register(KindUnpublish, o.unpublish)
 	o.Engine.Register(KindSmartSync, o.smartSync)
 }
 

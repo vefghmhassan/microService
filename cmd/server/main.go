@@ -121,6 +121,7 @@ func main() {
 	go scheduleGeoIP(ctx, geo, st, db)
 	go scheduleCerts(ctx, orch)
 	go scheduleCleanIPs(ctx, db, st)
+	go scheduleDeletes(ctx, orch)
 
 	app := fiber.New(fiber.Config{
 		AppName:      "microServer",
@@ -225,6 +226,21 @@ func scheduleBackups(ctx context.Context, db *gorm.DB, st *settings.Store, tg *b
 			// Retry on the next interval rather than every few minutes.
 			_ = st.Set(map[string]string{settings.BackupLastAt: time.Now().UTC().Format(time.RFC3339)})
 			tg.Notify("❌ ارسال بکاپ زمان‌بندی‌شده ناموفق بود: " + err.Error())
+		}
+	}
+}
+
+// scheduleDeletes runs the server deletions scheduled from the panel
+// ("remove from panels, delete after 10 minutes") once their time comes.
+func scheduleDeletes(ctx context.Context, o *orchestrator.Orchestrator) {
+	t := time.NewTicker(20 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			o.RunDueDeletes()
 		}
 	}
 }

@@ -5,6 +5,7 @@ import type { Job, Server } from '../api/types'
 import { serverStatus, syncStatus } from '../lib/labels'
 import { flagEmoji, timeAgo } from '../lib/format'
 import { StatusTag } from './StatusTag'
+import { ServerMarks } from './ServerMarks'
 import { HostBadge } from './HostBadge'
 import { ServerActions } from './ServerActions'
 import { TrafficBar } from './TrafficBar'
@@ -37,6 +38,7 @@ export function ServerCard({ server, limit = 0, onJob }: { server: Server; limit
             {flagEmoji(server.country)} {server.name}
           </Typography.Link>
           <StatusTag map={serverStatus} value={server.status} />
+          <ServerMarks server={server} />
         </Flex>
         <Flex justify="space-between" align="center" wrap gap={8}>
           <ServerIP server={server} />

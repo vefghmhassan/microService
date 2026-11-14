@@ -340,6 +340,45 @@ func (a *App) ReplaceServer(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusAccepted).JSON(j)
 }
 
+// ScheduledDeleteDelay is how long after "remove from panels and delete"
+// the server itself is deleted.
+const ScheduledDeleteDelay = 10 * time.Minute
+
+// ScheduleDelete removes the server's configs from vpn-pannel now and
+// deletes the server after ScheduledDeleteDelay.
+func (a *App) ScheduleDelete(c *fiber.Ctx) error {
+	s, err := a.server(c)
+	if err != nil {
+		return err
+	}
+	if s.Status == models.ServerDeleted || s.Status == models.ServerDeleting {
+		return errJSON(c, fiber.StatusConflict, "server is deleted")
+	}
+	if s.DeleteAt != nil {
+		return errJSON(c, fiber.StatusConflict, "a deletion is already scheduled")
+	}
+	j, err := a.Orch.ScheduleDelete(s.ID, ScheduledDeleteDelay, source(c))
+	if err != nil {
+		return err
+	}
+	return c.Status(fiber.StatusAccepted).JSON(j)
+}
+
+// CancelScheduledDelete drops a scheduled deletion.
+func (a *App) CancelScheduledDelete(c *fiber.Ctx) error {
+	s, err := a.server(c)
+	if err != nil {
+		return err
+	}
+	if s.DeleteAt == nil {
+		return errJSON(c, fiber.StatusConflict, "no deletion is scheduled")
+	}
+	if err := a.Orch.CancelScheduledDelete(s.ID); err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"ok": true})
+}
+
 // checkFamily accepts "", "v4" or "v6" as a requested IP family.
 func checkFamily(c *fiber.Ctx, f string) error {
 	switch f {

@@ -59,7 +59,7 @@ var SmartDelay = 20 * time.Second
 var smartKinds = map[string]bool{
 	KindProvision: true, KindInstall: true, KindRotate: true, KindDelete: true,
 	KindSync: true, KindUpload: true, KindPurgeProvider: true, KindProvisionAuto: true,
-	KindCheck: true, KindDNSSync: true,
+	KindCheck: true, KindDNSSync: true, KindUnpublish: true,
 }
 
 // OnJobFinish queues a smart sync after jobs that change servers.
@@ -183,6 +183,15 @@ func (o *Orchestrator) SmartTargets(snap *Snapshot, p *models.SmartProfile) ([]S
 	if err := o.DB.Where("status NOT IN ?", []string{models.ServerDeleted, models.ServerDeleting}).Order("id").Find(&servers).Error; err != nil {
 		return nil, err
 	}
+	// Servers whose configs were taken out of vpn-pannel by hand count as
+	// gone here, so their smart configs are deleted, not just switched off.
+	live := servers[:0]
+	for _, s := range servers {
+		if s.PanelRemovedAt == nil {
+			live = append(live, s)
+		}
+	}
+	servers = live
 	countries := csvSet(p.Countries)
 	want := map[uint]bool{}
 	for id := range splitIDs(p.InboundIDs) {
