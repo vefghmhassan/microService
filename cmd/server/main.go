@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	"microserver/internal/database"
 	"microserver/internal/jobs"
 	"microserver/internal/middleware"
+	"microserver/internal/services/backup"
 	"microserver/internal/services/certs"
 	"microserver/internal/services/cleanip"
 	"microserver/internal/services/geoip"
@@ -48,6 +51,13 @@ func main() {
 	}
 	if err := database.Migrate(db); err != nil {
 		log.Fatalf("migrate: %v", err)
+	}
+	// A backup imported from the dashboard is applied here, before anything
+	// else reads the database.
+	if ok, err := backup.ApplyPending(db, cfg.DataDir); err != nil {
+		log.Printf("backup: restore failed, keeping the current data (see restore.failed): %v", err)
+	} else if ok {
+		log.Printf("backup: restore applied")
 	}
 	if err := database.SeedAdmin(db, cfg.AdminUsername, cfg.AdminPassword); err != nil {
 		log.Fatalf("seed: %v", err)
@@ -114,7 +124,7 @@ func main() {
 
 	app := fiber.New(fiber.Config{
 		AppName:      "microServer",
-		BodyLimit:    8 << 20,
+		BodyLimit:    64 << 20, // backup imports
 		ReadTimeout:  60 * time.Second,
 		ErrorHandler: errorHandler,
 	})
@@ -127,7 +137,13 @@ func main() {
 		Geo:          geo,
 		Auth:         &middleware.Auth{Secret: cfg.JWTSecret, TTL: 7 * 24 * time.Hour},
 		TestTelegram: tgBot.Test,
+		Restart: func() {
+			restart.Store(true)
+			stop()
+		},
+		SendBackup: func() error { return sendBackup(db, st, tgBot, cfg.DataDir) },
 	}
+	go scheduleBackups(ctx, db, st, tgBot, cfg.DataDir)
 	internal.Register(app, a, microserver.WebFS())
 
 	go func() {
@@ -137,6 +153,79 @@ func main() {
 	log.Printf("microServer listening on :%s (SSH public key: %s)", cfg.Port, key.PublicKey)
 	if err := app.Listen(":" + cfg.Port); err != nil {
 		log.Fatal(err)
+	}
+	if restart.Load() {
+		// Give the job workers a moment to see the cancelled context.
+		time.Sleep(2 * time.Second)
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+		log.Printf("restarting")
+		if err := reexec(); err != nil {
+			log.Fatalf("restart: %v", err)
+		}
+	}
+}
+
+// restart is set when the panel stops to start again (after an import).
+var restart atomic.Bool
+
+// sendBackup sends a backup with the backup.* settings to the Telegram chats
+// and records the time.
+func sendBackup(db *gorm.DB, st *settings.Store, tg *bot.Manager, dataDir string) error {
+	f, err := backup.Export(db, dataDir, st.Bool(settings.BackupHistory))
+	if err != nil {
+		return err
+	}
+	pw := st.Get(settings.BackupPassword)
+	raw, err := backup.Encode(f, pw)
+	if err != nil {
+		return err
+	}
+	n := 0
+	for name, t := range f.Tables {
+		if name == "servers" {
+			n = len(t.Rows)
+		}
+	}
+	caption := fmt.Sprintf("🗄 بکاپ کامل پنل microServer\n%s — %d سرور", time.Now().Format("2006-01-02 15:04"), n)
+	if pw == "" {
+		caption += "\n⚠️ بدون رمز: کلیدها و توکن‌ها در این فایل خوانا هستند"
+	}
+	if err := tg.SendDocument(backup.FileName(), raw, caption); err != nil {
+		return err
+	}
+	return st.Set(map[string]string{settings.BackupLastAt: time.Now().UTC().Format(time.RFC3339)})
+}
+
+// scheduleBackups sends a backup to Telegram every backup.interval_hours
+// while backup.telegram is on. The last time is kept in the settings, so a
+// restart does not send one again right away.
+func scheduleBackups(ctx context.Context, db *gorm.DB, st *settings.Store, tg *bot.Manager, dataDir string) {
+	t := time.NewTicker(5 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if !st.Bool(settings.BackupTelegram) {
+			continue
+		}
+		h := st.Int(settings.BackupInterval)
+		if h < 1 {
+			h = 24
+		}
+		if last, err := time.Parse(time.RFC3339, st.Get(settings.BackupLastAt)); err == nil && time.Since(last) < time.Duration(h)*time.Hour {
+			continue
+		}
+		if err := sendBackup(db, st, tg, dataDir); err != nil {
+			log.Printf("backup: telegram: %v", err)
+			// Retry on the next interval rather than every few minutes.
+			_ = st.Set(map[string]string{settings.BackupLastAt: time.Now().UTC().Format(time.RFC3339)})
+			tg.Notify("❌ ارسال بکاپ زمان‌بندی‌شده ناموفق بود: " + err.Error())
+		}
 	}
 }
 

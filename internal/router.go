@@ -34,6 +34,7 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Post("/auth/password", a.ChangePassword)
 	p.Get("/meta", a.Meta)
 	p.Get("/meta/xui-releases", a.XUIReleases)
+	p.Get("/meta/xray-releases", a.XrayReleases)
 	p.Get("/dashboard", a.Dashboard)
 	p.Get("/events", a.Events)
 	// Panel self-update: everything is forwarded to the updater sidecar.
@@ -150,6 +151,10 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Post("/destinations/:id/test", a.TestDestination)
 	p.Post("/settings/test/telegram", a.TestTelegramHandler)
 	p.Post("/destination/upload", a.UploadConfigs)
+	p.Post("/backup/export", a.ExportBackup)
+	p.Post("/backup/inspect", a.InspectBackup)
+	p.Post("/backup/import", a.ImportBackup)
+	p.Post("/backup/telegram", a.SendBackupTelegram)
 
 	p.Get("/sub", a.GetSub)
 	p.Post("/sub/token", a.RenewSubToken)

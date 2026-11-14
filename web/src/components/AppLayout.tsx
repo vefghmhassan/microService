@@ -5,7 +5,7 @@ import {
   CodeOutlined, BranchesOutlined,
   ApiOutlined, AppstoreOutlined, ThunderboltOutlined, CloudOutlined, CloudServerOutlined, DashboardOutlined, EnvironmentOutlined, GlobalOutlined,
   LogoutOutlined, MenuOutlined, MoonOutlined, NodeIndexOutlined, OrderedListOutlined, RadarChartOutlined,
-  CloudSyncOutlined, SettingOutlined, SunOutlined, UnorderedListOutlined,
+  CloudSyncOutlined, SaveOutlined, SettingOutlined, SunOutlined, UnorderedListOutlined,
 } from '@ant-design/icons'
 import { useDashboard, useUpdateBranches, useUpdateStatus } from '../api/hooks'
 import { useThemeMode } from '../lib/theme'
@@ -28,6 +28,7 @@ const items = [
   { key: '/cdn-addon', icon: <AppstoreOutlined />, label: 'افزونه CDN' },
   { key: '/jobs', icon: <UnorderedListOutlined />, label: 'کارها' },
   { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
+  { key: '/backup', icon: <SaveOutlined />, label: 'بکاپ و بازیابی' },
   { key: '/update', icon: <CloudSyncOutlined />, label: 'آپدیت پنل' },
 ]
 

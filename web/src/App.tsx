@@ -25,6 +25,7 @@ import { CleanIPs } from './pages/CleanIPs'
 import { CDNAddonPage } from './pages/CDNAddon'
 import { SmartConfigs } from './pages/SmartConfigs'
 import { Update } from './pages/Update'
+import { Backup } from './pages/Backup'
 
 export default function App() {
   const qc = useQueryClient()
@@ -73,6 +74,7 @@ export default function App() {
             <Route path="/jobs" element={<Jobs />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/update" element={<Update />} />
+            <Route path="/backup" element={<Backup />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </AppLayout>

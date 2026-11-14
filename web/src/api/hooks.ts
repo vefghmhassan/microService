@@ -90,6 +90,8 @@ export const useReservedPorts = (): number[] => {
 }
 export const useXUIReleases = () =>
   useQuery({ queryKey: ['xui-releases'], queryFn: () => get<string[]>('/meta/xui-releases'), staleTime: 3_600_000, retry: false })
+export const useXrayReleases = () =>
+  useQuery({ queryKey: ['xray-releases'], queryFn: () => get<string[]>('/meta/xray-releases'), staleTime: 3_600_000, retry: false })
 export const useMeta = () =>
   useQuery({ queryKey: ['meta'], queryFn: () => get<{ ssh_public_key: string }>('/meta'), staleTime: Infinity })
 

@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { Alert, Button, Card, Col, Divider, Flex, Form, Input, InputNumber, QRCode, Row, Select, Skeleton, Switch, Tag, Typography } from 'antd'
 import { SaveOutlined, SendOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
-import { get, keys, post, put, useAction, useSettings, useXUIReleases } from '../api/hooks'
+import { get, keys, post, put, useAction, useSettings, useXrayReleases, useXUIReleases } from '../api/hooks'
 import type { GeoReport, Settings as S } from '../api/types'
 import { fmtDate } from '../lib/format'
 import { PageHeader } from '../components/PageHeader'
@@ -23,6 +23,7 @@ function toForm(s: S) {
     if (bools.includes(k)) out[enc(k)] = v === 'true'
     else if (nums.includes(k)) out[enc(k)] = Number(v)
     else if (k === 'check.sources') out[enc(k)] = v.split(',').filter(Boolean)
+    else if (k === 'xray.version') out[enc(k)] = v || undefined // empty shows the Select placeholder
     else out[enc(k)] = v
   }
   return out
@@ -43,6 +44,7 @@ const F = ({ k, label, tip, children, bool }: { k: string; label: string; tip?: 
 export function Settings() {
   const { data, isLoading } = useSettings()
   const releases = useXUIReleases()
+  const xrayReleases = useXrayReleases()
   const [form] = Form.useForm()
   useEffect(() => {
     if (data) form.setFieldsValue(toForm(data))
@@ -63,7 +65,9 @@ export function Settings() {
               <F k="xui.version" label="نسخه پیش‌فرض 3x-ui" tip="روی سرورهای جدید نصب می‌شود؛ هر سرور را می‌توان جداگانه تغییر داد">
                 <Select showSearch options={[...new Set([data['xui.version'], ...(releases.data ?? [])])].filter(Boolean).map((v) => ({ value: v, label: v }))} loading={releases.isLoading} />
               </F>
-              <F k="xray.version" label="نسخه هسته Xray" tip="خالی: نسخه‌ای که 3x-ui نصب می‌کند"><Input dir="ltr" placeholder="v25.x.x" /></F>
+              <F k="xray.version" label="نسخه هسته Xray" tip="روی سرورهای جدید نصب می‌شود؛ خالی: نسخه‌ای که 3x-ui نصب می‌کند">
+                <Select showSearch allowClear placeholder="پیش‌فرض 3x-ui" options={[...new Set([data['xray.version'], ...(xrayReleases.data ?? [])])].filter(Boolean).map((v) => ({ value: v, label: v }))} loading={xrayReleases.isLoading} />
+              </F>
               <F k="xui.install_url" label="آدرس اسکریپت نصب"><Input dir="ltr" /></F>
               <F k="xui.cf_panel_port" label="پورت پنل (با SSL کلودفلر)" tip="یکی از پورت‌های HTTPS کلودفلر (443، 2053، 2083، 2087، 2096، 8443). پنل سرورهای SSL روی این پورت و دامنهٔ خاکستری باز می‌شود و هیچ اینباندی نمی‌تواند از آن استفاده کند"><InputNumber min={1} max={65535} /></F>
               <F k="xui.cf_sub_port" label="پورت سابسکریپشن پنل" tip="سابسکریپشن خود 3x-ui (و JSON آن) مثل اسکریپت 3x-ui-pro-configs؛ این پورت هم برای اینباندها رزرو است"><InputNumber min={1} max={65535} /></F>

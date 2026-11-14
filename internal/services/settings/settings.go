@@ -63,6 +63,12 @@ const (
 	CleanIPPerLink    = "cleanip.per_link"
 	SubEnabled        = "sub.enabled"
 	SubToken          = "sub.token"
+	// Scheduled backup sent to the Telegram chats.
+	BackupTelegram = "backup.telegram"
+	BackupInterval = "backup.interval_hours"
+	BackupHistory  = "backup.history"
+	BackupPassword = "backup.password"
+	BackupLastAt   = "backup.last_at"
 )
 
 var Defaults = map[string]string{
@@ -116,8 +122,15 @@ var Defaults = map[string]string{
 	// How many clean IPs a proxied server's CDN links are built with.
 	CleanIPPerLink: "5",
 	// The all-servers subscription at /sub/<token>.
-	SubEnabled: "false",
-	SubToken:   "",
+	SubEnabled:     "false",
+	SubToken:       "",
+	BackupTelegram: "false",
+	BackupInterval: "24",
+	BackupHistory:  "false",
+	// Empty: the file is sent unencrypted.
+	BackupPassword: "",
+	// RFC 3339 time of the last scheduled backup (written by the panel).
+	BackupLastAt: "",
 }
 
 // Secret keys are encrypted in the table and masked when listed.
@@ -127,6 +140,7 @@ var Secret = map[string]bool{
 	CheckHostCCKey:   true,
 	VPNPanelPassword: true,
 	TelegramToken:    true,
+	BackupPassword:   true,
 }
 
 const Mask = "••••••"

@@ -207,6 +207,47 @@ func (m *Manager) Test() error {
 	return nil
 }
 
+// maxDocument is Telegram's upload limit for bots.
+const maxDocument = 50 << 20
+
+// SendDocument sends a file to every allowed chat (regardless of the
+// notification switch) and reports the first failure.
+func (m *Manager) SendDocument(name string, data []byte, caption string) error {
+	m.mu.Lock()
+	b := m.b
+	chats := make([]int64, 0, len(m.chats))
+	for id := range m.chats {
+		chats = append(chats, id)
+	}
+	m.mu.Unlock()
+	if b == nil {
+		return errors.New("توکن ربات تنظیم نشده است")
+	}
+	if len(chats) == 0 {
+		return errors.New("هیچ chat id مجازی تنظیم نشده")
+	}
+	if len(data) > maxDocument {
+		return fmt.Errorf("حجم فایل (%d MB) از سقف ۵۰ مگابایتی تلگرام بیشتر است", len(data)>>20)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	var first error
+	for _, id := range chats {
+		_, err := b.SendDocument(ctx, &tg.SendDocumentParams{
+			ChatID:   id,
+			Document: &tgm.InputFileUpload{Filename: name, Data: bytes.NewReader(data)},
+			Caption:  caption,
+		})
+		if err != nil {
+			log.Printf("telegram document %d: %v", id, err)
+			if first == nil {
+				first = fmt.Errorf("chat %d: %w", id, err)
+			}
+		}
+	}
+	return first
+}
+
 // OnJobFinish reports failures; successes are announced by the flows.
 func (m *Manager) OnJobFinish(j *models.Job) {
 	if j.Status != models.JobFailed {
