@@ -230,6 +230,9 @@ type Server struct {
 	// RealitySNI is the Reality target picked for this server from its
 	// location's list when the seed was set (empty = the template's).
 	RealitySNI string `gorm:"column:reality_sni;size:255" json:"reality_sni"`
+	// RealitySNIAuto marks a target the server found by scanning; while the
+	// server is new, one that fails the config test is replaced by another.
+	RealitySNIAuto bool `gorm:"column:reality_sni_auto" json:"reality_sni_auto"`
 	// Profile is the inbound profile, copied from the location at creation.
 	Profile string `gorm:"size:32" json:"profile"`
 	// PanelName is the base name this server's configs carry in vpn-pannel

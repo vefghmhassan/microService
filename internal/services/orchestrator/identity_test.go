@@ -202,6 +202,7 @@ func TestPortBreakdownAfterABlock(t *testing.T) {
 type fakeScanner struct {
 	near, builtin []xui.RealityScan
 	resolves      map[string]string
+	unreachable   map[string]bool // resolves next door, but the server cannot reach it
 	asked         []string
 }
 
@@ -213,9 +214,17 @@ func (f *fakeScanner) ScanRealityTargets(_ context.Context, targets string) ([]x
 	return f.near, nil
 }
 
+// Like 3x-ui, a scan of a name does not say which address it reached.
 func (f *fakeScanner) ScanRealityTarget(_ context.Context, target, sni string, _ int) (*xui.RealityScan, error) {
-	ip, ok := f.resolves[sni]
-	return &xui.RealityScan{Target: target, Host: sni, IP: ip, Feasible: ok}, nil
+	_, ok := f.resolves[sni]
+	return &xui.RealityScan{Target: target, Host: sni, Feasible: ok && !f.unreachable[sni]}, nil
+}
+
+func (f *fakeScanner) resolve(_ context.Context, name string) []string {
+	if ip, ok := f.resolves[name]; ok {
+		return []string{ip}
+	}
+	return nil
 }
 
 func TestChooseSNIPrefersATestedNeighbour(t *testing.T) {
@@ -226,12 +235,14 @@ func TestChooseSNIPrefersATestedNeighbour(t *testing.T) {
 			{IP: "203.0.113.30", Feasible: true, ServerNames: []string{"www.google.com"}},                      // relays a certificate hosted elsewhere
 			{IP: "203.0.113.40", Feasible: true, ServerNames: []string{"*.wild.example.com", "www.apple.com"}}, // wildcard, and a name Xray warns against
 			{IP: "203.0.113.50", Feasible: true, Host: "203.0.113.50", ServerNames: []string{"Shop.Example.net"}},
+			{IP: "203.0.113.60", Feasible: true, ServerNames: []string{"down.example.net"}}, // next door, but not reachable by name
 		},
-		builtin:  []xui.RealityScan{{Host: "fallback.example.org", Feasible: true}},
-		resolves: map[string]string{"www.google.com": "142.250.1.1", "shop.example.net": "203.0.113.50", "www.apple.com": "203.0.113.40"},
+		unreachable: map[string]bool{"down.example.net": true},
+		builtin:     []xui.RealityScan{{Host: "fallback.example.org", Feasible: true}},
+		resolves:    map[string]string{"www.google.com": "142.250.1.1", "shop.example.net": "203.0.113.50", "www.apple.com": "203.0.113.40", "down.example.net": "203.0.113.60"},
 	}
 	for i := 0; i < 20; i++ { // the order is shuffled; the answer must not depend on it
-		sni, source, _ := chooseSNI(context.Background(), sc, "203.0.113.7")
+		sni, source, _ := chooseSNI(context.Background(), sc, sc.resolve, "203.0.113.7", nil)
 		if sni != "shop.example.net" || source == "" {
 			t.Fatalf("picked %q (%s)", sni, source)
 		}
@@ -255,7 +266,7 @@ func TestChooseSNIFallsBackToTheBuiltInList(t *testing.T) {
 	}
 	got := map[string]bool{}
 	for i := 0; i < 60; i++ {
-		sni, _, notes := chooseSNI(context.Background(), sc, "203.0.113.7")
+		sni, _, notes := chooseSNI(context.Background(), sc, sc.resolve, "203.0.113.7", nil)
 		got[sni] = true
 		if i == 0 && !strings.Contains(strings.Join(notes, "\n"), "left out 1 targets served by Cloudflare") {
 			t.Fatalf("notes: %v", notes)
@@ -264,7 +275,13 @@ func TestChooseSNIFallsBackToTheBuiltInList(t *testing.T) {
 	if len(got) != 2 || !got["one.example.org"] || !got["two.example.org"] {
 		t.Fatalf("picks %v", got)
 	}
-	if sni, _, _ := chooseSNI(context.Background(), &fakeScanner{}, "203.0.113.7"); sni != "" {
+	// A target that was tried and did not work is not picked again.
+	for i := 0; i < 20; i++ {
+		if sni, _, _ := chooseSNI(context.Background(), sc, sc.resolve, "203.0.113.7", map[string]bool{"one.example.org": true}); sni != "two.example.org" {
+			t.Fatalf("picked %q although one.example.org was tried", sni)
+		}
+	}
+	if sni, _, _ := chooseSNI(context.Background(), &fakeScanner{}, (&fakeScanner{}).resolve, "203.0.113.7", nil); sni != "" {
 		t.Fatalf("nothing usable must give no SNI, got %q", sni)
 	}
 }
@@ -318,5 +335,19 @@ func TestIdentityCoversEveryProtocolFromVersion2(t *testing.T) {
 	old := &models.Server{IPv4: "203.0.113.9", IdentitySeed: a.IdentitySeed}
 	if in := snap.For(old).Inbounds; in[0].Settings != realityClients || in[1].Settings != ss {
 		t.Fatal("version 1 server must not change outside Reality")
+	}
+}
+
+func TestRealityDead(t *testing.T) {
+	snap := identitySnap() // inbound 7 is Reality, 8 is not
+	s := &models.Server{IPv4: "203.0.113.7"}
+	if !realityDead(snap, s, []uint{8}) {
+		t.Fatal("only the plain inbound passed: Reality is dead")
+	}
+	if realityDead(snap, s, []uint{7}) {
+		t.Fatal("the Reality inbound passed")
+	}
+	if realityDead(&Snapshot{Inbounds: snap.Inbounds[1:]}, s, nil) {
+		t.Fatal("a server without Reality inbounds has nothing to retry")
 	}
 }

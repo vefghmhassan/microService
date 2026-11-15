@@ -361,6 +361,16 @@ func (o *Orchestrator) gate(ctx context.Context, r *jobs.Run, s *models.Server) 
 		return g, nil
 	}
 	g = o.testNewServer(ctx, r, s)
+	// A target the server found by scanning may still not work as a Reality
+	// target; before anything is uploaded another one can be tried.
+	tried := map[string]bool{}
+	for i := 0; i < sniRetries && ctx.Err() == nil; i++ {
+		snap, err := LoadSnapshot(o.DB)
+		if err != nil || !realityDead(snap, s, g.Passed) || !o.retrySNI(ctx, r, s, tried) {
+			break
+		}
+		g = o.testNewServer(ctx, r, s)
+	}
 	// A canceled job must not act on a test that was cut short.
 	if err := ctx.Err(); err != nil {
 		return g, err

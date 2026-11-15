@@ -316,18 +316,19 @@ func sameSlash24(a, b string) bool {
 // its own /24, a quarter at a time (one scan has to finish within the panel
 // client's 90s): a site hosted next door shares the server's network, so
 // the borrowed certificate fits the address. A neighbour's certificate name
-// only counts when the name itself resolves back into that /24 from the
-// server; that leaves out machines that merely relay someone else's
-// certificate. Without such a neighbour it falls back to 3x-ui's built-in
+// only counts when the name itself resolves back into that /24 (resolve)
+// and the server reaches it by name; that leaves out machines that merely
+// relay someone else's certificate. Without such a neighbour it falls back to 3x-ui's built-in
 // candidates, leaving out the ones served by Cloudflare. The pick is random
-// among what passed. source says where it came from and notes what the
-// scans saw, for the job log.
-func chooseSNI(ctx context.Context, sc sniScanner, ipv4 string) (sni, source string, notes []string) {
+// among what passed, leaving out the names in skip (targets that were
+// tried and did not work). source says where it came from and notes what
+// the scans saw, for the job log.
+func chooseSNI(ctx context.Context, sc sniScanner, resolve func(ctx context.Context, name string) []string, ipv4 string, skip map[string]bool) (sni, source string, notes []string) {
 	if ip := net.ParseIP(ipv4).To4(); ip != nil {
 		quarters := []int{0, 64, 128, 192}
 		rand.Shuffle(len(quarters), func(i, j int) { quarters[i], quarters[j] = quarters[j], quarters[i] })
 		seen := map[string]bool{}
-		verified := 0
+		verified, elsewhere := 0, 0
 		for _, q := range quarters {
 			cidr := fmt.Sprintf("%d.%d.%d.%d/26", ip[0], ip[1], ip[2], q)
 			sctx, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -346,7 +347,7 @@ func chooseSNI(ctx context.Context, sc sniScanner, ipv4 string) (sni, source str
 				feasible++
 				for _, n := range append([]string{rs.Host}, rs.ServerNames...) {
 					n = strings.ToLower(strings.TrimSpace(n))
-					if sniOK(n) && !seen[n] {
+					if sniOK(n) && !seen[n] && !skip[n] {
 						seen[n] = true
 						names = append(names, n)
 					}
@@ -358,10 +359,23 @@ func chooseSNI(ctx context.Context, sc sniScanner, ipv4 string) (sni, source str
 				if verified++; verified > sniVerifyMax {
 					break
 				}
+				// 3x-ui does not say where a name resolved, so that is looked
+				// up here; the server then confirms it reaches the name.
+				local := false
+				for _, a := range resolve(ctx, n) {
+					if sameSlash24(a, ipv4) {
+						local = true
+						break
+					}
+				}
+				if !local {
+					elsewhere++
+					continue
+				}
 				vctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 				v, err := sc.ScanRealityTarget(vctx, n+":443", n, 0)
 				cancel()
-				if err == nil && v != nil && v.Feasible && !v.PrivateTarget && sameSlash24(v.IP, ipv4) {
+				if err == nil && v != nil && v.Feasible && !v.PrivateTarget {
 					return n, "همسایهٔ سرور", notes
 				}
 			}
@@ -369,7 +383,7 @@ func chooseSNI(ctx context.Context, sc sniScanner, ipv4 string) (sni, source str
 				break
 			}
 		}
-		notes = append(notes, "no neighbour hosts a site of its own; using the built-in list")
+		notes = append(notes, fmt.Sprintf("no neighbour hosts a site of its own (%d names resolve elsewhere); using the built-in list", elsewhere))
 	}
 	sctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
@@ -381,7 +395,7 @@ func chooseSNI(ctx context.Context, sc sniScanner, ipv4 string) (sni, source str
 	skipped := 0
 	for _, rs := range list { // best first
 		n := strings.ToLower(strings.TrimSpace(rs.Host))
-		if !rs.Feasible || rs.PrivateTarget || !sniOK(n) {
+		if !rs.Feasible || rs.PrivateTarget || !sniOK(n) || skip[n] {
 			continue
 		}
 		if onCloudflare(rs.IP) {
@@ -399,6 +413,14 @@ func chooseSNI(ctx context.Context, sc sniScanner, ipv4 string) (sni, source str
 		return "", "", notes
 	}
 	return ok[rand.IntN(len(ok))], "فهرست پیش‌فرض", notes
+}
+
+// lookupIPv4 is the addresses a name resolves to, as seen from the panel.
+func lookupIPv4(ctx context.Context, name string) []string {
+	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	addrs, _ := net.DefaultResolver.LookupHost(lctx, name)
+	return addrs
 }
 
 // autoSNI gives a server with an identity but no Reality target one that
@@ -424,15 +446,79 @@ func (o *Orchestrator) autoSNI(ctx context.Context, r *jobs.Run, s *models.Serve
 		return
 	}
 	r.Info("no Reality SNI listed for this location; scanning from the server")
-	sni, source, notes := chooseSNI(ctx, sc, s.IPv4)
+	o.pickSNI(ctx, r, s, sc, nil)
+}
+
+// pickSNI scans for a Reality target other than those in skip and stores
+// it on s. It reports whether one was found.
+func (o *Orchestrator) pickSNI(ctx context.Context, r *jobs.Run, s *models.Server, sc sniScanner, skip map[string]bool) bool {
+	sni, source, notes := chooseSNI(ctx, sc, lookupIPv4, s.IPv4, skip)
 	for _, n := range notes {
 		r.Info("Reality scan: %s", n)
 	}
 	if sni == "" {
-		r.Logf("warn", "Reality scan found no usable target; keeping the template's SNI")
-		return
+		r.Logf("warn", "Reality scan found no usable target; keeping %s", firstNonEmpty(s.RealitySNI, "the template's SNI"))
+		return false
 	}
-	s.RealitySNI = sni
-	o.save(r, s, "reality_sni")
-	r.Info("Reality SNI %s (%s)", sni, source)
+	s.RealitySNI, s.RealitySNIAuto = sni, true
+	o.save(r, s, "reality_sni", "reality_sni_auto")
+	r.Info("Reality target: %s (%s)", sni, source)
+	return true
+}
+
+// sniRetries is how many other targets a new server tries when none of its
+// Reality inbounds passes the config test with the one it picked.
+const sniRetries = 2
+
+// realityDead reports whether s has Reality inbounds and none of them is
+// among the inbounds that passed the config test.
+func realityDead(snap *Snapshot, s *models.Server, passed []uint) bool {
+	ok := map[uint]bool{}
+	for _, id := range passed {
+		ok[id] = true
+	}
+	n := 0
+	for _, t := range snap.For(s).Inbounds {
+		if !t.Enabled || linkgen.Security(t.StreamSettings) != "reality" {
+			continue
+		}
+		if ok[t.ID] {
+			return false
+		}
+		n++
+	}
+	return n > 0
+}
+
+// retrySNI gives a new server whose scanned Reality target does not work
+// (a scan saying "feasible" is no proof: www.microsoft.com passes it and
+// then fails every handshake) another one and applies it. Only before the
+// first upload: afterwards the links are out. It reports whether the
+// server now has a different target to test.
+func (o *Orchestrator) retrySNI(ctx context.Context, r *jobs.Run, s *models.Server, tried map[string]bool) bool {
+	if !s.RealitySNIAuto || s.UploadedAt != nil {
+		return false
+	}
+	snap, err := LoadSnapshot(o.DB)
+	if err != nil {
+		return false
+	}
+	tried[s.RealitySNI] = true
+	r.Step("Reality target " + s.RealitySNI + " does not work; trying another")
+	remote, _, err := o.Connect(ctx, s)
+	if err != nil {
+		r.Logf("warn", "ssh: %v", err)
+		return false
+	}
+	defer remote.Close()
+	panel := o.PanelFor(s, remote)
+	sc, ok := panel.(sniScanner)
+	if !ok || !o.pickSNI(ctx, r, s, sc, tried) {
+		return false
+	}
+	if err := Apply(ctx, panel, snap.For(s), r.Info); err != nil {
+		r.Logf("warn", "apply new Reality target: %v", err)
+		return false
+	}
+	return true
 }
