@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	crand "crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -23,7 +24,7 @@ import (
 )
 
 // Per-server identity. The shared template gives every server the same
-// Reality keys, short IDs, client IDs and paths, so one config taken out of
+// Reality keys, short IDs, client IDs, passwords and paths, so one config taken out of
 // the app is enough to recognise the whole fleet with a valid handshake. A
 // server with an IdentitySeed gets its own, derived from the seed, and the
 // Reality target picked from its location's list. Servers without a seed
@@ -79,12 +80,17 @@ func SNIList(v string) []string {
 	return out
 }
 
+// identityAll is the identity version that covers every inbound's client
+// IDs and passwords, not only the Reality ones (see Server.IdentityVer).
+const identityAll = 2
+
 // newIdentity gives s a fresh seed, and the profile and one Reality target
 // of its location (loc may be nil: a manual server).
 func newIdentity(s *models.Server, loc *models.Location) {
 	b := make([]byte, 32)
 	_, _ = crand.Read(b)
 	s.IdentitySeed = secret.String(hex.EncodeToString(b))
+	s.IdentityVer = identityAll
 	s.RealitySNI = ""
 	if loc == nil {
 		return
@@ -129,14 +135,26 @@ func deriveUUID(seed, label string) string {
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
 }
 
-// personalize is inbound t as server s gets it. Only Reality inbounds of a
-// server with a seed change; anything that cannot be parsed is left alone.
+// personalize is inbound t as server s gets it. A server with a seed gets
+// its own client IDs and passwords on every inbound (a Shadowsocks key or a
+// plain VLESS ID taken from the app would otherwise confirm every server),
+// and on Reality inbounds its own keys, short IDs, spiderX, paths and
+// target. Anything that cannot be parsed is left alone. A VLESS Encryption
+// pair (decryption) stays the template's: only xray can generate one.
 func personalize(t models.InboundTemplate, s *models.Server) models.InboundTemplate {
 	seed := string(s.IdentitySeed)
-	if seed == "" || linkgen.Security(t.StreamSettings) != "reality" {
+	if seed == "" {
 		return t
 	}
-	var stream, settings map[string]any
+	label := func(field string) string { return fmt.Sprintf("%d|%s", t.ID, field) }
+	reality := linkgen.Security(t.StreamSettings) == "reality"
+	if reality || s.IdentityVer >= identityAll {
+		t.Settings = personalSettings(t, seed, label)
+	}
+	if !reality {
+		return t
+	}
+	var stream map[string]any
 	if json.Unmarshal([]byte(t.StreamSettings), &stream) != nil {
 		return t
 	}
@@ -144,8 +162,6 @@ func personalize(t models.InboundTemplate, s *models.Server) models.InboundTempl
 	if r == nil {
 		return t
 	}
-	label := func(field string) string { return fmt.Sprintf("%d|%s", t.ID, field) }
-
 	priv, pub, err := linkgen.X25519From(derive(seed, label("x25519")))
 	if err != nil {
 		return t
@@ -178,32 +194,55 @@ func personalize(t models.InboundTemplate, s *models.Server) models.InboundTempl
 	if g, ok := stream["grpcSettings"].(map[string]any); ok {
 		g["serviceName"] = deriveHex(seed, label("svc"), 8)
 	}
-
-	if json.Unmarshal([]byte(t.Settings), &settings) == nil {
-		if cs, ok := settings["clients"].([]any); ok {
-			for i, c := range cs {
-				cm, _ := c.(map[string]any)
-				if cm == nil {
-					continue
-				}
-				if _, ok := cm["id"]; ok {
-					cm["id"] = deriveUUID(seed, label(fmt.Sprintf("uuid%d", i)))
-				}
-				if _, ok := cm["password"]; ok {
-					cm["password"] = deriveHex(seed, label(fmt.Sprintf("pass%d", i)), 32)
-				}
-			}
-			if b, err := json.Marshal(settings); err == nil {
-				t.Settings = string(b)
-			}
-		}
-	}
 	b, err := json.Marshal(stream)
 	if err != nil {
 		return t
 	}
 	t.StreamSettings = string(b)
 	return t
+}
+
+// personalSettings is t's settings with the server's own client IDs and
+// passwords. Shadowsocks 2022 keys keep the length the method needs.
+func personalSettings(t models.InboundTemplate, seed string, label func(string) string) string {
+	var settings map[string]any
+	if json.Unmarshal([]byte(t.Settings), &settings) != nil {
+		return t.Settings
+	}
+	secretFor := func(field string) string { return deriveHex(seed, label(field), 32) }
+	if t.Protocol == "shadowsocks" {
+		method, _ := settings["method"].(string)
+		if strings.HasPrefix(method, "2022-") {
+			n := 32
+			if strings.Contains(method, "aes-128") {
+				n = 16
+			}
+			secretFor = func(field string) string {
+				return base64.StdEncoding.EncodeToString(derive(seed, label(field))[:n])
+			}
+		}
+		if cur, _ := settings["password"].(string); cur != "" {
+			settings["password"] = secretFor("sskey")
+		}
+	}
+	cs, _ := settings["clients"].([]any)
+	for i, c := range cs {
+		cm, _ := c.(map[string]any)
+		if cm == nil {
+			continue
+		}
+		if cur, _ := cm["id"].(string); cur != "" {
+			cm["id"] = deriveUUID(seed, label(fmt.Sprintf("uuid%d", i)))
+		}
+		if cur, _ := cm["password"].(string); cur != "" {
+			cm["password"] = secretFor(fmt.Sprintf("pass%d", i))
+		}
+	}
+	b, err := json.Marshal(settings)
+	if err != nil {
+		return t.Settings
+	}
+	return string(b)
 }
 
 // ---- automatic Reality target ----
@@ -225,17 +264,47 @@ const (
 var domainRe = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$`)
 
 // sniOK reports whether name can be a Reality server name: a plain domain,
-// and not one Xray warns against as a target.
+// not one Xray warns against as a target, and not Cloudflare's own.
 func sniOK(name string) bool {
 	if !domainRe.MatchString(name) {
 		return false
 	}
-	for _, bad := range []string{"apple.com", "icloud.com"} {
+	for _, bad := range []string{"apple.com", "icloud.com", "cloudflare.com", "cloudflare.net", "cloudflare-dns.com"} {
 		if name == bad || strings.HasSuffix(name, "."+bad) {
 			return false
 		}
 	}
 	return true
+}
+
+// cloudflareNets are Cloudflare's published IPv4 ranges. A Reality target
+// behind them makes the server a free relay for the whole CDN (Xray's docs
+// advise against it), and Cloudflare is restricted from Iran as it is.
+var cloudflareNets = func() []*net.IPNet {
+	var out []*net.IPNet
+	for _, c := range []string{
+		"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18",
+		"108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17",
+		"162.158.0.0/15", "104.16.0.0/13", "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+	} {
+		if _, n, err := net.ParseCIDR(c); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}()
+
+func onCloudflare(ip string) bool {
+	p := net.ParseIP(ip)
+	if p == nil {
+		return false
+	}
+	for _, n := range cloudflareNets {
+		if n.Contains(p) {
+			return true
+		}
+	}
+	return false
 }
 
 func sameSlash24(a, b string) bool {
@@ -244,62 +313,92 @@ func sameSlash24(a, b string) bool {
 }
 
 // chooseSNI picks a Reality target for a server by probing from it. First
-// its own /24: a site hosted next door shares the server's network, so the
-// borrowed certificate fits the address. A neighbour's certificate name only
-// counts when the name itself resolves back into that /24 from the server;
-// that leaves out machines that merely relay someone else's certificate.
-// Without such a neighbour it falls back to 3x-ui's built-in candidates.
-// The pick is random among what passed. source says where it came from.
-func chooseSNI(ctx context.Context, sc sniScanner, ipv4 string) (sni, source string) {
+// its own /24, a quarter at a time (one scan has to finish within the panel
+// client's 90s): a site hosted next door shares the server's network, so
+// the borrowed certificate fits the address. A neighbour's certificate name
+// only counts when the name itself resolves back into that /24 from the
+// server; that leaves out machines that merely relay someone else's
+// certificate. Without such a neighbour it falls back to 3x-ui's built-in
+// candidates, leaving out the ones served by Cloudflare. The pick is random
+// among what passed. source says where it came from and notes what the
+// scans saw, for the job log.
+func chooseSNI(ctx context.Context, sc sniScanner, ipv4 string) (sni, source string, notes []string) {
 	if ip := net.ParseIP(ipv4).To4(); ip != nil {
-		// The panel client gives up after 90s; a /24 that takes longer
-		// counts as no neighbour and the built-in list is used.
-		sctx, cancel := context.WithTimeout(ctx, 90*time.Second)
-		near, _ := sc.ScanRealityTargets(sctx, fmt.Sprintf("%d.%d.%d.0/24", ip[0], ip[1], ip[2]))
-		cancel()
+		quarters := []int{0, 64, 128, 192}
+		rand.Shuffle(len(quarters), func(i, j int) { quarters[i], quarters[j] = quarters[j], quarters[i] })
 		seen := map[string]bool{}
-		var names []string
-		for _, rs := range near {
-			if !rs.Feasible || rs.PrivateTarget || rs.IP == ipv4 {
+		verified := 0
+		for _, q := range quarters {
+			cidr := fmt.Sprintf("%d.%d.%d.%d/26", ip[0], ip[1], ip[2], q)
+			sctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+			near, err := sc.ScanRealityTargets(sctx, cidr)
+			cancel()
+			if err != nil {
+				notes = append(notes, fmt.Sprintf("%s: scan failed: %v", cidr, err))
 				continue
 			}
-			for _, n := range append([]string{rs.Host}, rs.ServerNames...) {
-				n = strings.ToLower(strings.TrimSpace(n))
-				if sniOK(n) && !seen[n] {
-					seen[n] = true
-					names = append(names, n)
+			var names []string
+			feasible := 0
+			for _, rs := range near {
+				if !rs.Feasible || rs.PrivateTarget || rs.IP == ipv4 {
+					continue
+				}
+				feasible++
+				for _, n := range append([]string{rs.Host}, rs.ServerNames...) {
+					n = strings.ToLower(strings.TrimSpace(n))
+					if sniOK(n) && !seen[n] {
+						seen[n] = true
+						names = append(names, n)
+					}
 				}
 			}
-		}
-		rand.Shuffle(len(names), func(i, j int) { names[i], names[j] = names[j], names[i] })
-		if len(names) > sniVerifyMax {
-			names = names[:sniVerifyMax]
-		}
-		for _, n := range names {
-			vctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			v, err := sc.ScanRealityTarget(vctx, n+":443", n, 0)
-			cancel()
-			if err == nil && v != nil && v.Feasible && !v.PrivateTarget && sameSlash24(v.IP, ipv4) {
-				return n, "همسایهٔ سرور"
+			notes = append(notes, fmt.Sprintf("%s: %d answered, %d usable, %d names", cidr, len(near), feasible, len(names)))
+			rand.Shuffle(len(names), func(i, j int) { names[i], names[j] = names[j], names[i] })
+			for _, n := range names {
+				if verified++; verified > sniVerifyMax {
+					break
+				}
+				vctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				v, err := sc.ScanRealityTarget(vctx, n+":443", n, 0)
+				cancel()
+				if err == nil && v != nil && v.Feasible && !v.PrivateTarget && sameSlash24(v.IP, ipv4) {
+					return n, "همسایهٔ سرور", notes
+				}
 			}
-		}
-	}
-	sctx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-	list, _ := sc.ScanRealityTargets(sctx, "")
-	var ok []string
-	for _, rs := range list { // best first
-		n := strings.ToLower(strings.TrimSpace(rs.Host))
-		if rs.Feasible && !rs.PrivateTarget && sniOK(n) {
-			if ok = append(ok, n); len(ok) == sniTopN {
+			if verified > sniVerifyMax {
 				break
 			}
 		}
+		notes = append(notes, "no neighbour hosts a site of its own; using the built-in list")
+	}
+	sctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	list, err := sc.ScanRealityTargets(sctx, "")
+	if err != nil {
+		notes = append(notes, fmt.Sprintf("built-in list: scan failed: %v", err))
+	}
+	var ok []string
+	skipped := 0
+	for _, rs := range list { // best first
+		n := strings.ToLower(strings.TrimSpace(rs.Host))
+		if !rs.Feasible || rs.PrivateTarget || !sniOK(n) {
+			continue
+		}
+		if onCloudflare(rs.IP) {
+			skipped++
+			continue
+		}
+		if ok = append(ok, n); len(ok) == sniTopN {
+			break
+		}
+	}
+	if skipped > 0 {
+		notes = append(notes, fmt.Sprintf("built-in list: left out %d targets served by Cloudflare", skipped))
 	}
 	if len(ok) == 0 {
-		return "", ""
+		return "", "", notes
 	}
-	return ok[rand.IntN(len(ok))], "فهرست پیش‌فرض"
+	return ok[rand.IntN(len(ok))], "فهرست پیش‌فرض", notes
 }
 
 // autoSNI gives a server with an identity but no Reality target one that
@@ -325,7 +424,10 @@ func (o *Orchestrator) autoSNI(ctx context.Context, r *jobs.Run, s *models.Serve
 		return
 	}
 	r.Info("no Reality SNI listed for this location; scanning from the server")
-	sni, source := chooseSNI(ctx, sc, s.IPv4)
+	sni, source, notes := chooseSNI(ctx, sc, s.IPv4)
+	for _, n := range notes {
+		r.Info("Reality scan: %s", n)
+	}
 	if sni == "" {
 		r.Logf("warn", "Reality scan found no usable target; keeping the template's SNI")
 		return

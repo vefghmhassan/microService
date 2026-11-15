@@ -222,6 +222,11 @@ type Server struct {
 	// taken from the app only identifies this one server. Empty (servers
 	// built before the feature) keeps the shared template values.
 	IdentitySeed secret.String `gorm:"column:identity_seed" json:"-"`
+	// IdentityVer is what the seed covers: 1 (or 0 with a seed) only the
+	// Reality inbounds, 2 the client IDs and passwords of every inbound. A
+	// server keeps the version it was built with, so its links never change
+	// under a panel that still has the old values.
+	IdentityVer int `gorm:"column:identity_ver" json:"-"`
 	// RealitySNI is the Reality target picked for this server from its
 	// location's list when the seed was set (empty = the template's).
 	RealitySNI string `gorm:"column:reality_sni;size:255" json:"reality_sni"`

@@ -103,10 +103,6 @@ func TestIdentityIsPerServerAndStable(t *testing.T) {
 	if len(rs.ShortIds) != 3 || len(rs.ShortIds[1]) != 4 || len(rs.ShortIds[2]) != 14 {
 		t.Fatalf("short ids %v", rs.ShortIds)
 	}
-	// Inbounds that are not Reality stay the template's.
-	if snap.For(a).Inbounds[1].Settings != realityClients {
-		t.Fatal("non-Reality inbound was changed")
-	}
 	// The template itself is never modified.
 	if snap.Inbounds[0].StreamSettings != realityStream {
 		t.Fatal("shared template was modified")
@@ -235,13 +231,13 @@ func TestChooseSNIPrefersATestedNeighbour(t *testing.T) {
 		resolves: map[string]string{"www.google.com": "142.250.1.1", "shop.example.net": "203.0.113.50", "www.apple.com": "203.0.113.40"},
 	}
 	for i := 0; i < 20; i++ { // the order is shuffled; the answer must not depend on it
-		sni, source := chooseSNI(context.Background(), sc, "203.0.113.7")
+		sni, source, _ := chooseSNI(context.Background(), sc, "203.0.113.7")
 		if sni != "shop.example.net" || source == "" {
 			t.Fatalf("picked %q (%s)", sni, source)
 		}
 	}
-	if sc.asked[0] != "203.0.113.0/24" {
-		t.Fatalf("first scan was %q, want the server's /24", sc.asked[0])
+	if !strings.HasPrefix(sc.asked[0], "203.0.113.") || !strings.HasSuffix(sc.asked[0], "/26") {
+		t.Fatalf("first scan was %q, want a quarter of the server's /24", sc.asked[0])
 	}
 }
 
@@ -251,19 +247,76 @@ func TestChooseSNIFallsBackToTheBuiltInList(t *testing.T) {
 		builtin: []xui.RealityScan{
 			{Host: "bad.example.org", Feasible: false},
 			{Host: "www.icloud.com", Feasible: true},
-			{Host: "one.example.org", Feasible: true}, {Host: "two.example.org", Feasible: true},
+			{Host: "www.cloudflare.com", IP: "198.51.100.1", Feasible: true},  // by name
+			{Host: "fronted.example.org", IP: "104.18.32.47", Feasible: true}, // by Cloudflare address
+			{Host: "one.example.org", IP: "198.51.100.2", Feasible: true}, {Host: "two.example.org", Feasible: true},
 		},
 		resolves: map[string]string{"www.google.com": "142.250.1.1"},
 	}
 	got := map[string]bool{}
 	for i := 0; i < 60; i++ {
-		sni, _ := chooseSNI(context.Background(), sc, "203.0.113.7")
+		sni, _, notes := chooseSNI(context.Background(), sc, "203.0.113.7")
 		got[sni] = true
+		if i == 0 && !strings.Contains(strings.Join(notes, "\n"), "left out 1 targets served by Cloudflare") {
+			t.Fatalf("notes: %v", notes)
+		}
 	}
 	if len(got) != 2 || !got["one.example.org"] || !got["two.example.org"] {
 		t.Fatalf("picks %v", got)
 	}
-	if sni, _ := chooseSNI(context.Background(), &fakeScanner{}, "203.0.113.7"); sni != "" {
+	if sni, _, _ := chooseSNI(context.Background(), &fakeScanner{}, "203.0.113.7"); sni != "" {
 		t.Fatalf("nothing usable must give no SNI, got %q", sni)
+	}
+}
+
+func TestIdentityCoversEveryProtocolFromVersion2(t *testing.T) {
+	ss := `{"method":"2022-blake3-aes-256-gcm","password":"U0VSVkVSS0VZU0VSVkVSS0VZU0VSVkVSS0VZU0VSVkU=","network":"tcp,udp","clients":[{"email":"u","password":"Q0xJRU5US0VZQ0xJRU5US0VZQ0xJRU5US0VZQ0xJRU4="}]}`
+	snap := &Snapshot{Inbounds: []models.InboundTemplate{
+		{ID: 1, Remark: "plain", Protocol: "vless", Port: 80, Enabled: true, Upload: true, Settings: realityClients, StreamSettings: `{"network":"tcp","security":"none"}`},
+		{ID: 2, Remark: "ss", Protocol: "shadowsocks", Port: 8388, Enabled: true, Upload: true, Settings: ss, StreamSettings: `{"network":"tcp","security":"none"}`},
+	}}
+	a, b := &models.Server{IPv4: "203.0.113.7"}, &models.Server{IPv4: "203.0.113.8"}
+	newIdentity(a, nil)
+	newIdentity(b, nil)
+	if a.IdentityVer != identityAll {
+		t.Fatalf("version %d", a.IdentityVer)
+	}
+	la, err := Links(snap.For(a), a.IPv4)
+	lb, err2 := Links(snap.For(b), b.IPv4)
+	if err != nil || err2 != nil || len(la) != 2 || len(lb) != 2 {
+		t.Fatalf("%v %v %v %v", la, lb, err, err2)
+	}
+	cut := func(u string) string { return u[:strings.Index(u, "@")] } // scheme and credentials
+	for i := range la {
+		if cut(la[i].URL) == cut(lb[i].URL) {
+			t.Fatalf("inbound %d has the same credentials on both servers: %s", i, cut(la[i].URL))
+		}
+	}
+	// Shadowsocks 2022 keys stay valid: base64 of 32 bytes, server and client.
+	var got struct {
+		Password string `json:"password"`
+		Method   string `json:"method"`
+		Clients  []struct {
+			Password string `json:"password"`
+		} `json:"clients"`
+	}
+	if err := json.Unmarshal([]byte(snap.For(a).Inbounds[1].Settings), &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{got.Password, got.Clients[0].Password} {
+		raw, err := base64.StdEncoding.DecodeString(k)
+		if err != nil || len(raw) != 32 || strings.HasPrefix(k, "U0VS") || strings.HasPrefix(k, "Q0xJ") {
+			t.Fatalf("key %q: %v", k, err)
+		}
+	}
+	if got.Password == got.Clients[0].Password || got.Method != "2022-blake3-aes-256-gcm" {
+		t.Fatalf("settings %+v", got)
+	}
+
+	// A server built with the first identity version keeps the template's
+	// values outside Reality, as its panel still has them.
+	old := &models.Server{IPv4: "203.0.113.9", IdentitySeed: a.IdentitySeed}
+	if in := snap.For(old).Inbounds; in[0].Settings != realityClients || in[1].Settings != ss {
+		t.Fatal("version 1 server must not change outside Reality")
 	}
 }
