@@ -69,6 +69,8 @@ const (
 	BackupHistory  = "backup.history"
 	BackupPassword = "backup.password"
 	BackupLastAt   = "backup.last_at"
+	// Days of jobs and checks kept (0 = forever).
+	HistoryKeepDays = "history.keep_days"
 )
 
 var Defaults = map[string]string{
@@ -131,6 +133,8 @@ var Defaults = map[string]string{
 	BackupPassword: "",
 	// RFC 3339 time of the last scheduled backup (written by the panel).
 	BackupLastAt: "",
+	// Older jobs, job logs, checks and probes are deleted.
+	HistoryKeepDays: "14",
 }
 
 // Secret keys are encrypted in the table and masked when listed.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -60,6 +61,9 @@ func (o *Orchestrator) CollectAll(ctx context.Context) {
 	}
 	wg.Wait()
 	PruneClientIPs(o.DB)
+	if j, c := PruneHistory(o.DB, o.Settings.Int(settings.HistoryKeepDays)); j+c > 0 {
+		log.Printf("history: removed %d old jobs and %d old checks", j, c)
+	}
 }
 
 // CollectStats reads one panel's inbounds (cumulative up/down per inbound and

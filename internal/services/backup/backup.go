@@ -533,7 +533,9 @@ func ApplyPending(db *gorm.DB, dataDir string) (bool, error) {
 // SaveLocal writes an unencrypted backup of the current state to
 // dataDir/backups-panel and returns its path. It is taken before an import.
 func SaveLocal(db *gorm.DB, dataDir, prefix string) (string, error) {
-	f, err := Export(db, dataDir, true)
+	// Without history: this is the copy an import can be undone with, and
+	// job logs and checks only made it slow.
+	f, err := Export(db, dataDir, false)
 	if err != nil {
 		return "", err
 	}

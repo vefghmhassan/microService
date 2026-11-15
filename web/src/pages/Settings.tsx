@@ -15,7 +15,7 @@ import { ConfirmButton } from '../components/ConfirmButton'
 const enc = (k: string) => k.replace(/\./g, '__')
 const dec = (k: string) => k.replace(/__/g, '.')
 const bools = ['xui.public_panel', 'rotate.keep_filtered_ip', 'rotate.v6_in_prefix', 'rotate.auto', 'rotate.fallback_location', 'traffic.auto_replace', 'watch.low_usage', 'vpnpannel.ads', 'vpnpannel.auto_upload', 'telegram.notify', 'acme.staging', 'sub.enabled']
-const nums = ['xui.cf_panel_port', 'xui.cf_sub_port', 'check.min_ok', 'check.min_asn', 'check.pre_install_port', 'check.interval_min', 'check.globalping_limit', 'check.atlas_limit', 'rotate.max_attempts', 'rotate.retry_kept_after_hours', 'auto.max_per_location', 'traffic.limit_gb', 'stats.interval_min', 'watch.minutes', 'watch.min_mb']
+const nums = ['xui.cf_panel_port', 'xui.cf_sub_port', 'check.min_ok', 'check.min_asn', 'check.pre_install_port', 'check.interval_min', 'check.globalping_limit', 'check.atlas_limit', 'rotate.max_attempts', 'rotate.retry_kept_after_hours', 'auto.max_per_location', 'traffic.limit_gb', 'stats.interval_min', 'watch.minutes', 'watch.min_mb', 'history.keep_days']
 
 function toForm(s: S) {
   const out: Record<string, unknown> = {}
@@ -111,6 +111,7 @@ export function Settings() {
               <Row gutter={12}>
                 <Col span={12}><F k="traffic.limit_gb" label="سقف ترافیک هر سرور (GB)" tip="جمع آپلود و دانلود همه اینباندهای 3x-ui. 0 = بدون سقف. برای هر سرور جدا هم قابل تنظیم است"><InputNumber min={0} style={{ width: '100%' }} /></F></Col>
                 <Col span={12}><F k="stats.interval_min" label="خواندن آمار هر (دقیقه)"><InputNumber min={0} max={1440} style={{ width: '100%' }} /></F></Col>
+                <Col span={12}><F k="history.keep_days" label="نگه‌داری تاریخچه (روز)" tip="کارها و لاگ‌هایشان و چک‌های قدیمی‌تر از این تعداد روز پاک می‌شوند تا دیتابیس، بکاپ و به‌روزرسانی پنل سبک بماند. 0 = هیچ‌چیز پاک نشود. پاک‌سازی همراه خواندن آمار اجرا می‌شود"><InputNumber min={0} max={3650} style={{ width: '100%' }} /></F></Col>
                 <Col span={24}><F k="traffic.auto_replace" label="با رسیدن به سقف، سرور خودکار جایگزین شود" bool><Switch /></F></Col>
                 <Col span={24}><F k="watch.low_usage" label="هشدار مصرف کم بعد از راه‌اندازی (احتمال مشکل IP)" tip="بعد از ساخت، تعویض IP یا جایگزینی، اگر در بازه زیر مصرف همه اینباندها کمتر از حد بود، در تلگرام با دکمه‌های تعویض IP، جایگزینی و حذف خبر می‌دهد" bool><Switch /></F></Col>
                 <Col span={12}><F k="watch.minutes" label="بازه بررسی (دقیقه)" tip="بین 10 تا 60 دقیقه"><InputNumber min={10} max={60} style={{ width: '100%' }} /></F></Col>
