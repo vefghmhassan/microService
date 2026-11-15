@@ -295,7 +295,7 @@ func TestIdentityCoversEveryProtocolFromVersion2(t *testing.T) {
 	a, b := &models.Server{IPv4: "203.0.113.7"}, &models.Server{IPv4: "203.0.113.8"}
 	newIdentity(a, nil)
 	newIdentity(b, nil)
-	if a.IdentityVer != identityAll {
+	if a.IdentityVer != identityByEmail {
 		t.Fatalf("version %d", a.IdentityVer)
 	}
 	la, err := Links(snap.For(a), a.IPv4)
@@ -349,5 +349,43 @@ func TestRealityDead(t *testing.T) {
 	}
 	if realityDead(&Snapshot{Inbounds: snap.Inbounds[1:]}, s, nil) {
 		t.Fatal("a server without Reality inbounds has nothing to retry")
+	}
+}
+
+// The template puts one client (one email) on two inbounds; a panel holding
+// two IDs under one email accepts only one, so the ID follows the email.
+func TestSameClientOnTwoInboundsKeepsOneID(t *testing.T) {
+	other := `{"clients":[{"id":"22222222-2222-2222-2222-222222222222","email":"b","flow":""}],"decryption":"none"}`
+	snap := &Snapshot{Inbounds: []models.InboundTemplate{
+		{ID: 1, Remark: "v80", Protocol: "vless", Port: 80, Enabled: true, Upload: true, Settings: realityClients, StreamSettings: realityStream},
+		{ID: 2, Remark: "v443", Protocol: "vless", Port: 443, Enabled: true, Upload: true, Settings: realityClients, StreamSettings: realityStream},
+		{ID: 3, Remark: "x", Protocol: "vless", Port: 3443, Enabled: true, Upload: true, Settings: other, StreamSettings: realityStream},
+	}}
+	user := func(s *models.Server) []string {
+		ls, err := Links(snap.For(s), s.IPv4)
+		if err != nil || len(ls) != 3 {
+			t.Fatalf("%v %v", ls, err)
+		}
+		var out []string
+		for _, l := range ls {
+			u, _ := url.Parse(l.URL)
+			out = append(out, u.User.Username())
+		}
+		return out
+	}
+	a, b := &models.Server{IPv4: "203.0.113.7"}, &models.Server{IPv4: "203.0.113.8"}
+	newIdentity(a, nil)
+	newIdentity(b, nil)
+	ua, ub := user(a), user(b)
+	if ua[0] != ua[1] {
+		t.Fatalf("the same email has two IDs on one server: %s %s", ua[0], ua[1])
+	}
+	if ua[0] == ua[2] || ua[0] == ub[0] {
+		t.Fatalf("IDs must differ between clients and between servers: %v %v", ua, ub)
+	}
+	// Servers built with the per-inbound version keep it: their panels have it.
+	old := &models.Server{IPv4: "203.0.113.9", IdentitySeed: a.IdentitySeed, IdentityVer: identityAll}
+	if uo := user(old); uo[0] == uo[1] {
+		t.Fatal("a version 2 server must keep its per-inbound IDs")
 	}
 }

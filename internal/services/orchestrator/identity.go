@@ -80,9 +80,16 @@ func SNIList(v string) []string {
 	return out
 }
 
-// identityAll is the identity version that covers every inbound's client
-// IDs and passwords, not only the Reality ones (see Server.IdentityVer).
-const identityAll = 2
+// Identity versions (see Server.IdentityVer). identityAll covers every
+// inbound's client IDs and passwords, not only the Reality ones.
+// identityByEmail derives them from the client's email instead of the
+// inbound: the template puts the same client (same email) on two inbounds,
+// and a panel that then holds two different IDs under one email accepts
+// only one of them, which left one inbound of each such pair dead.
+const (
+	identityAll     = 2
+	identityByEmail = 3
+)
 
 // newIdentity gives s a fresh seed, and the profile and one Reality target
 // of its location (loc may be nil: a manual server).
@@ -90,7 +97,7 @@ func newIdentity(s *models.Server, loc *models.Location) {
 	b := make([]byte, 32)
 	_, _ = crand.Read(b)
 	s.IdentitySeed = secret.String(hex.EncodeToString(b))
-	s.IdentityVer = identityAll
+	s.IdentityVer = identityByEmail
 	s.RealitySNI = ""
 	if loc == nil {
 		return
@@ -149,7 +156,7 @@ func personalize(t models.InboundTemplate, s *models.Server) models.InboundTempl
 	label := func(field string) string { return fmt.Sprintf("%d|%s", t.ID, field) }
 	reality := linkgen.Security(t.StreamSettings) == "reality"
 	if reality || s.IdentityVer >= identityAll {
-		t.Settings = personalSettings(t, seed, label)
+		t.Settings = personalSettings(t, seed, label, s.IdentityVer >= identityByEmail)
 	}
 	if !reality {
 		return t
@@ -204,12 +211,12 @@ func personalize(t models.InboundTemplate, s *models.Server) models.InboundTempl
 
 // personalSettings is t's settings with the server's own client IDs and
 // passwords. Shadowsocks 2022 keys keep the length the method needs.
-func personalSettings(t models.InboundTemplate, seed string, label func(string) string) string {
+func personalSettings(t models.InboundTemplate, seed string, label func(string) string, byEmail bool) string {
 	var settings map[string]any
 	if json.Unmarshal([]byte(t.Settings), &settings) != nil {
 		return t.Settings
 	}
-	secretFor := func(field string) string { return deriveHex(seed, label(field), 32) }
+	secretFor := func(l string) string { return deriveHex(seed, l, 32) }
 	if t.Protocol == "shadowsocks" {
 		method, _ := settings["method"].(string)
 		if strings.HasPrefix(method, "2022-") {
@@ -217,12 +224,12 @@ func personalSettings(t models.InboundTemplate, seed string, label func(string) 
 			if strings.Contains(method, "aes-128") {
 				n = 16
 			}
-			secretFor = func(field string) string {
-				return base64.StdEncoding.EncodeToString(derive(seed, label(field))[:n])
+			secretFor = func(l string) string {
+				return base64.StdEncoding.EncodeToString(derive(seed, l)[:n])
 			}
 		}
 		if cur, _ := settings["password"].(string); cur != "" {
-			settings["password"] = secretFor("sskey")
+			settings["password"] = secretFor(label("sskey"))
 		}
 	}
 	cs, _ := settings["clients"].([]any)
@@ -231,11 +238,16 @@ func personalSettings(t models.InboundTemplate, seed string, label func(string) 
 		if cm == nil {
 			continue
 		}
+		// One client is one email: the same on every inbound it is on.
+		idLabel, passLabel := label(fmt.Sprintf("uuid%d", i)), label(fmt.Sprintf("pass%d", i))
+		if email, _ := cm["email"].(string); byEmail && email != "" {
+			idLabel, passLabel = "client|"+email+"|uuid", "client|"+email+"|pass|"+t.Protocol
+		}
 		if cur, _ := cm["id"].(string); cur != "" {
-			cm["id"] = deriveUUID(seed, label(fmt.Sprintf("uuid%d", i)))
+			cm["id"] = deriveUUID(seed, idLabel)
 		}
 		if cur, _ := cm["password"].(string); cur != "" {
-			cm["password"] = secretFor(fmt.Sprintf("pass%d", i))
+			cm["password"] = secretFor(passLabel)
 		}
 	}
 	b, err := json.Marshal(settings)

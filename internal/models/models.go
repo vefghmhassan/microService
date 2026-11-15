@@ -223,7 +223,8 @@ type Server struct {
 	// built before the feature) keeps the shared template values.
 	IdentitySeed secret.String `gorm:"column:identity_seed" json:"-"`
 	// IdentityVer is what the seed covers: 1 (or 0 with a seed) only the
-	// Reality inbounds, 2 the client IDs and passwords of every inbound. A
+	// Reality inbounds, 2 the client IDs and passwords of every inbound, 3
+	// the same with one ID per client email instead of one per inbound. A
 	// server keeps the version it was built with, so its links never change
 	// under a panel that still has the old values.
 	IdentityVer int `gorm:"column:identity_ver" json:"-"`
