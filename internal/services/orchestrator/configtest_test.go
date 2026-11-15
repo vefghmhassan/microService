@@ -142,6 +142,9 @@ func TestHostTuningScript(t *testing.T) {
 	if strings.Contains(sc, "5443/tcp") || strings.Contains(sc, " 1/tcp") {
 		t.Fatalf("wrong ports:\n%s", sc)
 	}
+	if sc := hostTuningScript(snap, 20175, 2096, 0); !strings.Contains(sc, "ufw allow 2096/tcp") || !strings.Contains(sc, "ufw allow 20175/tcp") || strings.Contains(sc, "allow 0/tcp") {
+		t.Fatalf("extra ports:\n%s", sc)
+	}
 	if !strings.Contains(hostTuningScript(&Snapshot{}), "then\n  :\nfi") {
 		t.Fatal("empty ufw block is not valid bash")
 	}

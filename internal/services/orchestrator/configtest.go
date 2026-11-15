@@ -286,9 +286,17 @@ func CDNPort(snap *Snapshot) int {
 // for Hysteria2, both for Shadowsocks) and turns on BBR once, like the
 // reference script. Cloud images usually run without ufw; then it only
 // does BBR.
-func hostTuningScript(snap *Snapshot) string {
+//
+// extraTCP are further TCP ports to open, e.g. the panel's subscription port,
+// which nothing else opens: with ufw active it would time out from outside.
+func hostTuningScript(snap *Snapshot, extraTCP ...int) string {
 	var b strings.Builder
 	b.WriteString("if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q 'Status: active'; then\n  :\n")
+	for _, p := range extraTCP {
+		if p > 0 {
+			fmt.Fprintf(&b, "  ufw allow %d/tcp >/dev/null\n", p)
+		}
+	}
 	for _, t := range snap.Inbounds {
 		if !t.Enabled {
 			continue

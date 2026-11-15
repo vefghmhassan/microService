@@ -710,7 +710,11 @@ func (o *Orchestrator) applyWith(ctx context.Context, r *jobs.Run, s *models.Ser
 	if st, err := panel.Status(ctx); err == nil && knownXray(st.Xray.Version) {
 		s.XrayVersion = st.Xray.Version
 	}
-	if _, err := remote.Run(ctx, "bash -c "+sshx.ShellQuote(hostTuningScript(snap.For(s))), nil); err != nil {
+	panelPort, subPort := ReservedPorts(o.Settings)
+	if s.XUIPort > 0 {
+		panelPort = s.XUIPort
+	}
+	if _, err := remote.Run(ctx, "bash -c "+sshx.ShellQuote(hostTuningScript(snap.For(s), panelPort, subPort)), nil); err != nil {
 		r.Logf("warn", "firewall/BBR: %v", err)
 	}
 	ns := o.forUpload(snap, s)
