@@ -174,6 +174,16 @@ function SubCard() {
         {url && <QRCode value={url} size={140} bgColor="#fff" color="#000" errorLevel="M" style={{ padding: 4 }} />}
         <Flex vertical gap={6} style={{ flex: 1, minWidth: 200 }}>
           <CopyText text={url} maxWidth="100%" />
+          {url && (
+            <>
+              <Typography.Text strong style={{ fontSize: 13 }}>ساب JSON با اتصال خودکار (balancer)</Typography.Text>
+              <CopyText text={`${url}?format=json`} maxWidth="100%" />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                کانفیگ‌های <span dir="ltr">all-auto</span> (همهٔ نودهای سالم) و <span dir="ltr">fr-auto</span> و … اول این لیست‌اند و اگر سروری قطع شود خودشان روی بقیه می‌روند.
+                برنامه باید ساب JSON (کانفیگ کامل xray) را بپذیرد؛ لینک معمولی بالا فقط لینک تکی دارد و balancer در آن نیست.
+              </Typography.Text>
+            </>
+          )}
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             همه کانفیگ‌های سرورهای فعال و فیلتر (با ⛔) را دارد و نام هر سرور در اسم کانفیگ است. با هر بار به‌روزرسانی در کلاینت (یا خودکار هر ساعت) سرورهای جدید و IPهای عوض‌شده را می‌گیرد.
             لینک فقط وقتی کار می‌کند که آدرس همین پنل از گوشی در دسترس باشد. برای دیدن متن خام، آخر لینک <span dir="ltr">?raw=1</span> بگذارید.

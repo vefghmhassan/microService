@@ -450,6 +450,46 @@ func (o *Orchestrator) nodeGroups() []nodeGroup {
 	return out
 }
 
+// nodeProfile is how a group's balancer config is built.
+func nodeProfile(g nodeGroup) models.SmartProfile {
+	prof := models.SmartProfile{
+		Name: g.Name, Enabled: true, Scope: models.SmartScopeAll, Country: g.Country,
+		Strategy: g.Strategy, IranDirect: true, ProbeInterval: NodeProbeInterval,
+	}
+	smart.Normalize(&prof)
+	return prof
+}
+
+// NodeConfig is one balancer config as a client runs it.
+type NodeConfig struct {
+	Name      string
+	JSON      string
+	Outbounds int
+}
+
+// NodeConfigs builds the balancer configs wanted now (the ones node_sync
+// puts in vpn-pannel), for the app's own subscription. A group without a
+// healthy node is left out.
+func (o *Orchestrator) NodeConfigs() ([]NodeConfig, error) {
+	snap, err := LoadSnapshot(o.DB)
+	if err != nil {
+		return nil, err
+	}
+	var out []NodeConfig
+	for _, g := range o.nodeGroups() {
+		items, off := o.nodeBalancer(snap, g)
+		if off != "" {
+			continue
+		}
+		res, err := smart.Build(nodeProfile(g), nil, items, g.Name)
+		if err != nil {
+			continue
+		}
+		out = append(out, NodeConfig{Name: g.Name, JSON: res.JSON, Outbounds: res.Outbounds})
+	}
+	return out, nil
+}
+
 // nodeBalancer collects a group's proxies: the working links of its
 // healthy nodes. off says why there are none.
 func (o *Orchestrator) nodeBalancer(snap *Snapshot, g nodeGroup) (items []smart.Item, off string) {
@@ -510,11 +550,7 @@ func (o *Orchestrator) nodeSync(ctx context.Context, r *jobs.Run) error {
 	for _, g := range groups {
 		loc := g
 		items, off := o.nodeBalancer(snap, g)
-		prof := models.SmartProfile{
-			Name: g.Name, Enabled: true, Scope: models.SmartScopeAll, Country: g.Country,
-			Strategy: g.Strategy, IranDirect: true, ProbeInterval: NodeProbeInterval,
-		}
-		smart.Normalize(&prof)
+		prof := nodeProfile(g)
 		for _, d := range dests {
 			if _, ok := d.Destination.(SmartDestination); !ok {
 				continue

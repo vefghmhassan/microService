@@ -8,11 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 
 	"microserver/internal/database"
 	"microserver/internal/models"
+	"microserver/internal/services/orchestrator"
 	"microserver/internal/services/secret"
 	"microserver/internal/services/settings"
 )
@@ -137,5 +139,50 @@ func TestSubJSONAndAddonCleanLinks(t *testing.T) {
 	}
 	if n := len(strings.Split(all, "\n")); len(configs) != n || configs[0]["outbounds"] == nil {
 		t.Fatalf("%d configs for %d links", len(configs), n)
+	}
+}
+
+func TestSubJSONStartsWithBalancerConfigs(t *testing.T) {
+	a, app := subApp(t)
+	a.Settings.Set(map[string]string{settings.SubEnabled: "true", settings.SubToken: "secret"})
+	a.Orch = orchestrator.New(a.DB, a.Settings, nil, nil)
+	_, plainBefore := fetch(t, app, "/sub/secret?raw=1")
+
+	// Two nodes whose configs are in vpn-pannel; a third is not healthy.
+	now := time.Now()
+	for i, name := range []string{"n1", "n2", "n3"} {
+		s := models.Server{ProviderAccountID: 1, Name: name, Country: "FR", Role: models.RoleNode, Status: models.ServerActive,
+			IPv4: "10.1.0." + string(rune('1'+i)), UploadedAt: &now, UploadedInbounds: "1"}
+		if name == "n3" {
+			no := false
+			s.LastCheckOK = &no
+		}
+		a.DB.Create(&s)
+	}
+
+	code, body := fetch(t, app, "/sub/secret?format=json")
+	var configs []map[string]any
+	if err := json.Unmarshal([]byte(body), &configs); code != 200 || err != nil {
+		t.Fatalf("json sub %d %v: %s", code, err, body)
+	}
+	if len(configs) == 0 || configs[0]["remarks"] != "all-auto" {
+		t.Fatalf("first config is not all-auto: %v", configs[0]["remarks"])
+	}
+	proxies := 0
+	for _, o := range configs[0]["outbounds"].([]any) {
+		if tag, _ := o.(map[string]any)["tag"].(string); strings.HasPrefix(tag, "proxy-") {
+			proxies++
+		}
+	}
+	if proxies != 2 {
+		t.Fatalf("all-auto holds %d proxies, want the 2 healthy nodes", proxies)
+	}
+	if _, ok := configs[0]["routing"].(map[string]any)["balancers"]; !ok {
+		t.Fatal("all-auto has no balancer")
+	}
+	// A link list cannot carry a balancer: the plain sub gains nothing.
+	_, plainAfter := fetch(t, app, "/sub/secret?raw=1")
+	if strings.Count(plainAfter, "\n") <= strings.Count(plainBefore, "\n") || strings.Contains(plainAfter, "all-auto") {
+		t.Fatalf("plain sub: %d lines before, %d after", strings.Count(plainBefore, "\n"), strings.Count(plainAfter, "\n"))
 	}
 }

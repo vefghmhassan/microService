@@ -23,7 +23,8 @@ import (
 // templates on each request so new servers and moved IPs show up at once.
 // ?raw=1 returns the links as plain text instead of base64; ?format=json
 // returns full client configs (a JSON array), the form FinalMask configs
-// (Salamander, Sudoku) need on Xray 26 clients.
+// (Salamander, Sudoku) need on Xray 26 clients; it starts with the node
+// balancer configs (all-auto, fr-auto, …) that switch servers by themselves.
 func (a *App) Sub(c *fiber.Ctx) error {
 	token := a.Settings.Get(settings.SubToken)
 	got := c.Params("token")
@@ -40,7 +41,17 @@ func (a *App) Sub(c *fiber.Ctx) error {
 	c.Set("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte("microServer")))
 	c.Set("Subscription-Userinfo", fmt.Sprintf("upload=%d; download=%d; total=0; expire=0", up, down))
 	if c.Query("format") == "json" {
-		configs := make([]json.RawMessage, 0, len(links))
+		configs := make([]json.RawMessage, 0, len(links)+2)
+		// The balancer configs come first: one config holding every healthy
+		// server, which the client moves between by itself. A plain link
+		// list cannot carry one, so they are only here.
+		if a.Orch != nil {
+			if nc, err := a.Orch.NodeConfigs(); err == nil {
+				for _, n := range nc {
+					configs = append(configs, json.RawMessage(n.JSON))
+				}
+			}
+		}
 		for _, l := range links {
 			if j, err := linkgen.ClientJSON(l); err == nil {
 				configs = append(configs, json.RawMessage(j))
