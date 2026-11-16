@@ -212,6 +212,10 @@ func TestJoinLocationConvertsExistingServersAndBalancerFollows(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 
+	// A server that got its configs by a move from a replaced one (so it
+	// has no recorded set of uploaded inbounds) is still in the balancer.
+	o.DB.Model(&models.Server{}).Where("id = ?", ids[1]).Update("uploaded_inbounds", "")
+
 	sync := func() {
 		t.Helper()
 		j, _ := o.Engine.Enqueue(KindNodeSync, nil, struct{}{}, "test")

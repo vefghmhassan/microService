@@ -461,7 +461,7 @@ func (o *Orchestrator) nodeBalancer(snap *Snapshot, g nodeGroup) (items []smart.
 	q.Order("id").Find(&servers)
 	for i := range servers {
 		s := &servers[i]
-		if s.PanelRemovedAt != nil || s.UploadedAt == nil || s.UploadedInbounds == "" {
+		if s.PanelRemovedAt != nil || s.UploadedAt == nil {
 			continue
 		}
 		if s.LastCheckOK != nil && !*s.LastCheckOK {

@@ -157,6 +157,11 @@ func smartName(p *models.SmartProfile, s *models.Server) string {
 func (o *Orchestrator) smartItems(snap *Snapshot, s *models.Server, want map[uint]bool) ([]smart.Item, error) {
 	us := o.forUpload(snap, s)
 	working := splitIDs(s.UploadedInbounds)
+	if len(working) == 0 && s.UploadedAt != nil {
+		// A server whose configs were moved here from a replaced one (before
+		// that recorded the set): all of its uploadable inbounds are there.
+		working = uploadIDs(us)
+	}
 	host := LinkHost(s)
 	var items []smart.Item
 	var errs []error

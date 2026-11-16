@@ -624,7 +624,18 @@ func (o *Orchestrator) moveDestination(ctx context.Context, r *jobs.Run, s *mode
 	}
 	now := time.Now()
 	s.UploadedIP, s.UploadedAt = host, &now
-	o.save(r, s, "uploaded_ip", "uploaded_at")
+	cols := []string{"uploaded_ip", "uploaded_at"}
+	if s.UploadedInbounds == "" {
+		// The configs came over from the replaced server's address; this
+		// server never recorded which inbounds they are, and everything
+		// that needs the set (smart and balancer configs, the reconcile
+		// after a template change) skips a server without it.
+		if snap, err := LoadSnapshot(o.DB); err == nil {
+			s.UploadedInbounds = joinIDs(uploadIDs(o.forUpload(snap, s)))
+			cols = append(cols, "uploaded_inbounds")
+		}
+	}
+	o.save(r, s, cols...)
 	return nil
 }
 
