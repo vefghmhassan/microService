@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -58,7 +59,11 @@ func (m *fakeMaster) ProbeNode(context.Context, int) error {
 }
 
 // The fake panel can mint API tokens, like *xui.Client.
+// It is a v3.7 panel: the node-admin scope does not exist there yet.
 func (p *fakePanel) CreateAPIToken(_ context.Context, name, scope string) (string, error) {
+	if scope == "node-admin" {
+		return "", errors.New("3x-ui POST /panel/api/setting/apiTokens/create: The parameters have been changed. (scope must be 'admin', 'monitor', or 'node-sync'\n)")
+	}
 	return "tok-" + scope, nil
 }
 
@@ -163,7 +168,7 @@ func TestProvisionInNodeLocationJoinsMaster(t *testing.T) {
 	}
 	n := m.nodes[s.NodeID]
 	if n.Scheme != "https" || n.Address != s.IPv4 || n.Port != s.XUIPort || n.TLSVerifyMode != "verify" ||
-		n.InboundSyncMode != "selected" || len(n.InboundTags) != 0 || n.APIToken == nil || *n.APIToken != "tok-node-admin" {
+		n.InboundSyncMode != "selected" || len(n.InboundTags) != 0 || n.APIToken == nil || *n.APIToken != "tok-node-sync" {
 		t.Fatalf("node on master: %+v", n)
 	}
 

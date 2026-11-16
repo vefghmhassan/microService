@@ -159,7 +159,12 @@ func (o *Orchestrator) nodeJoin(ctx context.Context, r *jobs.Run, s *models.Serv
 		if !ok {
 			return errors.New("this panel client cannot create API tokens")
 		}
+		// "node-admin" (node-sync plus panel updates from the master) only
+		// exists in newer 3x-ui; v3.7 knows admin, monitor and node-sync.
 		tok, err := tp.CreateAPIToken(ctx, "microserver-master", "node-admin")
+		if err != nil && strings.Contains(strings.ToLower(err.Error()), "scope") {
+			tok, err = tp.CreateAPIToken(ctx, "microserver-master", "node-sync")
+		}
 		if err != nil {
 			return fmt.Errorf("node token: %w", err)
 		}
