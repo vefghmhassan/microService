@@ -60,14 +60,22 @@ func IPCertScript(ip, email string, staging bool) string {
 		server = "letsencrypt_test"
 	}
 	acme := "~/.acme.sh/acme.sh"
+	// Without a contact the argument is left out altogether: "email=" with
+	// nothing after it reaches acme.sh as a bare --email, whose missing
+	// value ends the installer (dash refuses the extra shift).
+	installArgs := ""
+	if email != "" {
+		installArgs = " -s email=" + q(email)
+	}
 	lines := []string{
 		"set -e",
 		"export DEBIAN_FRONTEND=noninteractive",
 		// The standalone listener of acme.sh is socat.
 		"command -v socat >/dev/null 2>&1 || { apt-get update -qq >/dev/null 2>&1 || true; apt-get install -y -qq socat >/dev/null 2>&1 || yum install -y socat >/dev/null 2>&1 || true; }",
 		"command -v socat >/dev/null 2>&1 || { echo 'socat is missing and could not be installed'; exit 3; }",
-		"[ -x " + acme + " ] || curl -fsSL https://get.acme.sh | sh -s email=" + q(email) + " >/dev/null 2>&1",
-		"[ -x " + acme + " ] || { echo 'acme.sh could not be installed'; exit 3; }",
+		// The installer's output is kept: it is the only clue when it fails.
+		"[ -x " + acme + " ] || { cd ~ && curl -fsSL https://get.acme.sh | sh" + installArgs + " >/tmp/acme-install.log 2>&1 || true; }",
+		"[ -x " + acme + " ] || { echo 'acme.sh could not be installed:'; tail -n 6 /tmp/acme-install.log 2>/dev/null; exit 3; }",
 		fmt.Sprintf("if command -v ufw >/dev/null 2>&1 && ufw status | grep -q 'Status: active'; then ufw allow %d/tcp >/dev/null; fi", AcmePort),
 		fmt.Sprintf("if ss -ltnH 2>/dev/null | awk '{print $4}' | grep -qE '[:.]%d$'; then echo 'port %d is in use on this server and the certificate validation needs it'; exit 4; fi", AcmePort, AcmePort),
 		acme + " --set-default-ca --server " + server + " >/dev/null 2>&1 || true",

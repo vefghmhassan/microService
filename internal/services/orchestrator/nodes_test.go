@@ -89,8 +89,16 @@ func TestIPCertScript(t *testing.T) {
 			t.Errorf("script lacks %q:\n%s", want, s)
 		}
 	}
-	if !strings.Contains(IPCertScript("203.0.113.7", "", true), "--server letsencrypt_test") {
+	if !strings.Contains(s, "| sh -s email='a@b.c' >") {
+		t.Errorf("the contact is not passed to the acme.sh installer:\n%s", s)
+	}
+	noMail := IPCertScript("203.0.113.7", "", true)
+	if !strings.Contains(noMail, "--server letsencrypt_test") {
 		t.Error("staging does not use the test CA")
+	}
+	// A bare "email=" breaks the acme.sh installer.
+	if strings.Contains(noMail, "email=") || strings.Contains(noMail, "--register-account") {
+		t.Errorf("no contact must mean no email argument:\n%s", noMail)
 	}
 	got, ok := parseNotAfter("x\nNOTAFTER=Nov 22 10:20:30 2026 GMT\n")
 	if !ok || !got.Equal(time.Date(2026, 11, 22, 10, 20, 30, 0, time.UTC)) {
