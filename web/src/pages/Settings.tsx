@@ -179,7 +179,7 @@ function SubCard() {
               <Typography.Text strong style={{ fontSize: 13 }}>ساب JSON با اتصال خودکار (balancer)</Typography.Text>
               <CopyText text={`${url}?format=json`} maxWidth="100%" />
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                کانفیگ‌های <span dir="ltr">all-auto</span> (همهٔ نودهای سالم) و <span dir="ltr">fr-auto</span> و … اول این لیست‌اند و اگر سروری قطع شود خودشان روی بقیه می‌روند.
+                کانفیگ‌های بخش «حالت‌های کانفیگ» (مثل <span dir="ltr">all-auto</span>) به همان ترتیب اول این لیست‌اند و اگر سروری قطع شود خودشان روی بقیه می‌روند.
                 برنامه باید ساب JSON (کانفیگ کامل xray) را بپذیرد؛ لینک معمولی بالا فقط لینک تکی دارد و balancer در آن نیست.
               </Typography.Text>
             </>

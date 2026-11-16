@@ -76,6 +76,11 @@ const (
 	NodeMasterID = "node.master_server_id"
 	NodeClient   = "node.client"
 	NodeSubID    = "node.sub_id"
+	// NodeOnly keeps only balancer and smart configs in vpn-pannel: the
+	// servers' own configs are not uploaded.
+	NodeOnly = "node.only"
+	// NodeModesSeeded is set once the built-in balancer modes were made.
+	NodeModesSeeded = "node.modes_seeded"
 	// Contact for the Let's Encrypt account of IP certificates (optional).
 	AcmeIPEmail = "acme.ip_email"
 )
@@ -145,6 +150,8 @@ var Defaults = map[string]string{
 	NodeMasterID:    "0",
 	NodeClient:      "ms-auto",
 	NodeSubID:       "",
+	NodeOnly:        "false",
+	NodeModesSeeded: "false",
 	AcmeIPEmail:     "",
 }
 

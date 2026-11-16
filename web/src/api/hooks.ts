@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/
 import { App } from 'antd'
 import { del, get, post, put } from './client'
 import type {
-  CDNAddon, Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, NodesOverview, Option, ProviderAccount,
+  BalancerModes, CDNAddon, Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, NodesOverview, Option, ProviderAccount,
   ProviderType, Server, ServerEvent, ServerInbounds, Settings, SmartProfile, SmartRule, SmartUpload, TemplateResponse,
   UpdateBackup, UpdateBranch, UpdateCommit, UpdateOp, UpdateStatus, UpdateVersion,
 } from './types'
@@ -21,6 +21,7 @@ export const keys = {
   ips: ['ips'] as const,
   locations: ['locations'] as const,
   nodes: ['nodes'] as const,
+  balancerModes: ['balancer-modes'] as const,
   checks: ['checks'] as const,
   template: ['template'] as const,
   settings: ['settings'] as const,
@@ -70,6 +71,8 @@ export const useJob = (id: number | null) =>
 export const useLocations = () => useQuery({ queryKey: keys.locations, queryFn: () => get<Location[]>('/locations') })
 export const useNodes = () =>
   useQuery({ queryKey: keys.nodes, queryFn: () => get<NodesOverview>('/nodes'), refetchInterval: 30_000 })
+export const useBalancerModes = () =>
+  useQuery({ queryKey: keys.balancerModes, queryFn: () => get<BalancerModes>('/balancer-modes'), refetchInterval: 30_000 })
 export const useCloudflare = () => useQuery({ queryKey: keys.cloudflare, queryFn: () => get<CloudflareAccount[]>('/cloudflare') })
 export const useCloudflareZones = (accountId?: number) =>
   useQuery({

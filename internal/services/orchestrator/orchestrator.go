@@ -221,6 +221,7 @@ func (o *Orchestrator) Register() {
 	o.Engine.Register(KindNodeJoin, o.nodeJoinJob)
 	o.Engine.Register(KindNodeLeave, o.nodeLeaveJob)
 	o.Engine.Register(KindNodeSync, o.nodeSync)
+	o.Engine.Register(KindNodeOnly, o.nodeOnly)
 }
 
 func serverEvent(s *models.Server) jobs.Event {

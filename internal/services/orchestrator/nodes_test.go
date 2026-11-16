@@ -198,6 +198,17 @@ func TestJoinLocationConvertsExistingServersAndBalancerFollows(t *testing.T) {
 	}
 	m, loc := withMaster(t, o, acc)
 	o.DB.Model(&models.Server{}).Where("id IN ?", ids).Update("location_id", loc.ID)
+	// The modes older versions had built in: de-auto and all-auto.
+	if err := SeedBalancerModes(o.DB, o.Settings); err != nil {
+		t.Fatal(err)
+	}
+	modeOut := func(name string) int {
+		var mode models.BalancerMode
+		o.DB.Where("name = ?", name).First(&mode)
+		var row models.NodeUpload
+		o.DB.Where("mode_id = ?", mode.ID).First(&row)
+		return row.Outbounds
+	}
 
 	n, err := o.JoinLocation(loc.ID, "test")
 	if err != nil || n != 2 {
@@ -228,11 +239,7 @@ func TestJoinLocationConvertsExistingServersAndBalancerFollows(t *testing.T) {
 	if node == nil || !node.active {
 		t.Fatalf("no balancer config in vpn-pannel: %+v", sd.nodes)
 	}
-	outbounds := func() int {
-		var row models.NodeUpload
-		o.DB.Where("location_id = ?", loc.ID).First(&row)
-		return row.Outbounds
-	}
+	outbounds := func() int { return modeOut("de-auto") }
 	if got := outbounds(); got != 2 {
 		t.Fatalf("balancer holds %d proxies, want 2", got)
 	}
@@ -241,11 +248,7 @@ func TestJoinLocationConvertsExistingServersAndBalancerFollows(t *testing.T) {
 	}
 
 	// Every node is also in the all-nodes config, with or without a location.
-	allOut := func() int {
-		var row models.NodeUpload
-		o.DB.Where("location_id = 0").First(&row)
-		return row.Outbounds
-	}
+	allOut := func() int { return modeOut(AllNodesName) }
 	if all := sd.nodes[AllNodesName]; all == nil || !all.active || allOut() != 2 {
 		t.Fatalf("all-nodes config: %+v with %d proxies, want 2", all, allOut())
 	}

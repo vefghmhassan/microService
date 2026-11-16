@@ -121,9 +121,34 @@ export interface PanelNode {
   server_id: number
 }
 
-/** One location's balancer config in one vpn-pannel. */
+/** A balancer config the admin keeps: some node locations behind one balancer. */
+export interface BalancerMode {
+  id: number
+  name: string
+  enabled: boolean
+  priority: number
+  /** Comma separated location IDs; '' = every node. */
+  location_ids: string
+  /** '' = leastPing. */
+  strategy: string
+  /** '' = 30s. */
+  probe_interval: string
+  /** '' follows each destination panel's own ads mode. */
+  ads_mode: '' | 'normal' | 'ads' | 'both'
+  country: string
+}
+
+export interface BalancerModes {
+  /** Destination panels hold only balancer and smart configs. */
+  only: boolean
+  modes: BalancerMode[]
+  uploads: NodeUpload[]
+}
+
+/** One balancer mode's config in one vpn-pannel. */
 export interface NodeUpload {
   id: number
+  mode_id: number
   location_id: number
   destination_id: number
   ads: boolean

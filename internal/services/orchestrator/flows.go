@@ -577,6 +577,11 @@ func (o *Orchestrator) moveDestination(ctx context.Context, r *jobs.Run, s *mode
 	var errs []error
 	moved := 0
 	leftovers := false // some configs may still sit on oldIP
+	if o.NodeOnly() {
+		// No configs to move; what is still on the old address goes, and
+		// the upload below only records the server as published.
+		fresh, dests, leftovers = dests, nil, true
+	}
 	for _, d := range dests {
 		res, err := d.ReplaceAddress(ctx, oldIP, host, s.Country)
 		if errors.Is(err, destination.ErrNoNodes) {
@@ -952,6 +957,12 @@ func (o *Orchestrator) uploadTo(ctx context.Context, r *jobs.Run, s *models.Serv
 	}
 	var errs []error
 	ok := 0
+	if o.NodeOnly() {
+		// Nothing goes up; the server still counts as published, which is
+		// what puts its links in the balancer and smart configs.
+		r.Info("node-only mode: %d links kept out of vpn-pannel", len(urls))
+		ok, dests = 1, nil
+	}
 	for _, d := range dests {
 		ads := d.Ads
 		if len(ads) == 0 {

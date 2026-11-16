@@ -160,6 +160,9 @@ func TestSubJSONStartsWithBalancerConfigs(t *testing.T) {
 		a.DB.Create(&s)
 	}
 
+	if err := orchestrator.SeedBalancerModes(a.DB, a.Settings); err != nil {
+		t.Fatal(err)
+	}
 	code, body := fetch(t, app, "/sub/secret?format=json")
 	var configs []map[string]any
 	if err := json.Unmarshal([]byte(body), &configs); code != 200 || err != nil {

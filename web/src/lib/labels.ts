@@ -36,6 +36,8 @@ export const jobKind: Record<string, string> = {
   provision_auto: 'ساخت خودکار (اولویت لوکیشن)',
   purge_provider: 'حذف حساب ارائه‌دهنده و سرورهایش',
   unpublish: 'حذف از پنل‌ها',
+  node_sync: 'همگام‌سازی کانفیگ‌های balancer',
+  node_only: 'اعمال حالت «فقط نودها»',
 }
 
 export const syncStatus: Record<string, { label: string; color: string }> = {

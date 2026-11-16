@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"gorm.io/gorm"
+
 	"microserver/internal/jobs"
 	"microserver/internal/models"
 	"microserver/internal/services/settings"
@@ -27,16 +29,21 @@ import (
 // client IDs under the same emails, which one master client table cannot
 // hold.
 //
-// The "moves to another server by itself" part is a balancer config per
-// node location: every working link of the location's healthy nodes behind
-// one xray balancer, built like the smart configs and kept current in
-// vpn-pannel.
+// The "moves to another server by itself" part is the balancer configs:
+// every working link of the healthy nodes of a balancer mode (some
+// locations, or all of them) behind one xray balancer, built like the smart
+// configs and kept current in vpn-pannel.
+
+// With the node.only setting on, those (and the smart configs) are all that
+// vpn-pannel holds: the servers' own configs are not uploaded.
 
 // Job kinds of node mode.
 const (
 	KindNodeJoin  = "node_join"
 	KindNodeLeave = "node_leave"
 	KindNodeSync  = "node_sync"
+	// KindNodeOnly applies a change of the node.only setting.
+	KindNodeOnly = "node_only"
 )
 
 // NodeAPI is the node side of a master 3x-ui panel; *xui.Client has it.
@@ -408,44 +415,136 @@ func (o *Orchestrator) QueueNodeSync() {
 	})
 }
 
-// BalancerName is the vpn-pannel name of a location's balancer config.
+// BalancerName is the name the balancer mode seeded for a location gets.
 func BalancerName(loc *models.Location) string {
 	base := firstNonEmpty(loc.NamePrefix, strings.ToLower(loc.Country), "loc"+strconv.FormatUint(uint64(loc.ID), 10))
 	return base + "-auto"
 }
 
-// AllNodesName is the vpn-pannel name of the balancer config that holds
-// every healthy node, whatever its location.
+// AllNodesName is the name of the seeded balancer mode that holds every
+// healthy node, whatever its location.
 const AllNodesName = "all-auto"
 
-// NodeProbeInterval is how often a balancer config tests its servers: a
-// client leaves a dead server within about this long.
+// NodeProbeInterval is how often a balancer config tests its servers when
+// its mode does not say: a client leaves a dead server within about this
+// long.
 const NodeProbeInterval = "30s"
 
-// nodeGroup is one balancer config: the nodes of a location, or (ID 0)
-// every node there is.
+// SeedBalancerModes makes, once, the balancer modes older versions had
+// built in: one per node location and one of all nodes. Balancer configs
+// already in vpn-pannel are attached to their mode, so nothing is pushed
+// again. After that the list is the admin's.
+func SeedBalancerModes(db *gorm.DB, st *settings.Store) error {
+	if st.Bool(settings.NodeModesSeeded) {
+		return nil
+	}
+	var n int64
+	db.Model(&models.BalancerMode{}).Count(&n)
+	if n == 0 {
+		var locs []models.Location
+		db.Where("node_mode = ?", true).Order("priority, id").Find(&locs)
+		used := map[string]bool{AllNodesName: true}
+		prio := 0
+		add := func(m models.BalancerMode, locID uint) error {
+			prio++
+			m.Enabled, m.Priority = true, prio
+			if err := db.Create(&m).Error; err != nil {
+				return err
+			}
+			return db.Model(&models.NodeUpload{}).Where("mode_id = 0 AND location_id = ?", locID).Update("mode_id", m.ID).Error
+		}
+		for i := range locs {
+			name := BalancerName(&locs[i])
+			if used[name] {
+				name = "loc" + strconv.FormatUint(uint64(locs[i].ID), 10) + "-auto"
+			}
+			used[name] = true
+			m := models.BalancerMode{Name: name, LocationIDs: strconv.FormatUint(uint64(locs[i].ID), 10),
+				Strategy: locs[i].BalancerStrategy, Country: strings.ToUpper(locs[i].Country)}
+			if err := add(m, locs[i].ID); err != nil {
+				return err
+			}
+		}
+		if err := add(models.BalancerMode{Name: AllNodesName}, 0); err != nil {
+			return err
+		}
+	}
+	return st.Set(map[string]string{settings.NodeModesSeeded: "true"})
+}
+
+// ModeLocationIDs parses a mode's location list.
+func ModeLocationIDs(v string) []uint {
+	var out []uint
+	seen := map[uint]bool{}
+	for _, p := range strings.Split(v, ",") {
+		n, err := strconv.ParseUint(strings.TrimSpace(p), 10, 64)
+		if err != nil || n == 0 || seen[uint(n)] {
+			continue
+		}
+		seen[uint(n)] = true
+		out = append(out, uint(n))
+	}
+	return out
+}
+
+// nodeGroup is one balancer config: an enabled balancer mode.
 type nodeGroup struct {
-	ID       uint // location ID, 0 for all nodes
+	ModeID   uint
 	Name     string
 	Country  string
 	Strategy string
+	Probe    string
+	// Locations are the locations whose nodes it holds; none = every node.
+	Locations []uint
+	// Ads are the ads flags the mode sets itself; nil follows the vpn-pannel.
+	Ads []bool
 }
 
-// nodeGroups lists the balancer configs wanted now: one per node location,
-// and one of all nodes as soon as a node exists. That last one is what
-// keeps a client connected when its server's whole location is gone, and it
-// is the only one servers without a location (joined by hand) are in.
+// nodeGroups lists the balancer configs wanted now: the enabled balancer
+// modes, in their order. A mode of all nodes waits for the first node; it is
+// what keeps a client connected when its server's whole location is gone,
+// and the only one servers without a location (joined by hand) are in.
+// A mode left out here has its config taken out of vpn-pannel.
 func (o *Orchestrator) nodeGroups() []nodeGroup {
-	var locs []models.Location
-	o.DB.Where("node_mode = ?", true).Order("priority, id").Find(&locs)
-	var out []nodeGroup
-	for i := range locs {
-		out = append(out, nodeGroup{ID: locs[i].ID, Name: BalancerName(&locs[i]), Country: locs[i].Country, Strategy: locs[i].BalancerStrategy})
+	var modes []models.BalancerMode
+	o.DB.Where("enabled = ?", true).Order("priority, id").Find(&modes)
+	if len(modes) == 0 {
+		return nil
 	}
 	var first models.Server
-	if o.DB.Where("role = ? AND status NOT IN ?", models.RoleNode, []string{models.ServerDeleted, models.ServerDeleting}).
-		Order("id").First(&first).Error == nil {
-		out = append(out, nodeGroup{Name: AllNodesName, Country: first.Country})
+	anyNode := o.DB.Where("role = ? AND status NOT IN ?", models.RoleNode, []string{models.ServerDeleted, models.ServerDeleting}).
+		Order("id").First(&first).Error == nil
+	var out []nodeGroup
+	for _, m := range modes {
+		g := nodeGroup{ModeID: m.ID, Name: m.Name, Country: m.Country, Strategy: m.Strategy, Probe: m.ProbeInterval,
+			Locations: ModeLocationIDs(m.LocationIDs), Ads: m.AdsValues()}
+		if len(g.Locations) == 0 {
+			if !anyNode {
+				continue
+			}
+			if g.Country == "" {
+				g.Country = first.Country
+			}
+		} else {
+			// Like the all-nodes mode, it waits until one of its locations
+			// uses node mode or still has a node.
+			var n int64
+			o.DB.Model(&models.Location{}).Where("id IN ? AND node_mode = ?", g.Locations, true).Count(&n)
+			if n == 0 {
+				o.DB.Model(&models.Server{}).Where("location_id IN ? AND role = ? AND status NOT IN ?", g.Locations,
+					models.RoleNode, []string{models.ServerDeleted, models.ServerDeleting}).Count(&n)
+			}
+			if n == 0 {
+				continue
+			}
+			if g.Country == "" {
+				var loc models.Location
+				if o.DB.Select("country").Where("id IN ?", g.Locations).Order("priority, id").First(&loc).Error == nil {
+					g.Country = loc.Country
+				}
+			}
+		}
+		out = append(out, g)
 	}
 	return out
 }
@@ -454,7 +553,7 @@ func (o *Orchestrator) nodeGroups() []nodeGroup {
 func nodeProfile(g nodeGroup) models.SmartProfile {
 	prof := models.SmartProfile{
 		Name: g.Name, Enabled: true, Scope: models.SmartScopeAll, Country: g.Country,
-		Strategy: g.Strategy, IranDirect: true, ProbeInterval: NodeProbeInterval,
+		Strategy: g.Strategy, IranDirect: true, ProbeInterval: firstNonEmpty(g.Probe, NodeProbeInterval),
 	}
 	smart.Normalize(&prof)
 	return prof
@@ -494,8 +593,8 @@ func (o *Orchestrator) NodeConfigs() ([]NodeConfig, error) {
 // healthy nodes. off says why there are none.
 func (o *Orchestrator) nodeBalancer(snap *Snapshot, g nodeGroup) (items []smart.Item, off string) {
 	q := o.DB.Where("role = ? AND status = ?", models.RoleNode, models.ServerActive)
-	if g.ID != 0 {
-		q = q.Where("location_id = ?", g.ID)
+	if len(g.Locations) > 0 {
+		q = q.Where("location_id IN ?", g.Locations)
 	}
 	var servers []models.Server
 	q.Order("id").Find(&servers)
@@ -531,15 +630,21 @@ func (o *Orchestrator) nodeSync(ctx context.Context, r *jobs.Run) error {
 	dests := o.Dests()
 
 	type key struct {
-		Loc, Dest uint
-		Ads       bool
+		Mode, Dest uint
+		Ads        bool
 	}
 	var rows []models.NodeUpload
 	o.DB.Find(&rows)
 	have := map[key]*models.NodeUpload{}
+	var gone []*models.NodeUpload
 	for i := range rows {
 		x := &rows[i]
-		have[key{x.LocationID, x.DestinationID, x.Ads}] = x
+		if x.ModeID == 0 {
+			// A row of an older version that no mode took over.
+			gone = append(gone, x)
+			continue
+		}
+		have[key{x.ModeID, x.DestinationID, x.Ads}] = x
 	}
 	destByID := map[uint]NamedDest{}
 	for _, d := range dests {
@@ -556,13 +661,16 @@ func (o *Orchestrator) nodeSync(ctx context.Context, r *jobs.Run) error {
 				continue
 			}
 			ads := d.Ads
+			if len(loc.Ads) > 0 {
+				ads = loc.Ads
+			}
 			if len(ads) == 0 {
 				ads = []bool{false}
 			}
 			for _, a := range ads {
-				k := key{loc.ID, d.ID, a}
+				k := key{loc.ModeID, d.ID, a}
 				w := smartWant{
-					key:  smartKey{Server: loc.ID, Dest: d.ID, Ads: a},
+					key:  smartKey{Server: loc.ModeID, Dest: d.ID, Ads: a},
 					name: AdsBaseName(prof.Name, a, len(ads) > 1), country: strings.ToUpper(loc.Country), off: off, dest: d,
 				}
 				if w.off == "" {
@@ -576,7 +684,7 @@ func (o *Orchestrator) nodeSync(ctx context.Context, r *jobs.Run) error {
 				row := have[k]
 				delete(have, k)
 				if row == nil {
-					row = &models.NodeUpload{LocationID: loc.ID, DestinationID: d.ID, Ads: a}
+					row = &models.NodeUpload{ModeID: loc.ModeID, DestinationID: d.ID, Ads: a}
 				}
 				wanted++
 				// pushSmart works on a smart upload row; a balancer config
@@ -600,9 +708,12 @@ func (o *Orchestrator) nodeSync(ctx context.Context, r *jobs.Run) error {
 		}
 	}
 
-	// Groups that are gone (a location left node mode, the last node was
-	// deleted): their balancer configs go.
+	// Groups that are gone (a mode was removed or switched off, the last
+	// node was deleted): their balancer configs go.
 	for _, row := range have {
+		gone = append(gone, row)
+	}
+	for _, row := range gone {
 		d, ok := destByID[row.DestinationID]
 		if sd, isSmart := d.Destination.(SmartDestination); ok && isSmart && row.Name != "" {
 			n, err := sd.FindByName(ctx, row.Name)
@@ -624,5 +735,62 @@ func (o *Orchestrator) nodeSync(ctx context.Context, r *jobs.Run) error {
 	if failed > 0 && changed == 0 && failed == wanted {
 		return errors.New("every balancer config push failed")
 	}
+	return nil
+}
+
+// ---- node only ----
+
+// NodeOnly reports whether vpn-pannel holds only balancer and smart
+// configs. A server's own configs are then not uploaded; what the upload
+// would have recorded (the address, the working inbounds) still is, because
+// the balancer and smart configs are built from it.
+func (o *Orchestrator) NodeOnly() bool {
+	return o.Settings != nil && o.Settings.Bool(settings.NodeOnly)
+}
+
+// nodeOnly is the node_only job, run when the setting changes. Switched on,
+// every server's own configs leave vpn-pannel; switched off, they go up
+// again.
+func (o *Orchestrator) nodeOnly(ctx context.Context, r *jobs.Run) error {
+	var servers []models.Server
+	o.DB.Where("uploaded_at IS NOT NULL AND panel_removed_at IS NULL AND status NOT IN ?",
+		[]string{models.ServerDeleted, models.ServerDeleting}).Order("id").Find(&servers)
+	if !o.NodeOnly() {
+		r.Step("upload the servers' configs again")
+		n := 0
+		for i := range servers {
+			s := &servers[i]
+			if s.Status != models.ServerActive && s.Status != models.ServerFiltered {
+				continue
+			}
+			id := s.ID
+			if _, err := o.Engine.Enqueue(KindUpload, &id, struct{}{}, r.Job.Source); err != nil {
+				r.Logf("warn", "%s: %v", s.Name, err)
+				continue
+			}
+			n++
+		}
+		r.Info("queued upload for %d servers", n)
+		return nil
+	}
+	r.Step("remove the servers' configs from vpn-pannel")
+	for i := range servers {
+		s := &servers[i]
+		// Not deleteOnPanels: that keeps an address a live server uses,
+		// and here the live server is the one being cleared.
+		for _, addr := range panelAddrs(s) {
+			for _, d := range o.Dests() {
+				if err := d.DeleteAddress(ctx, addr); err != nil {
+					r.Logf("warn", "%s: could not delete configs on %s: %v", d.Name, addr, err)
+					continue
+				}
+				r.Info("%s: configs on %s deleted", d.Name, addr)
+			}
+		}
+		if s.CDNHostname != "" {
+			o.retireCleanConfigs(ctx, r, s.CDNHostname, true)
+		}
+	}
+	r.Info("cleared %d servers; balancer and smart configs stay", len(servers))
 	return nil
 }

@@ -67,7 +67,7 @@ func (o *Orchestrator) OnJobFinish(j *models.Job) {
 	if j.Status != models.JobDone {
 		return
 	}
-	if smartKinds[j.Kind] || j.Kind == KindNodeJoin || j.Kind == KindNodeLeave {
+	if smartKinds[j.Kind] || j.Kind == KindNodeJoin || j.Kind == KindNodeLeave || j.Kind == KindNodeOnly {
 		o.QueueNodeSync()
 	}
 	if !smartKinds[j.Kind] {

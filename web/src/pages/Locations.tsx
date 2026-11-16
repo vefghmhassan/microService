@@ -7,6 +7,7 @@ import { CSS } from '@dnd-kit/utilities'
 import {
   del, keys, post, put, useAction, useCDNAddons, useCloudflare, useCloudflareZones, useLocations, useNodes, usePlans, useProviders, useRegions, useSettings,
 } from '../api/hooks'
+import { Link } from 'react-router-dom'
 import type { Location } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { ConfirmButton } from '../components/ConfirmButton'
@@ -16,7 +17,7 @@ import { flagEmoji, formatGB, money } from '../lib/format'
 type DragHandle = Pick<ReturnType<typeof useSortable>, 'attributes' | 'listeners' | 'setActivatorNodeRef'>
 const HandleContext = createContext<DragHandle | null>(null)
 
-function DragHandleButton() {
+export function DragHandleButton() {
   const h = useContext(HandleContext)
   return (
     <Button
@@ -27,7 +28,7 @@ function DragHandleButton() {
   )
 }
 
-function SortableRow(props: HTMLAttributes<HTMLTableRowElement> & { 'data-row-key'?: number }) {
+export function SortableRow(props: HTMLAttributes<HTMLTableRowElement> & { 'data-row-key'?: number }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: props['data-row-key'] ?? 0 })
   const style = { ...props.style, transform: CSS.Translate.toString(transform), transition, ...(isDragging ? { position: 'relative' as const, zIndex: 9, background: 'rgba(22,119,255,.08)' } : {}) }
   return (
@@ -131,8 +132,8 @@ export function Locations() {
               ) : <Typography.Text type="secondary">IP</Typography.Text>),
             },
             {
-              title: 'نود', dataIndex: 'node_mode', render: (on: boolean, l) => (on
-                ? <Tooltip title={`سرورهای این لوکیشن نود پنل مادرند و یک کانفیگ balancer (${l.balancer_strategy || 'leastPing'}) در vpn-pannel دارند`}><Tag color="blue" icon={<ApartmentOutlined />}>نود</Tag></Tooltip>
+              title: 'نود', dataIndex: 'node_mode', render: (on: boolean) => (on
+                ? <Tooltip title="سرورهای این لوکیشن نود پنل مادرند و در کانفیگ‌های balancer بخش «حالت‌های کانفیگ» می‌آیند"><Tag color="blue" icon={<ApartmentOutlined />}>نود</Tag></Tooltip>
                 : <Typography.Text type="secondary">—</Typography.Text>),
             },
             { title: 'پیشوند نام', dataIndex: 'name_prefix', render: (p: string) => (p ? <span dir="ltr">{p}-1</span> : <Typography.Text type="secondary">پیش‌فرض</Typography.Text>) },
@@ -420,19 +421,14 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
         <Row gutter={12}>
           <Col xs={24} sm={10}>
             <Form.Item name="node_mode" label="حالت نود" valuePropName="checked"
-              tooltip="سرورهای این لوکیشن (فعلی و جدید) خودکار به پنل مادر 3x-ui اضافه می‌شوند و یک کانفیگ balancer از همهٔ آن‌ها در vpn-pannel ساخته می‌شود؛ اگر یکی قطع شود کلاینت خودش به بقیه وصل می‌شود.">
+              tooltip="سرورهای این لوکیشن (فعلی و جدید) خودکار به پنل مادر 3x-ui اضافه می‌شوند و در کانفیگ‌های balancer بخش «حالت‌های کانفیگ» می‌آیند؛ اگر یکی قطع شود کلاینت خودش به بقیه وصل می‌شود.">
               <Switch disabled={!masterReady && !nodeMode} />
             </Form.Item>
           </Col>
           <Col xs={24} sm={14}>
-            <Form.Item name="balancer_strategy" label="استراتژی balancer">
-              <Select disabled={!nodeMode} options={[
-                { value: 'leastPing', label: 'کمترین پینگ (leastPing)' },
-                { value: 'leastLoad', label: 'کمترین بار (leastLoad)' },
-                { value: 'roundRobin', label: 'نوبتی (roundRobin)' },
-                { value: 'random', label: 'تصادفی (random)' },
-              ]} />
-            </Form.Item>
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 30 }}>
+              نام، استراتژی و لوکیشن‌های هر کانفیگ balancer در بخش <Link to="/modes">حالت‌های کانفیگ</Link> است.
+            </Typography.Paragraph>
           </Col>
         </Row>
         {!masterReady && !nodeMode && (

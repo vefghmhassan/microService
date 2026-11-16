@@ -83,6 +83,9 @@ func main() {
 	if err := orchestrator.SeedSmartRules(db); err != nil {
 		log.Printf("smart rules: %v", err)
 	}
+	if err := orchestrator.SeedBalancerModes(db, st); err != nil {
+		log.Printf("balancer modes: %v", err)
+	}
 	engine.OnFinish(orch.OnJobFinish)
 	geo := geoip.Open(filepath.Join(cfg.DataDir, "geoip"))
 	orch.Geo = geo

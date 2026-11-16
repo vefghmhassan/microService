@@ -81,6 +81,12 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Get("/nodes", a.NodesOverview)
 	p.Post("/nodes/master", a.CreateMaster)
 	p.Post("/nodes/sync", a.EnqueueGlobal(orchestrator.KindNodeSync))
+	p.Get("/balancer-modes", a.ListModes)
+	p.Post("/balancer-modes", a.CreateMode)
+	p.Post("/balancer-modes/reorder", a.ReorderModes)
+	p.Put("/balancer-modes/only", a.SetNodeOnly)
+	p.Put("/balancer-modes/:id", a.UpdateMode)
+	p.Delete("/balancer-modes/:id", a.DeleteMode)
 
 	p.Get("/locations", a.ListLocations)
 	p.Post("/locations", a.CreateLocation)

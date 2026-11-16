@@ -343,14 +343,57 @@ const (
 	RoleMaster = "master"
 )
 
-// NodeUpload is one location's balancer config in one vpn-pannel: the
-// master panel's JSON subscription config that holds every node of the
-// location behind a balancer.
+// BalancerMode is one balancer config the admin keeps: a named set of node
+// locations behind one balancer. Every enabled mode is a config in each
+// vpn-pannel and, in the same order, in the app's JSON subscription.
+type BalancerMode struct {
+	ID      uint   `gorm:"primaryKey" json:"id"`
+	Name    string `gorm:"size:100;not null;uniqueIndex" json:"name"`
+	Enabled bool   `json:"enabled"`
+	// Priority orders the modes (lower first).
+	Priority int `json:"priority"`
+	// LocationIDs (comma separated) are the locations whose nodes the mode
+	// holds; empty = every node, also those without a location.
+	LocationIDs string `gorm:"column:location_ids;size:512" json:"location_ids"`
+	// Strategy is the balancer's: leastPing (empty), leastLoad, random or
+	// roundRobin.
+	Strategy string `gorm:"size:12" json:"strategy"`
+	// ProbeInterval is how often the config tests its servers (empty = 30s).
+	ProbeInterval string `gorm:"size:16" json:"probe_interval"`
+	// AdsMode is "normal", "ads" or "both"; empty follows each vpn-pannel's
+	// own ads mode.
+	AdsMode string `gorm:"size:10" json:"ads_mode"`
+	// Country is the vpn-pannel country (empty = that of the first node).
+	Country   string    `gorm:"size:2" json:"country"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// AdsValues lists the ads flags the mode sets itself, nil when it follows
+// the vpn-pannel.
+func (m BalancerMode) AdsValues() []bool {
+	switch m.AdsMode {
+	case AdsNormal:
+		return []bool{false}
+	case AdsOnly:
+		return []bool{true}
+	case AdsBoth:
+		return []bool{false, true}
+	}
+	return nil
+}
+
+// NodeUpload is one balancer mode's config in one vpn-pannel.
 type NodeUpload struct {
-	ID            uint `gorm:"primaryKey" json:"id"`
-	LocationID    uint `gorm:"uniqueIndex:idx_node_upload" json:"location_id"`
-	DestinationID uint `gorm:"uniqueIndex:idx_node_upload" json:"destination_id"`
-	Ads           bool `gorm:"uniqueIndex:idx_node_upload" json:"ads"`
+	ID uint `gorm:"primaryKey" json:"id"`
+	// ModeID is the BalancerMode the config belongs to.
+	ModeID uint `gorm:"uniqueIndex:idx_node_upload_mode" json:"mode_id"`
+	// LocationID is what older versions keyed the row by (0 = all nodes);
+	// it is only read to attach such rows to their mode. It is in the index
+	// because those rows all have mode 0 until then.
+	LocationID    uint `gorm:"uniqueIndex:idx_node_upload_mode" json:"location_id"`
+	DestinationID uint `gorm:"uniqueIndex:idx_node_upload_mode" json:"destination_id"`
+	Ads           bool `gorm:"uniqueIndex:idx_node_upload_mode" json:"ads"`
 	// BalancerID is the sub-balancer on the master panel.
 	BalancerID  int        `json:"balancer_id"`
 	Name        string     `gorm:"size:100" json:"name"`
@@ -689,7 +732,7 @@ func All() []any {
 		&CheckRun{}, &CheckProbe{}, &XrayTemplate{}, &InboundTemplate{},
 		&Job{}, &JobLog{}, &Setting{}, &ClientIP{}, &IPGeo{}, &Destination{},
 		&CloudflareAccount{}, &Certificate{}, &CleanIP{}, &CleanIPSource{}, &CDNAddon{},
-		&SmartProfile{}, &SmartRule{}, &SmartUpload{}, &PanelCleanup{}, &NodeUpload{},
+		&SmartProfile{}, &SmartRule{}, &SmartUpload{}, &PanelCleanup{}, &NodeUpload{}, &BalancerMode{},
 	}
 }
 
