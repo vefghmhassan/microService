@@ -53,6 +53,9 @@ func ConfigModels() []any {
 		&models.Setting{}, &models.Destination{}, &models.CloudflareAccount{}, &models.Certificate{},
 		&models.CleanIP{}, &models.CleanIPSource{}, &models.CDNAddon{},
 		&models.SmartProfile{}, &models.SmartRule{}, &models.SmartUpload{},
+		// Panel deletions still owed survive a restore, so a deleted
+		// server's configs do not come back to stay.
+		&models.PanelCleanup{},
 	}
 }
 

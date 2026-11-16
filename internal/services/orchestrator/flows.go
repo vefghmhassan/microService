@@ -544,6 +544,7 @@ func (o *Orchestrator) moveDestination(ctx context.Context, r *jobs.Run, s *mode
 	var fresh []NamedDest
 	var errs []error
 	moved := 0
+	leftovers := false // some configs may still sit on oldIP
 	for _, d := range dests {
 		res, err := d.ReplaceAddress(ctx, oldIP, host, s.Country)
 		if errors.Is(err, destination.ErrNoNodes) {
@@ -552,14 +553,25 @@ func (o *Orchestrator) moveDestination(ctx context.Context, r *jobs.Run, s *mode
 			continue
 		}
 		if err != nil {
-			r.Logf("warn", "%s: %v", d.Name, err)
+			// The move is one transaction on the panel side, so nothing
+			// moved: the new links go up fresh and the old configs are
+			// deleted with the old server (or retried until they are).
+			r.Logf("warn", "%s: move failed (%v); uploading fresh", d.Name, err)
 			errs = append(errs, fmt.Errorf("%s: %w", d.Name, err))
+			fresh = append(fresh, d)
+			leftovers = true
 			continue
 		}
 		moved++
 		r.Info("%s: %d configs moved, %d skipped", d.Name, res.Updated, res.Skipped)
 		for _, e := range res.Errors {
 			r.Logf("warn", "%s: %s", d.Name, e)
+		}
+		if res.Skipped > 0 {
+			// Skipped configs stay on the old address; they are deleted
+			// with the old server.
+			r.Logf("warn", "%s: %d config(s) could not be moved from %s", d.Name, res.Skipped, oldIP)
+			leftovers = true
 		}
 	}
 	if len(fresh) > 0 {
@@ -568,6 +580,12 @@ func (o *Orchestrator) moveDestination(ctx context.Context, r *jobs.Run, s *mode
 		} else {
 			moved += len(fresh)
 		}
+	}
+	if leftovers {
+		// What did not move points at an address this server left. It is
+		// deleted now, unless another server (the one being replaced) still
+		// has it; that one's deletion clears it.
+		o.deleteOnPanels(ctx, r, s.ID, []string{oldIP})
 	}
 	if moved == 0 {
 		return errors.Join(errs...)
@@ -1013,7 +1031,8 @@ func (o *Orchestrator) unpublish(ctx context.Context, r *jobs.Run) error {
 		for _, addr := range addrs {
 			if err := d.DeleteAddress(ctx, addr); err != nil {
 				derrs = append(derrs, fmt.Errorf("%s: %s: %w", d.Name, addr, err))
-				r.Logf("warn", "%s: could not delete configs on %s: %v", d.Name, addr, err)
+				r.Logf("warn", "%s: could not delete configs on %s: %v (retried later)", d.Name, addr, err)
+				o.queuePanelCleanup(d.ID, addr, err)
 				continue
 			}
 			r.Info("%s: configs on %s deleted", d.Name, addr)
@@ -1133,44 +1152,25 @@ func (o *Orchestrator) delete(ctx context.Context, r *jobs.Run) error {
 }
 
 // retire does everything after the provider let go of a server: its IP rows
-// are released, its DNS record removed, its vpn-pannel configs deactivated (or
-// deleted outright when purge is set) and the row marked deleted.
-func (o *Orchestrator) retire(ctx context.Context, r *jobs.Run, s *models.Server, purge bool) {
+// are released, its DNS record removed, its configs deleted from every
+// destination panel and the row marked deleted.
+//
+// The configs are deleted, not deactivated: a deleted server's configs only
+// cluttered the panel. Every address they may sit on is cleared (the recorded
+// upload address alone missed configs left behind by a hand-over that failed
+// or skipped some, and those uploaded before it was recorded), except one a
+// live server still uses, such as a name a replacement took over. A server
+// that never uploaded and never had configs handed to it is left alone.
+func (o *Orchestrator) retire(ctx context.Context, r *jobs.Run, s *models.Server, _ bool) {
 	o.DB.Model(&models.IPAddress{}).Where("server_id = ? AND status = ?", s.ID, models.IPInUse).
 		Updates(map[string]any{"status": models.IPReleased, "server_id": nil})
 	o.removeDNS(ctx, r, s)
-	addrs := []string{s.UploadedIP}
-	if ip := s.PublicIP(); purge && ip != "" && ip != s.UploadedIP {
-		addrs = append(addrs, ip)
-	}
-	// The CDN add-on's orange name carries the CDN configs; it is gone with
-	// the server unless a replacement took it over (UploadedIP is then
-	// cleared too, and the configs stay).
-	if s.CDNHostname != "" && s.UploadedIP != "" {
-		addrs = append(addrs, s.CDNHostname)
-	}
-	for _, addr := range addrs {
-		if addr == "" {
-			continue
+	if s.UploadedAt != nil || s.UploadedIP != "" {
+		o.deleteOnPanels(ctx, r, s.ID, panelAddrs(s))
+		// Clean-IP configs are matched by the orange name in SNI/Host.
+		if s.CDNHostname != "" && !o.addressInUse(s.CDNHostname, s.ID) {
+			o.retireCleanConfigs(ctx, r, s.CDNHostname, true)
 		}
-		for _, d := range o.Dests() {
-			if purge {
-				if err := d.DeleteAddress(ctx, addr); err != nil {
-					r.Logf("warn", "%s: could not delete configs on %s: %v", d.Name, addr, err)
-				} else {
-					r.Info("%s: configs on %s deleted", d.Name, addr)
-				}
-				continue
-			}
-			if err := d.SetActive(ctx, addr, false); err != nil {
-				r.Logf("warn", "%s: could not deactivate configs on %s: %v", d.Name, addr, err)
-			} else {
-				r.Info("%s: configs on %s deactivated", d.Name, addr)
-			}
-		}
-	}
-	if s.CDNHostname != "" && s.UploadedIP != "" {
-		o.retireCleanConfigs(ctx, r, s.CDNHostname, purge)
 	}
 	s.Status = models.ServerDeleted
 	o.save(r, s, "status")

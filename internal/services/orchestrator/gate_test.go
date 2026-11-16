@@ -179,8 +179,15 @@ func TestReplacementKeepsOnlyWorkingConfigs(t *testing.T) {
 	if last := dest.uploads[len(dest.uploads)-1]; !hasPort(last, "443") || hasPort(last, "8443") {
 		t.Fatalf("uploaded %v", last)
 	}
-	if len(dest.removed) != 1 || dest.removed[0] != old.UploadedIP {
-		t.Fatalf("removed %v, want %s", dest.removed, old.UploadedIP)
+	// The old address is cleared by the hand-over and again by the old
+	// server's deletion; nothing else is touched.
+	if len(dest.removed) == 0 {
+		t.Fatalf("nothing removed, want %s", old.UploadedIP)
+	}
+	for _, a := range dest.removed {
+		if a != old.UploadedIP {
+			t.Fatalf("removed %v, want only %s", dest.removed, old.UploadedIP)
+		}
 	}
 	o.DB.First(&old, old.ID)
 	o.DB.First(&repl, repl.ID)
@@ -220,8 +227,14 @@ func TestReplacementWithNoWorkingConfigLeavesOldServer(t *testing.T) {
 	if repl.Status != models.ServerDeleted || old.Status != models.ServerActive {
 		t.Fatalf("replacement %s, old %s", repl.Status, old.Status)
 	}
-	if len(dest.replaced) != 0 || len(dest.removed) != 0 {
-		t.Fatalf("vpn-pannel was touched: replaced %v removed %v", dest.replaced, dest.removed)
+	// Only the failed replacement's own configs go with it.
+	if len(dest.replaced) != 0 {
+		t.Fatalf("vpn-pannel configs were moved: %v", dest.replaced)
+	}
+	for _, a := range dest.removed {
+		if a == old.UploadedIP || a == old.IPv4 {
+			t.Fatalf("old server's configs were removed: %v", dest.removed)
+		}
 	}
 
 	// The last allowed attempt queues nothing more.

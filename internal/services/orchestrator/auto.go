@@ -363,6 +363,7 @@ func (o *Orchestrator) handOver(ctx context.Context, r *jobs.Run, s *models.Serv
 			r.Step("move vpn-pannel configs from " + old.Name)
 			if err := o.moveDestination(ctx, r, s, old.UploadedIP); err != nil {
 				r.Logf("warn", "vpn-pannel: %v", err)
+				o.notify("⚠️ انتقال کانفیگ‌های %s به %s در پنل مقصد ناموفق بود: %s", old.Name, s.Name, truncate(err.Error(), 200))
 			}
 		case old.UploadedIP != "":
 			// vpn-pannel can only move an address as a whole, which would
@@ -378,8 +379,10 @@ func (o *Orchestrator) handOver(ctx context.Context, r *jobs.Run, s *models.Serv
 				r.Logf("warn", "upload to vpn-pannel failed: %v", err)
 			}
 		}
-		// The old server's configs now point here; delete it without
-		// deactivating anything in vpn-pannel.
+		// The old server's configs now point here. Its deletion clears
+		// whatever is still on its own addresses (configs a failed or
+		// partial move left behind); the addresses this server took over
+		// are skipped there.
 		o.DB.Model(&old).Updates(map[string]any{"uploaded_ip": ""})
 		id := old.ID
 		if _, err := o.Engine.Enqueue(KindDelete, &id, struct{}{}, r.Job.Source); err != nil {
@@ -414,16 +417,21 @@ func (o *Orchestrator) replaceWithWorking(ctx context.Context, r *jobs.Run, s *m
 		// server may share: they go before anything new is uploaded.
 		o.retireCleanConfigs(ctx, r, old.CDNHostname, true)
 	}
+	same := oldAddr == LinkHost(s)
 	drop := func() {
 		for _, d := range dests {
 			if err := d.DeleteAddress(ctx, oldAddr); err != nil {
-				r.Logf("warn", "%s: could not delete configs on %s: %v", d.Name, oldAddr, err)
+				r.Logf("warn", "%s: could not delete configs on %s: %v (retried later)", d.Name, oldAddr, err)
+				if !same {
+					// Once the new configs are up, a late delete
+					// cannot take them along.
+					o.queuePanelCleanup(d.ID, oldAddr, err)
+				}
 			} else {
 				r.Info("%s: configs on %s deleted", d.Name, oldAddr)
 			}
 		}
 	}
-	same := oldAddr == LinkHost(s)
 	if same {
 		drop()
 	}

@@ -643,8 +643,22 @@ func All() []any {
 		&CheckRun{}, &CheckProbe{}, &XrayTemplate{}, &InboundTemplate{},
 		&Job{}, &JobLog{}, &Setting{}, &ClientIP{}, &IPGeo{}, &Destination{},
 		&CloudflareAccount{}, &Certificate{}, &CleanIP{}, &CleanIPSource{}, &CDNAddon{},
-		&SmartProfile{}, &SmartRule{}, &SmartUpload{},
+		&SmartProfile{}, &SmartRule{}, &SmartUpload{}, &PanelCleanup{},
 	}
+}
+
+// PanelCleanup is a deletion in a destination panel that failed (the panel
+// was down or answered with an error): every config on Address in
+// destination DestID still has to go. It is retried until it succeeds, the
+// address is in use again, or the destination is gone.
+type PanelCleanup struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	DestID    uint      `gorm:"uniqueIndex:idx_panel_cleanup" json:"dest_id"`
+	Address   string    `gorm:"size:255;uniqueIndex:idx_panel_cleanup" json:"address"`
+	Attempts  int       `json:"attempts"`
+	LastError string    `gorm:"type:text" json:"last_error"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Smart profile scopes.
