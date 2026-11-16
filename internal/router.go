@@ -75,6 +75,12 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Post("/servers/:id/panel-access", a.ServerAction(orchestrator.KindPanelAccess))
 	p.Post("/servers/:id/cert", a.ServerAction(orchestrator.KindCertPush))
 	p.Post("/servers/:id/dns", a.ServerAction(orchestrator.KindDNSSync))
+	p.Post("/servers/:id/ip-cert", a.ServerAction(orchestrator.KindIPCert))
+	p.Post("/servers/:id/node-join", a.ServerAction(orchestrator.KindNodeJoin))
+	p.Post("/servers/:id/node-leave", a.ServerAction(orchestrator.KindNodeLeave))
+	p.Get("/nodes", a.NodesOverview)
+	p.Post("/nodes/master", a.CreateMaster)
+	p.Post("/nodes/sync", a.EnqueueGlobal(orchestrator.KindNodeSync))
 
 	p.Get("/locations", a.ListLocations)
 	p.Post("/locations", a.CreateLocation)

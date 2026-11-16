@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Button, Checkbox, Dropdown, Flex, Modal, Space, Typography } from 'antd'
 import {
-  ClockCircleOutlined, CloseCircleOutlined, CloudOutlined, CloudUploadOutlined, DeleteOutlined, DisconnectOutlined, SafetyCertificateOutlined, MoreOutlined, RetweetOutlined, RadarChartOutlined, ReloadOutlined, SwapOutlined, SyncOutlined, ToolOutlined,
+  ApartmentOutlined, ClockCircleOutlined, CloseCircleOutlined, CloudOutlined, CloudUploadOutlined, DeleteOutlined, DisconnectOutlined, SafetyCertificateOutlined, MoreOutlined, RetweetOutlined, RadarChartOutlined, ReloadOutlined, SwapOutlined, SyncOutlined, ToolOutlined,
 } from '@ant-design/icons'
 import { cancelScheduledDelete, deleteServer, keys, scheduleDelete, serverAction, useAction } from '../api/hooks'
 import type { Job, Server } from '../api/types'
@@ -35,6 +35,13 @@ export function ServerActions({ server, compact, onJob }: { server: Server; comp
     { key: 'replace', icon: <RetweetOutlined />, label: 'جایگزینی با سرور جدید', disabled: !!server.replacing_at },
     ...(server.hostname ? [{ key: 'dns', icon: <CloudOutlined />, label: 'به‌روزرسانی رکورد DNS' }] : []),
     ...(server.ssl ? [{ key: 'cert', icon: <SafetyCertificateOutlined />, label: 'کپی مجدد گواهی SSL', disabled: !installed }] : []),
+    ...(!server.ssl && server.role !== 'master' ? [{ key: 'ip-cert', icon: <SafetyCertificateOutlined />, label: server.ip_cert ? 'تمدید SSL آی‌پی (۶ روزه)' : 'گرفتن SSL آی‌پی (۶ روزه)', disabled: !installed }] : []),
+    ...(server.role === 'node'
+      ? [
+        { key: 'node-join', icon: <ApartmentOutlined />, label: 'ثبت دوباره در پنل مادر', disabled: !installed },
+        { key: 'node-leave', icon: <ApartmentOutlined />, label: 'خروج از پنل مادر' },
+      ]
+      : server.role === '' ? [{ key: 'node-join', icon: <ApartmentOutlined />, label: 'تبدیل به نود پنل مادر', disabled: !installed }] : []),
     { type: 'divider' as const },
     { key: 'unpublish', icon: <DisconnectOutlined />, label: 'حذف کانفیگ از پنل مقصدها', danger: true },
     server.delete_at

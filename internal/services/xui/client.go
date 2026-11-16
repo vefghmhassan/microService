@@ -151,6 +151,9 @@ type Inbound struct {
 	Tag            string   `json:"tag,omitempty"`
 	ExpiryTime     int64    `json:"expiryTime"`
 	Total          int64    `json:"total"`
+	// NodeID is the node of a master panel the inbound lives on (nil = the
+	// panel's own xray). Sent on add; an update keeps the stored one.
+	NodeID *int `json:"nodeId,omitempty"`
 	// Read-only counters; never sent back (see MarshalJSON).
 	Up          int64        `json:"up"`
 	Down        int64        `json:"down"`
@@ -184,9 +187,10 @@ func (in Inbound) MarshalJSON() ([]byte, error) {
 		Sniffing       string `json:"sniffing"`
 		ExpiryTime     int64  `json:"expiryTime"`
 		Total          int64  `json:"total"`
+		NodeID         *int   `json:"nodeId,omitempty"`
 	}
 	return json.Marshal(alias{in.ID, in.Remark, in.Enable, in.Listen, in.Port, in.Protocol,
-		string(in.Settings), string(in.StreamSettings), string(in.Sniffing), in.ExpiryTime, in.Total})
+		string(in.Settings), string(in.StreamSettings), string(in.Sniffing), in.ExpiryTime, in.Total, in.NodeID})
 }
 
 func (c *Client) ListInbounds(ctx context.Context) ([]Inbound, error) {
@@ -452,4 +456,155 @@ func (c *Client) AddHost(ctx context.Context, h HostGroup) error {
 // DeleteHost removes one host group.
 func (c *Client) DeleteHost(ctx context.Context, groupID string) error {
 	return c.call(ctx, http.MethodPost, "/panel/api/hosts/del/"+url.PathEscape(groupID), nil, nil)
+}
+
+// ---- nodes (this panel as the master of other 3x-ui panels) ----
+
+// Node is another 3x-ui panel this one manages over its API. The read-only
+// fields are what the master's heartbeat last saw.
+type Node struct {
+	ID                  int      `json:"id"`
+	Name                string   `json:"name"`
+	Remark              string   `json:"remark"`
+	Scheme              string   `json:"scheme"`
+	Address             string   `json:"address"`
+	Port                int      `json:"port"`
+	BasePath            string   `json:"basePath"`
+	APIToken            *string  `json:"apiToken,omitempty"` // write-only
+	Enable              bool     `json:"enable"`
+	AllowPrivateAddress bool     `json:"allowPrivateAddress"`
+	TLSVerifyMode       string   `json:"tlsVerifyMode"`
+	PinnedCertSha256    string   `json:"pinnedCertSha256"`
+	InboundSyncMode     string   `json:"inboundSyncMode"`
+	InboundTags         []string `json:"inboundTags"`
+	OutboundTag         string   `json:"outboundTag"`
+
+	Status        string `json:"status,omitempty"`
+	LastError     string `json:"lastError,omitempty"`
+	LastHeartbeat int64  `json:"lastHeartbeat,omitempty"`
+	LatencyMs     int    `json:"latencyMs,omitempty"`
+	PanelVersion  string `json:"panelVersion,omitempty"`
+	XrayVersion   string `json:"xrayVersion,omitempty"`
+	XrayState     string `json:"xrayState,omitempty"`
+	InboundCount  int    `json:"inboundCount,omitempty"`
+	OnlineCount   int    `json:"onlineCount,omitempty"`
+}
+
+// ListNodes lists the nodes registered on this panel.
+func (c *Client) ListNodes(ctx context.Context) ([]Node, error) {
+	var out []Node
+	err := c.call(ctx, http.MethodGet, "/panel/api/nodes/list", nil, &out)
+	return out, err
+}
+
+// AddNode registers a node and returns its id. The master probes the node
+// first, so it has to be reachable with the given details.
+func (c *Client) AddNode(ctx context.Context, n Node) (int, error) {
+	if n.InboundTags == nil {
+		n.InboundTags = []string{}
+	}
+	var out Node
+	if err := c.call(ctx, http.MethodPost, "/panel/api/nodes/add", n, &out); err != nil {
+		return 0, err
+	}
+	return out.ID, nil
+}
+
+// UpdateNode replaces a node's connection details; a nil APIToken keeps the
+// stored token.
+func (c *Client) UpdateNode(ctx context.Context, id int, n Node) error {
+	if n.InboundTags == nil {
+		n.InboundTags = []string{}
+	}
+	n.ID = id
+	return c.call(ctx, http.MethodPost, "/panel/api/nodes/update/"+strconv.Itoa(id), n, nil)
+}
+
+// DeleteNode removes a node; its inbounds on the master are not migrated.
+func (c *Client) DeleteNode(ctx context.Context, id int) error {
+	return c.call(ctx, http.MethodPost, "/panel/api/nodes/del/"+strconv.Itoa(id), nil, nil)
+}
+
+// ProbeNode makes the master contact the node now and refresh its state.
+func (c *Client) ProbeNode(ctx context.Context, id int) error {
+	return c.call(ctx, http.MethodPost, "/panel/api/nodes/probe/"+strconv.Itoa(id), nil, nil)
+}
+
+// CreateAPIToken mints a scoped API token ("admin", "monitor", "node-sync"
+// or "node-admin") and returns its plaintext, shown only this once.
+func (c *Client) CreateAPIToken(ctx context.Context, name, scope string) (string, error) {
+	var raw json.RawMessage
+	if err := c.call(ctx, http.MethodPost, "/panel/api/setting/apiTokens/create", map[string]any{"name": name, "scope": scope, "expiresAt": 0}, &raw); err != nil {
+		return "", err
+	}
+	// Older builds answer with the bare token, newer ones with an object.
+	var s string
+	if json.Unmarshal(raw, &s) == nil && s != "" {
+		return s, nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return "", fmt.Errorf("3x-ui apiTokens/create: unexpected answer")
+	}
+	for _, k := range []string{"token", "plaintext", "value", "apiToken"} {
+		if v, ok := obj[k].(string); ok && v != "" {
+			return v, nil
+		}
+	}
+	return "", fmt.Errorf("3x-ui apiTokens/create: no token in the answer")
+}
+
+// SubBalancer is an extra config in the panel's JSON subscription: the
+// proxies of the chosen inbounds behind one balancer.
+type SubBalancer struct {
+	ID         int    `json:"id"`
+	Remark     string `json:"remark"`
+	Strategy   string `json:"strategy"`
+	InboundIDs []int  `json:"inboundIds"`
+	SortOrder  int    `json:"sortOrder"`
+	Enabled    bool   `json:"enabled"`
+}
+
+func (b SubBalancer) form() url.Values {
+	f := url.Values{}
+	f.Set("remark", b.Remark)
+	f.Set("strategy", b.Strategy)
+	for _, id := range b.InboundIDs {
+		f.Add("inboundIds", strconv.Itoa(id))
+	}
+	if b.SortOrder < 1 {
+		b.SortOrder = 1
+	}
+	f.Set("sortOrder", strconv.Itoa(b.SortOrder))
+	f.Set("enabled", strconv.FormatBool(b.Enabled))
+	return f
+}
+
+// ListSubBalancers lists the subscription balancers.
+func (c *Client) ListSubBalancers(ctx context.Context) ([]SubBalancer, error) {
+	var out []SubBalancer
+	err := c.call(ctx, http.MethodGet, "/panel/api/sub-balancers", nil, &out)
+	return out, err
+}
+
+// SaveSubBalancer creates the balancer (ID 0) or updates it, and returns
+// its id.
+func (c *Client) SaveSubBalancer(ctx context.Context, b SubBalancer) (int, error) {
+	path := "/panel/api/sub-balancers"
+	if b.ID != 0 {
+		path += "/" + strconv.Itoa(b.ID)
+	}
+	var out SubBalancer
+	if err := c.call(ctx, http.MethodPost, path, b.form(), &out); err != nil {
+		return 0, err
+	}
+	if out.ID == 0 {
+		out.ID = b.ID
+	}
+	return out.ID, nil
+}
+
+// DeleteSubBalancer removes a subscription balancer.
+func (c *Client) DeleteSubBalancer(ctx context.Context, id int) error {
+	return c.call(ctx, http.MethodPost, "/panel/api/sub-balancers/"+strconv.Itoa(id)+"/del", nil, nil)
 }

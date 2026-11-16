@@ -103,6 +103,9 @@ func newIdentity(s *models.Server, loc *models.Location) {
 		return
 	}
 	s.Profile = loc.Profile
+	if loc.NodeMode && s.Role == "" {
+		s.Role = models.RoleNode
+	}
 	if snis := SNIList(loc.RealitySNIs); len(snis) > 0 {
 		s.RealitySNI = snis[int(derive(string(s.IdentitySeed), "sni")[0])%len(snis)]
 	}

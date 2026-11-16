@@ -200,6 +200,11 @@ func (snap *Snapshot) For(s *models.Server) *Snapshot {
 	out.Inbounds = nil
 	for _, t := range snap.Inbounds {
 		if forFamily(t, fam) && forProfile(t, s.Profile) && (certOK || !NeedsCert(t)) {
+			// Let's Encrypt validates (and renews) an IP certificate on
+			// port 80; an inbound there would end the renewals.
+			if t.Port == AcmePort && wantsIPCert(s) {
+				continue
+			}
 			out.Inbounds = append(out.Inbounds, personalize(t, s))
 		}
 	}

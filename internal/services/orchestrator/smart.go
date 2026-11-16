@@ -64,7 +64,13 @@ var smartKinds = map[string]bool{
 
 // OnJobFinish queues a smart sync after jobs that change servers.
 func (o *Orchestrator) OnJobFinish(j *models.Job) {
-	if j.Status != models.JobDone || !smartKinds[j.Kind] {
+	if j.Status != models.JobDone {
+		return
+	}
+	if smartKinds[j.Kind] || j.Kind == KindNodeJoin || j.Kind == KindNodeLeave {
+		o.QueueNodeSync()
+	}
+	if !smartKinds[j.Kind] {
 		return
 	}
 	o.QueueSmartSync(j.Kind != KindCheck)
@@ -180,7 +186,7 @@ func (o *Orchestrator) smartItems(snap *Snapshot, s *models.Server, want map[uin
 // server least likely to move.
 func (o *Orchestrator) SmartTargets(snap *Snapshot, p *models.SmartProfile) ([]SmartTarget, error) {
 	var servers []models.Server
-	if err := o.DB.Where("status NOT IN ?", []string{models.ServerDeleted, models.ServerDeleting}).Order("id").Find(&servers).Error; err != nil {
+	if err := o.DB.Where("status NOT IN ? AND role <> ?", []string{models.ServerDeleted, models.ServerDeleting}, models.RoleMaster).Order("id").Find(&servers).Error; err != nil {
 		return nil, err
 	}
 	// Servers whose configs were taken out of vpn-pannel by hand count as

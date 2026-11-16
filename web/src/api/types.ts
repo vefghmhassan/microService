@@ -99,6 +99,46 @@ export interface Location extends DNSFields {
   profile: string
   /** Reality targets near this location, one per line; a new server takes one. */
   reality_snis: string
+  /** Servers built here are nodes of the master 3x-ui panel, behind one balancer config. */
+  node_mode: boolean
+  /** Strategy of that balancer ('' = leastPing). */
+  balancer_strategy: string
+}
+
+/** A node as the master 3x-ui panel sees it. */
+export interface PanelNode {
+  id: number
+  name: string
+  address: string
+  port: number
+  status: string
+  lastError?: string
+  lastHeartbeat?: number
+  latencyMs?: number
+  panelVersion?: string
+  xrayVersion?: string
+  onlineCount?: number
+  server_id: number
+}
+
+/** One location's balancer config in one vpn-pannel. */
+export interface NodeUpload {
+  id: number
+  location_id: number
+  destination_id: number
+  ads: boolean
+  name: string
+  outbounds: number
+  active: boolean
+  pushed_at: string | null
+  error: string
+}
+
+export interface NodesOverview {
+  master: Server | null
+  nodes: PanelNode[]
+  uploads: NodeUpload[]
+  error: string
 }
 
 /** What a server's configs, DNS and checks use. Every server is dual-stack. */
@@ -154,6 +194,12 @@ export interface Server extends DNSFields {
   xui_username: string
   xui_scheme: string
   xui_public: boolean
+  /** '' ordinary, 'node' registered on the master panel, 'master' the master panel itself. */
+  role: '' | 'node' | 'master'
+  node_id: number
+  node_error: string
+  /** The panel is served with a six-day Let's Encrypt certificate for the IP. */
+  ip_cert: boolean
   panel_version: string
   xray_version: string
   want_panel_version: string

@@ -86,10 +86,16 @@ type Location struct {
 	// RealitySNIs are Reality targets hosted near this location's servers
 	// (same ASN), one per line or comma separated. A server built here takes
 	// one of them for all its Reality inbounds; empty keeps the template's.
-	RealitySNIs string    `gorm:"column:reality_snis;type:text" json:"reality_snis"`
-	Note        string    `gorm:"size:255" json:"note"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	RealitySNIs string `gorm:"column:reality_snis;type:text" json:"reality_snis"`
+	// NodeMode registers every server built here as a node of the master
+	// 3x-ui panel and puts them behind one balancer config in vpn-pannel, so
+	// a client moves to another server by itself when one goes away.
+	NodeMode bool `gorm:"column:node_mode" json:"node_mode"`
+	// BalancerStrategy is that balancer's strategy (empty = leastPing).
+	BalancerStrategy string    `gorm:"column:balancer_strategy;size:12" json:"balancer_strategy"`
+	Note             string    `gorm:"size:255" json:"note"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // CDNAddon is the CDN add-on: every server built in a location that uses it
@@ -271,7 +277,21 @@ type Server struct {
 	XUIScheme   string        `gorm:"column:xui_scheme;size:8" json:"xui_scheme"`
 	// XUIPublic is true when the panel listens on the public IP (reachable in
 	// a browser); otherwise only through the SSH tunnel.
-	XUIPublic    bool       `gorm:"column:xui_public" json:"xui_public"`
+	XUIPublic bool `gorm:"column:xui_public" json:"xui_public"`
+	// Role is "" for an ordinary server, RoleNode for one registered on the
+	// master 3x-ui panel and RoleMaster for the server that runs that panel.
+	Role string `gorm:"size:8;index;not null;default:''" json:"role"`
+	// NodeID is the node's id on the master panel (0 = not registered);
+	// NodeToken the node-admin API token the master reaches this panel with.
+	NodeID    int           `gorm:"column:node_id" json:"node_id"`
+	NodeToken secret.String `gorm:"column:node_token" json:"-"`
+	NodeError string        `gorm:"column:node_error;size:255" json:"node_error"`
+	// IPCert marks a panel served with a Let's Encrypt certificate for the
+	// server's bare IP (the short-lived, six-day profile); CertNotAfter is
+	// then that certificate's expiry.
+	IPCert bool `gorm:"column:ip_cert;not null;default:false" json:"ip_cert"`
+	// CertIP is the address the IP certificate was issued for.
+	CertIP       string     `gorm:"column:cert_ip;size:45" json:"-"`
 	PanelVersion string     `gorm:"size:32" json:"panel_version"`
 	XrayVersion  string     `gorm:"size:32" json:"xray_version"`
 	WantPanelVer string     `gorm:"size:32" json:"want_panel_version"`
@@ -315,6 +335,32 @@ type Server struct {
 	LastError string     `gorm:"type:text" json:"last_error"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// Server roles.
+const (
+	RoleNode   = "node"
+	RoleMaster = "master"
+)
+
+// NodeUpload is one location's balancer config in one vpn-pannel: the
+// master panel's JSON subscription config that holds every node of the
+// location behind a balancer.
+type NodeUpload struct {
+	ID            uint `gorm:"primaryKey" json:"id"`
+	LocationID    uint `gorm:"uniqueIndex:idx_node_upload" json:"location_id"`
+	DestinationID uint `gorm:"uniqueIndex:idx_node_upload" json:"destination_id"`
+	Ads           bool `gorm:"uniqueIndex:idx_node_upload" json:"ads"`
+	// BalancerID is the sub-balancer on the master panel.
+	BalancerID  int        `json:"balancer_id"`
+	Name        string     `gorm:"size:100" json:"name"`
+	PanelNodeID uint       `json:"panel_node_id"`
+	Hash        string     `gorm:"size:64" json:"hash"`
+	Outbounds   int        `json:"outbounds"`
+	Active      bool       `json:"active"`
+	PushedAt    *time.Time `json:"pushed_at"`
+	Error       string     `gorm:"size:512" json:"error"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // IP families.
@@ -643,7 +689,7 @@ func All() []any {
 		&CheckRun{}, &CheckProbe{}, &XrayTemplate{}, &InboundTemplate{},
 		&Job{}, &JobLog{}, &Setting{}, &ClientIP{}, &IPGeo{}, &Destination{},
 		&CloudflareAccount{}, &Certificate{}, &CleanIP{}, &CleanIPSource{}, &CDNAddon{},
-		&SmartProfile{}, &SmartRule{}, &SmartUpload{}, &PanelCleanup{},
+		&SmartProfile{}, &SmartRule{}, &SmartUpload{}, &PanelCleanup{}, &NodeUpload{},
 	}
 }
 

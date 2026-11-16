@@ -325,6 +325,9 @@ func scheduleCerts(ctx context.Context, o *orchestrator.Orchestrator) {
 		if err := o.RenewCerts(rctx); err != nil {
 			log.Printf("certificates: %v", err)
 		}
+		if err := o.RenewIPCerts(rctx); err != nil {
+			log.Printf("IP certificates: %v", err)
+		}
 		cancel()
 		select {
 		case <-ctx.Done():

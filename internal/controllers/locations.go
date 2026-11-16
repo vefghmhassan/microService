@@ -43,6 +43,8 @@ type locationInput struct {
 	PanelJSON         bool   `json:"panel_json"`
 	Profile           string `json:"profile"`
 	RealitySNIs       string `json:"reality_snis"`
+	NodeMode          bool   `json:"node_mode"`
+	BalancerStrategy  string `json:"balancer_strategy"`
 }
 
 func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
@@ -80,6 +82,18 @@ func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
 	if err := orchestrator.ValidProfile(profile); err != nil {
 		return errJSON(c, fiber.StatusBadRequest, err.Error())
 	}
+	switch in.BalancerStrategy {
+	case "", "leastPing", "leastLoad", "random", "roundRobin":
+	default:
+		return errJSON(c, fiber.StatusBadRequest, "استراتژی balancer معتبر نیست")
+	}
+	wasNode := l.NodeMode
+	if in.NodeMode && !wasNode {
+		if _, err := a.Orch.MasterServer(); err != nil {
+			return errJSON(c, fiber.StatusBadRequest, "برای حالت نود اول پنل مادر را بسازید: "+err.Error())
+		}
+	}
+	l.NodeMode, l.BalancerStrategy = in.NodeMode, in.BalancerStrategy
 	l.CDNAddonID = in.CDNAddonID
 	l.PanelJSON = in.PanelJSON
 	l.Profile = profile
@@ -138,6 +152,18 @@ func (a *App) saveLocation(c *fiber.Ctx, l *models.Location) error {
 			}
 		}(dns.CFAccountID, dns.CFZoneID)
 	}
+	// Servers already running here follow the switch.
+	switch {
+	case l.NodeMode && !wasNode:
+		if _, err := a.Orch.JoinLocation(l.ID, source(c)); err != nil {
+			log.Printf("location %d: node join: %v", l.ID, err)
+		}
+	case !l.NodeMode && wasNode:
+		if _, err := a.Orch.LeaveLocation(l.ID, source(c)); err != nil {
+			log.Printf("location %d: node leave: %v", l.ID, err)
+		}
+	}
+	a.Orch.QueueNodeSync()
 	l.ProviderAccount = &acc
 	return c.JSON(l)
 }

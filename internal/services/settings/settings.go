@@ -71,6 +71,13 @@ const (
 	BackupLastAt   = "backup.last_at"
 	// Days of jobs and checks kept (0 = forever).
 	HistoryKeepDays = "history.keep_days"
+	// The server that runs the master 3x-ui panel nodes are registered on
+	// (0 = none), and the name of the client every node inbound carries.
+	NodeMasterID = "node.master_server_id"
+	NodeClient   = "node.client"
+	NodeSubID    = "node.sub_id"
+	// Contact for the Let's Encrypt account of IP certificates (optional).
+	AcmeIPEmail = "acme.ip_email"
 )
 
 var Defaults = map[string]string{
@@ -135,6 +142,10 @@ var Defaults = map[string]string{
 	BackupLastAt: "",
 	// Older jobs, job logs, checks and probes are deleted.
 	HistoryKeepDays: "14",
+	NodeMasterID:    "0",
+	NodeClient:      "ms-auto",
+	NodeSubID:       "",
+	AcmeIPEmail:     "",
 }
 
 // Secret keys are encrypted in the table and masked when listed.

@@ -41,7 +41,7 @@ func (o *Orchestrator) TrafficLimit(s *models.Server) int64 {
 // time, and fires the traffic cap where it is reached.
 func (o *Orchestrator) CollectAll(ctx context.Context) {
 	var servers []models.Server
-	o.DB.Where("status IN ? AND xui_port > 0", []string{models.ServerActive, models.ServerFiltered}).Find(&servers)
+	o.DB.Where("status IN ? AND xui_port > 0 AND role <> ?", []string{models.ServerActive, models.ServerFiltered}, models.RoleMaster).Find(&servers)
 	sem := make(chan struct{}, 4)
 	var wg sync.WaitGroup
 	for i := range servers {

@@ -84,6 +84,7 @@ type Orchestrator struct {
 
 	nameMu sync.Mutex // serialises panelBaseName number picks
 	smart  smartState
+	nodes  nodeState
 
 	// Seams, replaced in tests.
 	Provider func(acc *models.ProviderAccount) (providers.Provider, error)
@@ -100,6 +101,9 @@ type Orchestrator struct {
 	CF func(acc *models.CloudflareAccount) DNSAPI
 	// Certs issues zone certificates (nil = SSL is skipped).
 	Certs CertSource
+	// Master is the node API of the master 3x-ui panel; the returned func
+	// releases the connection.
+	Master func(ctx context.Context) (NodeAPI, func(), error)
 
 	accessLogOK sync.Map // server ID → access log verified on
 	xrayKicks   sync.Map // server ID → *int restarts tried for a missing access log
@@ -143,6 +147,7 @@ func New(db *gorm.DB, st *settings.Store, key *sshx.Keypair, engine *jobs.Engine
 	o.Check = o.defaultCheck
 	o.CF = func(acc *models.CloudflareAccount) DNSAPI { return cloudflare.New(string(acc.Token)) }
 	o.Dests = o.defaultDests
+	o.Master = o.defaultMaster
 	return o
 }
 
@@ -212,6 +217,10 @@ func (o *Orchestrator) Register() {
 	o.Engine.Register(KindPurgeProvider, o.purgeProvider)
 	o.Engine.Register(KindUnpublish, o.unpublish)
 	o.Engine.Register(KindSmartSync, o.smartSync)
+	o.Engine.Register(KindIPCert, o.ipCert)
+	o.Engine.Register(KindNodeJoin, o.nodeJoinJob)
+	o.Engine.Register(KindNodeLeave, o.nodeLeaveJob)
+	o.Engine.Register(KindNodeSync, o.nodeSync)
 }
 
 func serverEvent(s *models.Server) jobs.Event {

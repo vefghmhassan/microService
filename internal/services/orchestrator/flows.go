@@ -36,6 +36,9 @@ type ProvisionParams struct {
 	// Attempt counts the servers already built and deleted for this request
 	// because none of their configs worked.
 	Attempt int `json:"attempt,omitempty"`
+	// Role "master" builds the server of the master 3x-ui panel: 3x-ui
+	// only, no template, no Iran check and nothing in vpn-pannel.
+	Role string `json:"role,omitempty"`
 }
 
 type RotateParams struct {
@@ -85,6 +88,9 @@ func (o *Orchestrator) provision(ctx context.Context, r *jobs.Run) error {
 			IPFamily: models.NormFamily(p.IPFamily),
 		}
 		newIdentity(&s, nil)
+		if p.Role == models.RoleMaster {
+			s.Role = models.RoleMaster
+		}
 		if s.Region == "" || s.Plan == "" {
 			return errors.New("region and plan are required (set them on the request or as account defaults)")
 		}
@@ -138,6 +144,25 @@ func (o *Orchestrator) provision(ctx context.Context, r *jobs.Run) error {
 			return o.fail(r, &s, err)
 		}
 		r.Mark("ssh")
+	}
+
+	if s.Role == models.RoleMaster {
+		// The master is only reached from here (over SSH) and reaches the
+		// nodes itself: it needs neither Iran nor a template.
+		if !r.Done("install") {
+			if err := o.installMaster(ctx, r, &s); err != nil {
+				return o.fail(r, &s, err)
+			}
+			r.Mark("install")
+		}
+		s.Status = models.ServerActive
+		s.LastError = ""
+		o.save(r, &s, "status", "last_error")
+		if err := o.setMaster(&s); err != nil {
+			return err
+		}
+		o.notify("✅ پنل مادر %s آماده شد\nIP: %s", s.Name, s.PublicIP())
+		return nil
 	}
 
 	if !r.Done("ip") {
@@ -484,6 +509,13 @@ func (o *Orchestrator) rotate(ctx context.Context, r *jobs.Run) error {
 	s.LastError = ""
 	o.save(r, s, "status", "last_error")
 	o.startWatch(s)
+	if s.Role == models.RoleNode {
+		// The certificate and the master's registration are for the old IP.
+		id := s.ID
+		if _, err := o.Engine.Enqueue(KindNodeJoin, &id, struct{}{}, r.Job.Source); err != nil {
+			r.Logf("warn", "node: %v", err)
+		}
+	}
 	o.notify("🔄 IP سرور %s عوض شد\n%s → %s", s.Name, oldUploaded, s.PublicIP())
 	return nil
 }
@@ -702,10 +734,41 @@ func (o *Orchestrator) installAndApply(ctx context.Context, r *jobs.Run, s *mode
 
 	r.Step("apply template")
 	o.setStatus(r, s, models.ServerConfiguring)
-	return o.applyWith(ctx, r, s, remote)
+	if err := o.applyWith(ctx, r, s, remote); err != nil {
+		return err
+	}
+	if s.Role == models.RoleNode {
+		// The server works without the master; a failed join is shown on
+		// it and can be run again.
+		if err := o.nodeJoin(ctx, r, s, remote); err != nil {
+			r.Logf("warn", "node: %v", err)
+		}
+	}
+	return nil
+}
+
+// installMaster installs 3x-ui on the master panel's server. The panel
+// stays on localhost: this app reaches it through SSH.
+func (o *Orchestrator) installMaster(ctx context.Context, r *jobs.Run, s *models.Server) error {
+	r.Step("install 3x-ui (master panel)")
+	o.setStatus(r, s, models.ServerInstalling)
+	remote, hostKey, err := o.Connect(ctx, s)
+	if err != nil {
+		return fmt.Errorf("ssh: %w", err)
+	}
+	defer remote.Close()
+	if s.SSHHostKey == "" && hostKey != "" {
+		s.SSHHostKey = hostKey
+		o.save(r, s, "ssh_host_key")
+	}
+	return o.installPanelOpts(ctx, r, s, remote, "", true)
 }
 
 func (o *Orchestrator) applyWith(ctx context.Context, r *jobs.Run, s *models.Server, remote Remote) error {
+	if s.Role == models.RoleMaster {
+		r.Info("the master panel carries no template")
+		return nil
+	}
 	snap, err := LoadSnapshot(o.DB)
 	if err != nil {
 		return err
@@ -785,7 +848,7 @@ func (o *Orchestrator) sync(ctx context.Context, r *jobs.Run) error {
 
 func (o *Orchestrator) syncAll(ctx context.Context, r *jobs.Run) error {
 	var servers []models.Server
-	o.DB.Where("status IN ? AND xui_port > 0", []string{models.ServerActive, models.ServerFiltered}).Find(&servers)
+	o.DB.Where("status IN ? AND xui_port > 0 AND role <> ?", []string{models.ServerActive, models.ServerFiltered}, models.RoleMaster).Find(&servers)
 	for i := range servers {
 		id := servers[i].ID
 		if _, err := o.Engine.Enqueue(KindSync, &id, struct{}{}, r.Job.Source); err != nil {
@@ -1101,7 +1164,7 @@ func (o *Orchestrator) check(ctx context.Context, r *jobs.Run) error {
 // checkAll queues a check for every live server.
 func (o *Orchestrator) checkAll(ctx context.Context, r *jobs.Run) error {
 	var servers []models.Server
-	o.DB.Where("status IN ?", []string{models.ServerActive, models.ServerFiltered}).Find(&servers)
+	o.DB.Where("status IN ? AND role <> ?", []string{models.ServerActive, models.ServerFiltered}, models.RoleMaster).Find(&servers)
 	for i := range servers {
 		id := servers[i].ID
 		if _, err := o.Engine.Enqueue(KindCheck, &id, struct{}{}, r.Job.Source); err != nil {
@@ -1165,6 +1228,10 @@ func (o *Orchestrator) retire(ctx context.Context, r *jobs.Run, s *models.Server
 	o.DB.Model(&models.IPAddress{}).Where("server_id = ? AND status = ?", s.ID, models.IPInUse).
 		Updates(map[string]any{"status": models.IPReleased, "server_id": nil})
 	o.removeDNS(ctx, r, s)
+	o.nodeLeave(ctx, r, s)
+	if s.Role == models.RoleMaster && o.Settings.Int(settings.NodeMasterID) == int(s.ID) {
+		_ = o.Settings.Set(map[string]string{settings.NodeMasterID: "0"})
+	}
 	if s.UploadedAt != nil || s.UploadedIP != "" {
 		o.deleteOnPanels(ctx, r, s.ID, panelAddrs(s))
 		// Clean-IP configs are matched by the orange name in SNI/Host.

@@ -278,12 +278,22 @@ func (o *Orchestrator) pushCert(ctx context.Context, r *jobs.Run, s *models.Serv
 // setPanelCert serves the 3x-ui panel with the certificate already copied
 // to the server, falling back to http if it does not come up over https.
 func (o *Orchestrator) setPanelCert(ctx context.Context, r *jobs.Run, s *models.Server, remote Remote) error {
+	return o.setPanelCertFiles(ctx, r, s, remote, CertFile, KeyFile, true)
+}
+
+// setPanelCertFiles is setPanelCert for any certificate on the server.
+// movePort puts the panel on the reserved Cloudflare port (the zone
+// certificate's case); an IP certificate leaves the panel where it is.
+func (o *Orchestrator) setPanelCertFiles(ctx context.Context, r *jobs.Run, s *models.Server, remote Remote, certFile, keyFile string, movePort bool) error {
 	// The panel reads its certificate at start, so it is restarted either way.
 	panel := o.PanelFor(s, remote)
 	// With the certificate the panel moves to the reserved Cloudflare port
 	// (like the script's panel), unless an inbound already holds it.
-	prevPort, port := s.XUIPort, o.cfPanelPort(s)
-	cmd := fmt.Sprintf("/usr/local/x-ui/x-ui cert -webCert %s -webCertKey %s >/dev/null 2>&1", CertFile, KeyFile)
+	prevPort, port := s.XUIPort, 0
+	if movePort {
+		port = o.cfPanelPort(s)
+	}
+	cmd := fmt.Sprintf("/usr/local/x-ui/x-ui cert -webCert %s -webCertKey %s >/dev/null 2>&1", certFile, keyFile)
 	if port != 0 && port != prevPort {
 		cmd += fmt.Sprintf(" && /usr/local/x-ui/x-ui setting -port %d >/dev/null 2>&1"+
 			" && { if command -v ufw >/dev/null && ufw status | grep -q 'Status: active'; then ufw allow %d/tcp >/dev/null; fi; true; }", port, port)
