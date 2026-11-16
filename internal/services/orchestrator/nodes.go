@@ -379,6 +379,9 @@ func (o *Orchestrator) QueueNodeSync() {
 	var n int64
 	o.DB.Model(&models.Location{}).Where("node_mode = ?", true).Count(&n)
 	if n == 0 {
+		o.DB.Model(&models.Server{}).Where("role = ? AND status <> ?", models.RoleNode, models.ServerDeleted).Count(&n)
+	}
+	if n == 0 {
 		o.DB.Model(&models.NodeUpload{}).Count(&n)
 		if n == 0 {
 			return
@@ -411,11 +414,51 @@ func BalancerName(loc *models.Location) string {
 	return base + "-auto"
 }
 
-// nodeBalancer builds the balancer config of one location: the working
-// links of its healthy nodes. off says why there is none.
-func (o *Orchestrator) nodeBalancer(snap *Snapshot, loc *models.Location) (items []smart.Item, off string) {
+// AllNodesName is the vpn-pannel name of the balancer config that holds
+// every healthy node, whatever its location.
+const AllNodesName = "all-auto"
+
+// NodeProbeInterval is how often a balancer config tests its servers: a
+// client leaves a dead server within about this long.
+const NodeProbeInterval = "30s"
+
+// nodeGroup is one balancer config: the nodes of a location, or (ID 0)
+// every node there is.
+type nodeGroup struct {
+	ID       uint // location ID, 0 for all nodes
+	Name     string
+	Country  string
+	Strategy string
+}
+
+// nodeGroups lists the balancer configs wanted now: one per node location,
+// and one of all nodes as soon as a node exists. That last one is what
+// keeps a client connected when its server's whole location is gone, and it
+// is the only one servers without a location (joined by hand) are in.
+func (o *Orchestrator) nodeGroups() []nodeGroup {
+	var locs []models.Location
+	o.DB.Where("node_mode = ?", true).Order("priority, id").Find(&locs)
+	var out []nodeGroup
+	for i := range locs {
+		out = append(out, nodeGroup{ID: locs[i].ID, Name: BalancerName(&locs[i]), Country: locs[i].Country, Strategy: locs[i].BalancerStrategy})
+	}
+	var first models.Server
+	if o.DB.Where("role = ? AND status NOT IN ?", models.RoleNode, []string{models.ServerDeleted, models.ServerDeleting}).
+		Order("id").First(&first).Error == nil {
+		out = append(out, nodeGroup{Name: AllNodesName, Country: first.Country})
+	}
+	return out
+}
+
+// nodeBalancer collects a group's proxies: the working links of its
+// healthy nodes. off says why there are none.
+func (o *Orchestrator) nodeBalancer(snap *Snapshot, g nodeGroup) (items []smart.Item, off string) {
+	q := o.DB.Where("role = ? AND status = ?", models.RoleNode, models.ServerActive)
+	if g.ID != 0 {
+		q = q.Where("location_id = ?", g.ID)
+	}
 	var servers []models.Server
-	o.DB.Where("location_id = ? AND role = ? AND status = ?", loc.ID, models.RoleNode, models.ServerActive).Order("id").Find(&servers)
+	q.Order("id").Find(&servers)
 	for i := range servers {
 		s := &servers[i]
 		if s.PanelRemovedAt != nil || s.UploadedAt == nil || s.UploadedInbounds == "" {
@@ -433,7 +476,7 @@ func (o *Orchestrator) nodeBalancer(snap *Snapshot, loc *models.Location) (items
 	return items, off
 }
 
-// nodeSync is the node_sync job: one balancer config per node location in
+// nodeSync is the node_sync job: the balancer configs of nodeGroups in
 // every vpn-pannel, rebuilt from the nodes that work right now.
 func (o *Orchestrator) nodeSync(ctx context.Context, r *jobs.Run) error {
 	o.nodes.run.Lock()
@@ -444,8 +487,7 @@ func (o *Orchestrator) nodeSync(ctx context.Context, r *jobs.Run) error {
 	if err != nil {
 		return err
 	}
-	var locs []models.Location
-	o.DB.Where("node_mode = ?", true).Order("priority, id").Find(&locs)
+	groups := o.nodeGroups()
 	dests := o.Dests()
 
 	type key struct {
@@ -465,12 +507,12 @@ func (o *Orchestrator) nodeSync(ctx context.Context, r *jobs.Run) error {
 	}
 
 	wanted, changed, failed := 0, 0, 0
-	for i := range locs {
-		loc := &locs[i]
-		items, off := o.nodeBalancer(snap, loc)
+	for _, g := range groups {
+		loc := g
+		items, off := o.nodeBalancer(snap, g)
 		prof := models.SmartProfile{
-			Name: BalancerName(loc), Enabled: true, Scope: models.SmartScopeAll, Country: loc.Country,
-			Strategy: loc.BalancerStrategy, IranDirect: true,
+			Name: g.Name, Enabled: true, Scope: models.SmartScopeAll, Country: g.Country,
+			Strategy: g.Strategy, IranDirect: true, ProbeInterval: NodeProbeInterval,
 		}
 		smart.Normalize(&prof)
 		for _, d := range dests {
@@ -522,7 +564,8 @@ func (o *Orchestrator) nodeSync(ctx context.Context, r *jobs.Run) error {
 		}
 	}
 
-	// Locations that left node mode: their balancer configs go.
+	// Groups that are gone (a location left node mode, the last node was
+	// deleted): their balancer configs go.
 	for _, row := range have {
 		d, ok := destByID[row.DestinationID]
 		if sd, isSmart := d.Destination.(SmartDestination); ok && isSmart && row.Name != "" {

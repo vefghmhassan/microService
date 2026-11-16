@@ -244,7 +244,7 @@ function MasterCard({ locations }: { locations: Location[] }) {
             <Flex gap={6} wrap align="center">
               <Typography.Text type="secondary">کانفیگ‌های balancer:</Typography.Text>
               {data!.uploads.map((u) => (
-                <Tooltip key={u.id} title={u.error || `${locName.get(u.location_id) ?? ''} · ${u.outbounds} پروکسی`}>
+                <Tooltip key={u.id} title={u.error || `${u.location_id ? (locName.get(u.location_id) ?? '') : 'همهٔ نودها'} · ${u.outbounds} پروکسی`}>
                   <Tag color={u.error ? 'warning' : u.active ? 'blue' : 'default'} dir="ltr">{u.name} ({u.outbounds})</Tag>
                 </Tooltip>
               ))}

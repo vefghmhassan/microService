@@ -236,12 +236,51 @@ func TestJoinLocationConvertsExistingServersAndBalancerFollows(t *testing.T) {
 		t.Fatal("balancer strategy is not leastPing")
 	}
 
+	// Every node is also in the all-nodes config, with or without a location.
+	allOut := func() int {
+		var row models.NodeUpload
+		o.DB.Where("location_id = 0").First(&row)
+		return row.Outbounds
+	}
+	if all := sd.nodes[AllNodesName]; all == nil || !all.active || allOut() != 2 {
+		t.Fatalf("all-nodes config: %+v with %d proxies, want 2", all, allOut())
+	}
+	if !strings.Contains(sd.nodes[AllNodesName].json, `"probeInterval":"`+NodeProbeInterval+`"`) {
+		t.Fatal("the all-nodes config does not probe its servers every " + NodeProbeInterval)
+	}
+	// A node that was joined by hand has no location: only all-auto has it.
+	j3, _ := o.Engine.Enqueue(KindProvision, nil, ProvisionParams{AccountID: acc.ID}, "test")
+	got3 := waitJob(t, o, j3.ID)
+	if got3.Status != models.JobDone {
+		t.Fatalf("provision %s: %s", got3.Status, got3.Error)
+	}
+	jj, _ := o.Engine.Enqueue(KindNodeJoin, got3.ServerID, struct{}{}, "test")
+	if got := waitJob(t, o, jj.ID); got.Status != models.JobDone {
+		t.Fatalf("node join %s: %s", got.Status, got.Error)
+	}
+	sync()
+	if outbounds() != 2 || allOut() != 3 {
+		t.Fatalf("location config %d proxies (want 2), all-nodes %d (want 3)", outbounds(), allOut())
+	}
+
 	// A filtered node drops out of the balancer.
 	no := false
 	o.DB.Model(&models.Server{}).Where("id = ?", ids[0]).Updates(map[string]any{"status": models.ServerFiltered, "last_check_ok": &no})
 	sync()
 	if got := outbounds(); got != 1 {
 		t.Fatalf("balancer holds %d proxies after one node was filtered, want 1", got)
+	}
+	if got := allOut(); got != 2 {
+		t.Fatalf("all-nodes config holds %d proxies after one node was filtered, want 2", got)
+	}
+	// The hand-joined node is deleted: the clients go on with the rest.
+	d3, _ := o.DeleteServer(*got3.ServerID, "test")
+	if got := waitJob(t, o, d3.ID); got.Status != models.JobDone {
+		t.Fatalf("delete %s: %s", got.Status, got.Error)
+	}
+	sync()
+	if got := allOut(); got != 1 || !sd.nodes[AllNodesName].active {
+		t.Fatalf("all-nodes config holds %d proxies after a node was deleted, want 1", got)
 	}
 
 	// Node mode off: the servers leave the master and the config goes.
