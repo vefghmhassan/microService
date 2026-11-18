@@ -407,6 +407,10 @@ func (o *Orchestrator) rotateOnce(ctx context.Context, r *jobs.Run, prov provide
 		s.SyncStatus = models.SyncPending
 		s.XUIPort = 0
 		s.XUIToken = ""
+		// The fresh panel knows neither the master's token nor the old
+		// IP certificate; a node join mints and issues them again.
+		s.NodeToken = ""
+		s.IPCert, s.CertIP, s.CertNotAfter = false, "", nil
 		// A rebuilt machine is installed and applied from scratch, so it
 		// can take a new identity; an IP swapped in place keeps its own.
 		o.renewIdentity(s)

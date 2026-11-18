@@ -19,6 +19,16 @@ type fakeMaster struct {
 	next   int
 	nodes  map[int]xui.Node
 	probes int
+	// stale is a token the node no longer knows: the master's probe of the
+	// node then fails the way 3x-ui reports it.
+	stale string
+}
+
+func (m *fakeMaster) rejects(n xui.Node) error {
+	if m.stale != "" && n.APIToken != nil && *n.APIToken == m.stale {
+		return errors.New("3x-ui POST /panel/api/nodes/update: Update node (HTTP 404 from remote panel)")
+	}
+	return nil
 }
 
 func (m *fakeMaster) ListNodes(context.Context) ([]xui.Node, error) {
@@ -33,6 +43,9 @@ func (m *fakeMaster) ListNodes(context.Context) ([]xui.Node, error) {
 func (m *fakeMaster) AddNode(_ context.Context, n xui.Node) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.rejects(n); err != nil {
+		return 0, err
+	}
 	m.next++
 	n.ID = m.next
 	m.nodes[n.ID] = n
@@ -41,6 +54,9 @@ func (m *fakeMaster) AddNode(_ context.Context, n xui.Node) (int, error) {
 func (m *fakeMaster) UpdateNode(_ context.Context, id int, n xui.Node) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.rejects(n); err != nil {
+		return err
+	}
 	n.ID = id
 	m.nodes[id] = n
 	return nil
@@ -322,5 +338,51 @@ func TestProvisionMaster(t *testing.T) {
 	}
 	if len(panel.inbounds) != 0 || len(dest.uploads) != 0 || m.XUIPublic {
 		t.Fatalf("master got inbounds %d, uploads %d, public %v", len(panel.inbounds), len(dest.uploads), m.XUIPublic)
+	}
+}
+
+// A node whose panel no longer knows the stored token (rebuilt on an IP
+// change) gets a new one instead of failing the join.
+func TestNodeJoinMintsTokenTheNodeRejects(t *testing.T) {
+	o, _, _, _, acc, _ := setup(t)
+	j, _ := o.Engine.Enqueue(KindProvision, nil, ProvisionParams{AccountID: acc.ID}, "test")
+	got := waitJob(t, o, j.ID)
+	if got.Status != models.JobDone {
+		t.Fatalf("provision %s: %s", got.Status, got.Error)
+	}
+	id := *got.ServerID
+	m, _ := withMaster(t, o, acc)
+	join := func() models.Job {
+		t.Helper()
+		j, _ := o.Engine.Enqueue(KindNodeJoin, &id, struct{}{}, "test")
+		return waitJob(t, o, j.ID)
+	}
+	if got := join(); got.Status != models.JobDone {
+		t.Fatalf("join %s: %s", got.Status, got.Error)
+	}
+	var srv models.Server
+	o.DB.First(&srv, id)
+	srv.NodeToken = secretString("stale")
+	o.DB.Model(&srv).Select("node_token").Updates(&srv)
+	m.mu.Lock()
+	m.stale = "stale"
+	m.mu.Unlock()
+	if got := join(); got.Status != models.JobDone {
+		t.Fatalf("rejoin with a stale token %s: %s", got.Status, got.Error)
+	}
+	var s models.Server
+	o.DB.First(&s, id)
+	if string(s.NodeToken) == "stale" || s.NodeToken == "" {
+		t.Fatalf("node token not replaced: %q", string(s.NodeToken))
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.nodes) != 1 {
+		t.Fatalf("nodes on master: %d", len(m.nodes))
+	}
+	for _, n := range m.nodes {
+		if *n.APIToken == "stale" {
+			t.Fatal("master still holds the stale token")
+		}
 	}
 }

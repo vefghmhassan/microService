@@ -161,7 +161,7 @@ func (o *Orchestrator) nodeJoin(ctx context.Context, r *jobs.Run, s *models.Serv
 			return err
 		}
 	}
-	if s.NodeToken == "" {
+	mintToken := func() error {
 		tp, ok := o.PanelFor(s, remote).(tokenAPI)
 		if !ok {
 			return errors.New("this panel client cannot create API tokens")
@@ -177,6 +177,12 @@ func (o *Orchestrator) nodeJoin(ctx context.Context, r *jobs.Run, s *models.Serv
 		}
 		s.NodeToken = secretString(tok)
 		o.save(r, s, "node_token")
+		return nil
+	}
+	if s.NodeToken == "" {
+		if err := mintToken(); err != nil {
+			return err
+		}
 	}
 
 	master, done, err := o.Master(ctx)
@@ -210,11 +216,15 @@ func (o *Orchestrator) nodeJoin(ctx context.Context, r *jobs.Run, s *models.Serv
 			}
 		}
 	}
-	if s.NodeID != 0 {
-		if err := master.UpdateNode(ctx, s.NodeID, n); err != nil {
-			return fmt.Errorf("master: update node: %w", err)
+	// register sends n to the master, which probes the node with the token
+	// before it saves anything.
+	register := func() error {
+		if s.NodeID != 0 {
+			if err := master.UpdateNode(ctx, s.NodeID, n); err != nil {
+				return fmt.Errorf("master: update node: %w", err)
+			}
+			return nil
 		}
-	} else {
 		id, err := master.AddNode(ctx, n)
 		if err != nil {
 			return fmt.Errorf("master: add node: %w", err)
@@ -231,6 +241,22 @@ func (o *Orchestrator) nodeJoin(ctx context.Context, r *jobs.Run, s *models.Serv
 			}
 		}
 		s.NodeID = id
+		return nil
+	}
+	if err := register(); err != nil {
+		if !nodeRejectedToken(err) {
+			return err
+		}
+		// The node does not know the stored token (a reinstalled or rebuilt
+		// panel answers an unknown token with 404): mint a new one, once.
+		r.Logf("warn", "%v; minting a new node token", err)
+		if err := mintToken(); err != nil {
+			return err
+		}
+		tok = string(s.NodeToken)
+		if err := register(); err != nil {
+			return err
+		}
 	}
 	o.save(r, s, "node_id")
 	if s.NodeID != 0 {
@@ -240,6 +266,22 @@ func (o *Orchestrator) nodeJoin(ctx context.Context, r *jobs.Run, s *models.Serv
 	}
 	r.Info("node %s is registered on the master panel at https://%s:%d", s.Name, n.Address, n.Port)
 	return nil
+}
+
+// nodeRejectedToken reports whether the master could not get into the node
+// with the token it was given: 3x-ui answers an unknown token with 404 (or
+// 401/403), which the master passes on as "HTTP n from remote panel".
+func nodeRejectedToken(err error) bool {
+	msg := err.Error()
+	if !strings.Contains(msg, "from remote panel") {
+		return false
+	}
+	for _, code := range []string{"HTTP 401", "HTTP 403", "HTTP 404"} {
+		if strings.Contains(msg, code) {
+			return true
+		}
+	}
+	return false
 }
 
 // nodeJoinJob is the node_join job of one server.
