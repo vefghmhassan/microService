@@ -6,16 +6,18 @@ import {
 import { DeleteOutlined, EditOutlined, KeyOutlined, PlusOutlined, ReloadOutlined, UsergroupAddOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { get, keys, post, put, useAction } from '../../api/hooks'
-import type { InboundTemplate, Job } from '../../api/types'
+import type { InboundTemplate, Job, TemplateFamily } from '../../api/types'
 import { useOpenJob } from '../JobViewer'
 import { JsonEditor } from '../JsonEditor'
 import {
   alpnOptions, defaultNetwork, defaultReality, defaultSettings, defaultSniffing, defaultTLS, destOverrides,
-  fingerprints, flowCapable, inboundProtocols, networks, newClient, parse, randomB64, randomPort, randomShortIds,
+  fingerprints, flowCapable, inboundProtocols, networks, newClient, parse, randomB64, randomPort, randomUUID, randomShortIds,
   randomSpiderX, realityTargets, securityModes, ssKeyLen, ssMethods, tlsVersions, vlessFlows, vmessSecurity,
   xhttpModes, type InboundProtocol, type Obj,
 } from '../../lib/xray'
 import { GB } from '../../lib/format'
+import { cdnProblem } from '../../lib/cdnPresets'
+import { RealityCheck, type ScanServers } from './RealityScanner'
 
 interface Model {
   remark: string
@@ -24,7 +26,14 @@ interface Model {
   enabled: boolean
   upload: boolean
   uploadJSON: boolean
+  cdn: boolean
+  family: TemplateFamily
+  profiles: string
   sync: boolean
+  // CDN add-on inbounds only.
+  route: 'direct' | 'cdn'
+  fragment: boolean
+  cleanIPs: boolean
   settings: Obj
   stream: Obj
   sniffing: Obj
@@ -49,10 +58,11 @@ function setIn(obj: Obj, path: string[], v: unknown): Obj {
   return { ...cur, [k]: rest.length ? setIn(cur[k] ?? {}, rest, v) : v }
 }
 
-function fromTemplate(t: InboundTemplate | null): Model {
+function fromTemplate(t: Partial<InboundTemplate> | null, family: TemplateFamily): Model {
   if (!t) {
     return {
-      remark: '', protocol: 'vless', port: randomPort(), enabled: true, upload: true, uploadJSON: false, sync: true,
+      remark: '', protocol: 'vless', port: randomPort(), enabled: true, upload: true, uploadJSON: false, cdn: false, family, profiles: '', sync: true,
+      route: 'cdn', fragment: false, cleanIPs: false,
       settings: defaultSettings('vless'), stream: { network: 'tcp', security: 'none', ...defaultNetwork('tcp') },
       sniffing: { ...defaultSniffing },
     }
@@ -64,7 +74,9 @@ function fromTemplate(t: InboundTemplate | null): Model {
     delete stream.realitySettings.dest
   }
   return {
-    remark: t.remark, protocol: t.protocol, port: t.port, enabled: t.enabled, upload: t.upload, uploadJSON: !!t.upload_json, sync: true,
+    remark: t.remark ?? '', protocol: (t.protocol === 'hysteria' ? 'vless' : t.protocol) ?? 'vless', port: t.port ?? randomPort(), enabled: t.enabled ?? true, upload: t.upload ?? true,
+    uploadJSON: !!t.upload_json, cdn: !!t.cdn, family: t.family || family, profiles: t.profiles ?? '', sync: true,
+    route: t.route === 'direct' ? 'direct' : 'cdn', fragment: !!t.fragment, cleanIPs: !!t.clean_ips,
     settings: parse(t.settings), stream: { network: 'tcp', security: 'none', ...stream },
     sniffing: Object.keys(parse(t.sniffing)).length ? parse(t.sniffing) : { ...defaultSniffing },
   }
@@ -75,15 +87,25 @@ function fromTemplate(t: InboundTemplate | null): Model {
  * dialog does: tabs for basics, protocol, transport, security, sniffing and
  * clients, with an advanced JSON tab only for the rare field not covered.
  */
-export function InboundFormModal({ value, onClose }: { value: InboundTemplate | 'new' | null; onClose: () => void }) {
+export function InboundFormModal({ value, initial, servers, family = 'both', addon, onClose }: {
+  value: InboundTemplate | 'new' | null
+  /** initial fills a new inbound (a CDN preset) instead of the blank default. */
+  initial?: Partial<InboundTemplate>
+  servers?: ScanServers
+  /** family is what a new inbound is for (the Templates page's IPv4/IPv6 view). */
+  family?: TemplateFamily
+  /** addon makes this an inbound of that CDN add-on instead of the shared template. */
+  addon?: { id: number }
+  onClose: () => void
+}) {
   const existing = value && value !== 'new' ? value : null
-  const [m, setM] = useState<Model>(() => fromTemplate(null))
+  const [m, setM] = useState<Model>(() => fromTemplate(null, family))
   const [tab, setTab] = useState('basic')
   const openJob = useOpenJob()
 
   useEffect(() => {
     if (value) {
-      setM(fromTemplate(existing))
+      setM(fromTemplate(existing ?? initial ?? null, family))
       setTab('basic')
     }
   }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -96,13 +118,16 @@ export function InboundFormModal({ value, onClose }: { value: InboundTemplate | 
 
   const save = useAction(() => {
     const body = {
-      remark: m.remark.trim(), protocol: m.protocol, port: m.port, enabled: m.enabled, upload: m.upload, upload_json: m.upload && m.uploadJSON, sync: m.sync,
+      remark: m.remark.trim(), protocol: m.protocol, port: m.port, enabled: m.enabled, upload: m.upload, upload_json: m.upload && m.uploadJSON, cdn: m.cdn, family: m.family, sync: m.sync,
       client_count: 0,
       settings: JSON.stringify(m.settings), stream_settings: JSON.stringify(m.stream), sniffing: JSON.stringify(m.sniffing),
+      ...(addon ? {} : { profiles: m.profiles }),
+      ...(addon ? { route: m.route, fragment: m.upload && m.uploadJSON && m.fragment, clean_ips: m.route === 'cdn' && m.cleanIPs } : {}),
     }
-    return existing ? put<{ job?: Job }>(`/template/inbounds/${existing.id}`, body) : post<{ job?: Job }>('/template/inbounds', body)
+    if (existing) return put<{ job?: Job }>(`/template/inbounds/${existing.id}`, body)
+    return post<{ job?: Job }>(addon ? `/cdn-addons/${addon.id}/inbounds` : '/template/inbounds', body)
   }, {
-    success: 'ذخیره شد', invalidate: [keys.template, keys.servers],
+    success: 'ذخیره شد', invalidate: [keys.template, keys.servers, keys.cdnAddons],
     onSuccess: (r) => {
       onClose()
       if (r.job) openJob(r.job.id)
@@ -162,11 +187,48 @@ export function InboundFormModal({ value, onClose }: { value: InboundTemplate | 
                     <Tooltip title="پورت تصادفی"><Button icon={<ReloadOutlined />} onClick={() => set(['port'], randomPort())} /></Tooltip>
                   </Space.Compact>
                 </F>
+                <F label="روی سرورهای" tip="IPv4: فقط سرورهایی که کانفیگ‌هایشان روی IPv4 است. IPv6: فقط سرورهای IPv6. هر دو: روی همه. یک پورت برای یک نوع IP فقط یک بار.">
+                  <Segmented value={m.family} onChange={(v) => set(['family'], v)}
+                    options={[{ value: 'v4', label: 'IPv4' }, { value: 'v6', label: 'IPv6' }, { value: 'both', label: 'هر دو' }]} />
+                </F>
+                {!addon && (
+                  <F label="پروفایل‌ها" tip="خالی: روی همهٔ سرورهای این نوع IP. با نام پروفایل (چندتا با کاما): فقط روی سرورهایی که لوکیشن‌شان همان پروفایل را دارد. با این کار هر گروه سرور فقط چند ورودی می‌گیرد.">
+                    <Input dir="ltr" value={m.profiles} onChange={(e) => set(['profiles'], e.target.value)} placeholder="a, b" />
+                  </F>
+                )}
                 <F label="بارگذاری لینک‌ها در vpn-pannel"><Switch checked={m.upload} onChange={(v) => set(['upload'], v)} /></F>
                 <F label="ارسال به‌صورت کانفیگ JSON" tip="به‌جای لینک عادی، برای هر کاربر کانفیگ کامل کلاینت (مثل صفحه «ساخت کانفیگ JSON») ساخته و در پنل مقصد ذخیره می‌شود">
                   <Switch checked={m.upload && m.uploadJSON} disabled={!m.upload} onChange={(v) => set(['uploadJSON'], v)} />
                 </F>
-                <F label="اعمال فوری روی همه سرورها"><Switch checked={m.sync} onChange={(v) => set(['sync'], v)} /></F>
+                {addon ? (
+                  <>
+                    <F label="مسیر" tip="مستقیم: لینک به ساب‌دامین بدون پروکسی (ابر خاکستری) می‌رود. CDN: به ساب‌دامین پروکسی‌شده (ابر نارنجی) و از کلودفلر عبور می‌کند.">
+                      <Segmented value={m.route} onChange={(v) => set(['route'], v)}
+                        options={[{ value: 'direct', label: 'مستقیم (خاکستری)' }, { value: 'cdn', label: 'CDN (نارنجی)' }]} />
+                    </F>
+                    {m.route === 'cdn' && (
+                      <F label="کانفیگ با IP تمیز" tip="برای هر IP تمیز کلودفلر یک کانفیگ اضافه ساخته و در vpn-pannel هم بارگذاری می‌شود (تعدادش در تنظیمات افزونه).">
+                        <Switch checked={m.cleanIPs} onChange={(v) => set(['cleanIPs'], v)} />
+                      </F>
+                    )}
+                    <F label="Fragment در کانفیگ JSON" tip="ClientHello در کانفیگ JSON تکه‌تکه فرستاده می‌شود (ضد DPI). فقط برای TLS و وقتی ارسال JSON روشن است.">
+                      <Switch checked={m.upload && m.uploadJSON && m.fragment} disabled={!m.upload || !m.uploadJSON} onChange={(v) => set(['fragment'], v)} />
+                    </F>
+                    {m.route === 'cdn' && cdnProblem(m.port, network, security) && (
+                      <Alert type="warning" showIcon style={{ marginBottom: 12 }} title={cdnProblem(m.port, network, security)} />
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <F label="اینباند CDN (پشت کلودفلر)" tip="لینک‌هایش ساب‌دامین سرور را در SNI/Host می‌فرستند تا با IP تمیز کلودفلر هم کار کنند. با TLS فقط روی سرورهایی ساخته می‌شود که SSL دارند.">
+                      <Switch checked={m.cdn} onChange={(v) => set(['cdn'], v)} />
+                    </F>
+                    {m.cdn && cdnProblem(m.port, network, security) && (
+                      <Alert type="warning" showIcon style={{ marginBottom: 12 }} title={cdnProblem(m.port, network, security)} />
+                    )}
+                  </>
+                )}
+                <F label={addon ? 'اعمال فوری روی سرورهای این افزونه' : 'اعمال فوری روی همه سرورها'}><Switch checked={m.sync} onChange={(v) => set(['sync'], v)} /></F>
               </>
             ),
           },
@@ -180,7 +242,7 @@ export function InboundFormModal({ value, onClose }: { value: InboundTemplate | 
                     options={['none', 'tls', 'reality'].map((v) => ({ value: v, label: v, disabled: !modes.includes(v) }))} />
                 </F>
                 {security === 'tls' && <TLSFields s={s} set={set} />}
-                {security === 'reality' && <RealityFields s={s} set={set} onKeys={genKeys} />}
+                {security === 'reality' && <RealityFields s={s} set={set} onKeys={genKeys} servers={servers} />}
                 {security === 'none' && <Typography.Text type="secondary">بدون TLS؛ ترافیک فقط با رمزنگاری خود پروتکل محافظت می‌شود.</Typography.Text>}
               </>
             ),
@@ -396,7 +458,7 @@ function TLSFields({ s, set }: { s: Obj; set: Setter }) {
   )
 }
 
-function RealityFields({ s, set, onKeys }: { s: Obj; set: Setter; onKeys: () => void }) {
+function RealityFields({ s, set, onKeys, servers }: { s: Obj; set: Setter; onKeys: () => void; servers?: ScanServers }) {
   const r = s.realitySettings ?? {}
   const p = (...path: string[]) => ['stream', 'realitySettings', ...path]
   return (
@@ -413,6 +475,13 @@ function RealityFields({ s, set, onKeys }: { s: Obj; set: Setter; onKeys: () => 
       </F>
       <F label="SNI (serverNames)">
         <Select mode="tags" value={r.serverNames ?? []} onChange={(v) => set(p('serverNames'), v)} style={{ width: '100%' }} tokenSeparators={[',']} />
+      </F>
+      <F label="تست هدف" tip="از 3x-ui یکی از سرورها بررسی می‌کند هدف TLS 1.3، h2، X25519 و گواهی معتبر دارد (3x-ui نسخه 3.7 به بعد)">
+        <RealityCheck target={r.target ?? ''} serverNames={r.serverNames ?? []} xver={r.xver ?? 0} servers={servers}
+          onApply={(target, names) => {
+            set(p('target'), target)
+            if (names.length) set(p('serverNames'), names)
+          }} />
       </F>
       <F label="Fingerprint">
         <Select value={r.settings?.fingerprint ?? 'chrome'} onChange={(v) => set(p('settings', 'fingerprint'), v)} options={fingerprints.map((v) => ({ value: v, label: v }))} style={{ width: '100%' }} />
@@ -516,7 +585,7 @@ function ClientModal({ value, protocol, flowOK, keyField, onCancel, onSave, emai
       <F label={keyField === 'id' ? 'UUID' : 'رمز'}>
         <Space.Compact style={{ width: '100%' }}>
           <Input value={c[keyField]} onChange={(e) => upd(keyField, e.target.value)} dir="ltr" />
-          <Button icon={<ReloadOutlined />} onClick={() => upd(keyField, keyField === 'id' ? crypto.randomUUID() : Math.random().toString(36).slice(2, 18))} />
+          <Button icon={<ReloadOutlined />} onClick={() => upd(keyField, keyField === 'id' ? randomUUID() : Math.random().toString(36).slice(2, 18))} />
         </Space.Compact>
       </F>
       {protocol === 'vless' && (

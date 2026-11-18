@@ -1,19 +1,21 @@
 import { useEffect } from 'react'
-import { Alert, Button, Card, Col, Divider, Flex, Form, Input, InputNumber, Row, Select, Skeleton, Switch, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Col, Divider, Flex, Form, Input, InputNumber, QRCode, Row, Select, Skeleton, Switch, Tag, Typography } from 'antd'
 import { SaveOutlined, SendOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
-import { get, keys, post, put, useAction, useSettings, useXUIReleases } from '../api/hooks'
+import { get, keys, post, put, useAction, useSettings, useXrayReleases, useXUIReleases } from '../api/hooks'
 import type { GeoReport, Settings as S } from '../api/types'
 import { fmtDate } from '../lib/format'
 import { PageHeader } from '../components/PageHeader'
 import { DestinationsCard } from '../components/DestinationsCard'
+import { CopyText } from '../components/CopyText'
+import { ConfirmButton } from '../components/ConfirmButton'
 
 // Settings keys are dotted; antd forms treat dots as paths, so keys are
 // encoded for the form and decoded on save.
 const enc = (k: string) => k.replace(/\./g, '__')
 const dec = (k: string) => k.replace(/__/g, '.')
-const bools = ['xui.public_panel', 'rotate.keep_filtered_ip', 'rotate.auto', 'rotate.fallback_location', 'traffic.auto_replace', 'vpnpannel.ads', 'vpnpannel.auto_upload', 'telegram.notify']
-const nums = ['check.min_ok', 'check.min_asn', 'check.pre_install_port', 'check.interval_min', 'check.globalping_limit', 'rotate.max_attempts', 'rotate.retry_kept_after_hours', 'auto.max_per_location', 'traffic.limit_gb', 'stats.interval_min']
+const bools = ['xui.public_panel', 'rotate.keep_filtered_ip', 'rotate.v6_in_prefix', 'rotate.auto', 'rotate.fallback_location', 'traffic.auto_replace', 'watch.low_usage', 'vpnpannel.ads', 'vpnpannel.auto_upload', 'telegram.notify', 'acme.staging', 'sub.enabled']
+const nums = ['xui.cf_panel_port', 'xui.cf_sub_port', 'check.min_ok', 'check.min_asn', 'check.pre_install_port', 'check.interval_min', 'check.globalping_limit', 'check.atlas_limit', 'rotate.max_attempts', 'rotate.retry_kept_after_hours', 'auto.max_per_location', 'traffic.limit_gb', 'stats.interval_min', 'watch.minutes', 'watch.min_mb', 'history.keep_days']
 
 function toForm(s: S) {
   const out: Record<string, unknown> = {}
@@ -21,6 +23,7 @@ function toForm(s: S) {
     if (bools.includes(k)) out[enc(k)] = v === 'true'
     else if (nums.includes(k)) out[enc(k)] = Number(v)
     else if (k === 'check.sources') out[enc(k)] = v.split(',').filter(Boolean)
+    else if (k === 'xray.version') out[enc(k)] = v || undefined // empty shows the Select placeholder
     else out[enc(k)] = v
   }
   return out
@@ -41,6 +44,7 @@ const F = ({ k, label, tip, children, bool }: { k: string; label: string; tip?: 
 export function Settings() {
   const { data, isLoading } = useSettings()
   const releases = useXUIReleases()
+  const xrayReleases = useXrayReleases()
   const [form] = Form.useForm()
   useEffect(() => {
     if (data) form.setFieldsValue(toForm(data))
@@ -61,15 +65,20 @@ export function Settings() {
               <F k="xui.version" label="نسخه پیش‌فرض 3x-ui" tip="روی سرورهای جدید نصب می‌شود؛ هر سرور را می‌توان جداگانه تغییر داد">
                 <Select showSearch options={[...new Set([data['xui.version'], ...(releases.data ?? [])])].filter(Boolean).map((v) => ({ value: v, label: v }))} loading={releases.isLoading} />
               </F>
-              <F k="xray.version" label="نسخه هسته Xray" tip="خالی: نسخه‌ای که 3x-ui نصب می‌کند"><Input dir="ltr" placeholder="v25.x.x" /></F>
+              <F k="xray.version" label="نسخه هسته Xray" tip="روی سرورهای جدید نصب می‌شود؛ خالی: نسخه‌ای که 3x-ui نصب می‌کند">
+                <Select showSearch allowClear placeholder="پیش‌فرض 3x-ui" options={[...new Set([data['xray.version'], ...(xrayReleases.data ?? [])])].filter(Boolean).map((v) => ({ value: v, label: v }))} loading={xrayReleases.isLoading} />
+              </F>
               <F k="xui.install_url" label="آدرس اسکریپت نصب"><Input dir="ltr" /></F>
+              <F k="xui.cf_panel_port" label="پورت پنل (با SSL کلودفلر)" tip="یکی از پورت‌های HTTPS کلودفلر (443، 2053، 2083، 2087، 2096، 8443). پنل سرورهای SSL روی این پورت و دامنهٔ خاکستری باز می‌شود و هیچ اینباندی نمی‌تواند از آن استفاده کند"><InputNumber min={1} max={65535} /></F>
+              <F k="xui.cf_sub_port" label="پورت سابسکریپشن پنل" tip="سابسکریپشن خود 3x-ui (و JSON آن) مثل اسکریپت 3x-ui-pro-configs؛ این پورت هم برای اینباندها رزرو است"><InputNumber min={1} max={65535} /></F>
               <F k="xui.public_panel" label="پنل 3x-ui از اینترنت باز باشد" tip="روی سرورهای جدید؛ برای سرورهای فعلی از صفحه هر سرور" bool><Switch /></F>
+              <F k="acme.staging" label="گواهی آزمایشی Let's Encrypt (staging)" tip="فقط برای تست: گواهی معتبر نیست ولی سقف تعداد صدور ندارد" bool><Switch /></F>
             </Card>
           </Col>
           <Col xs={24} xl={12}>
             <Card size="small" title="چک از ایران">
               <F k="check.sources" label="منابع">
-                <Select mode="multiple" options={[{ value: 'checkhost', label: 'check-host.net' }, { value: 'globalping', label: 'Globalping' }]} />
+                <Select mode="multiple" options={[{ value: 'checkhost', label: 'check-host.net' }, { value: 'checkhostcc', label: 'check-host.cc' }, { value: 'globalping', label: 'Globalping' }, { value: 'atlas', label: 'RIPE Atlas (IPv6 هم دارد)' }]} />
               </F>
               <Row gutter={12}>
                 <Col span={12}><F k="check.min_ok" label="حداقل نود موفق ایرانی"><InputNumber min={1} max={20} style={{ width: '100%' }} /></F></Col>
@@ -78,6 +87,9 @@ export function Settings() {
                 <Col span={12}><F k="check.interval_min" label="فاصله چک خودکار (دقیقه)" tip="0 = غیرفعال"><InputNumber min={0} style={{ width: '100%' }} /></F></Col>
                 <Col span={12}><F k="check.globalping_limit" label="تعداد پراب Globalping"><InputNumber min={1} max={50} style={{ width: '100%' }} /></F></Col>
                 <Col span={12}><F k="check.globalping_token" label="توکن Globalping (اختیاری)"><Input.Password dir="ltr" /></F></Col>
+                <Col span={12}><F k="check.atlas_limit" label="تعداد پراب RIPE Atlas"><InputNumber min={1} max={50} style={{ width: '100%' }} /></F></Col>
+                <Col span={12}><F k="check.checkhostcc_key" label="کلید API چک‌هاست cc (اختیاری)"><Input.Password dir="ltr" /></F></Col>
+                <Col span={12}><F k="check.atlas_key" label="کلید API ریپ اطلس (برای منبع atlas لازم است)"><Input.Password dir="ltr" /></F></Col>
               </Row>
             </Card>
           </Col>
@@ -86,6 +98,7 @@ export function Settings() {
               <Row gutter={12}>
                 <Col span={12}><F k="rotate.max_attempts" label="حداکثر تلاش برای IP سالم"><InputNumber min={1} max={20} style={{ width: '100%' }} /></F></Col>
                 <Col span={12}><F k="rotate.retry_kept_after_hours" label="استفاده مجدد IP نگه‌داری شده بعد از (ساعت)"><InputNumber min={1} style={{ width: '100%' }} /></F></Col>
+                <Col span={12}><F k="rotate.v6_in_prefix" label="چرخش IPv6 داخل /64 همان سرور (Hetzner)" bool><Switch /></F></Col>
                 <Col span={12}><F k="rotate.keep_filtered_ip" label="نگه‌داری IP فیلتر شده" bool><Switch /></F></Col>
                 <Col span={12}><F k="rotate.auto" label="تعویض خودکار هنگام فیلتر" bool><Switch /></F></Col>
                 <Col span={12}><F k="rotate.fallback_location" label="رفتن به لوکیشن بعدی اگر IP سالم نبود" bool><Switch /></F></Col>
@@ -98,7 +111,11 @@ export function Settings() {
               <Row gutter={12}>
                 <Col span={12}><F k="traffic.limit_gb" label="سقف ترافیک هر سرور (GB)" tip="جمع آپلود و دانلود همه اینباندهای 3x-ui. 0 = بدون سقف. برای هر سرور جدا هم قابل تنظیم است"><InputNumber min={0} style={{ width: '100%' }} /></F></Col>
                 <Col span={12}><F k="stats.interval_min" label="خواندن آمار هر (دقیقه)"><InputNumber min={0} max={1440} style={{ width: '100%' }} /></F></Col>
+                <Col span={12}><F k="history.keep_days" label="نگه‌داری تاریخچه (روز)" tip="کارها و لاگ‌هایشان و چک‌های قدیمی‌تر از این تعداد روز پاک می‌شوند تا دیتابیس، بکاپ و به‌روزرسانی پنل سبک بماند. 0 = هیچ‌چیز پاک نشود. پاک‌سازی همراه خواندن آمار اجرا می‌شود"><InputNumber min={0} max={3650} style={{ width: '100%' }} /></F></Col>
                 <Col span={24}><F k="traffic.auto_replace" label="با رسیدن به سقف، سرور خودکار جایگزین شود" bool><Switch /></F></Col>
+                <Col span={24}><F k="watch.low_usage" label="هشدار مصرف کم بعد از راه‌اندازی (احتمال مشکل IP)" tip="بعد از ساخت، تعویض IP یا جایگزینی، اگر در بازه زیر مصرف همه اینباندها کمتر از حد بود، در تلگرام با دکمه‌های تعویض IP، جایگزینی و حذف خبر می‌دهد" bool><Switch /></F></Col>
+                <Col span={12}><F k="watch.minutes" label="بازه بررسی (دقیقه)" tip="بین 10 تا 60 دقیقه"><InputNumber min={10} max={60} style={{ width: '100%' }} /></F></Col>
+                <Col span={12}><F k="watch.min_mb" label="حداقل مصرف در این بازه (MB)" tip="1024 = 1 گیگ"><InputNumber min={1} style={{ width: '100%' }} /></F></Col>
               </Row>
             </Card>
           </Col>
@@ -112,6 +129,9 @@ export function Settings() {
               <F k="telegram.proxy" label="پراکسی (اختیاری)"><Input dir="ltr" placeholder="socks5://127.0.0.1:1080" /></F>
               <F k="telegram.notify" label="ارسال اعلان‌ها" bool><Switch /></F>
             </Card>
+          </Col>
+          <Col xs={24} xl={12}>
+            <SubCard />
           </Col>
           <Col xs={24} xl={12}>
             <GeoIPCard />
@@ -138,6 +158,39 @@ function PasswordForm({ onSubmit, loading }: { onSubmit: (v: { current: string; 
         <Button loading={loading} onClick={() => onSubmit(form.getFieldsValue())}>تغییر رمز</Button>
       </Flex>
     </Form>
+  )
+}
+
+/** SubCard shows the one subscription link that holds every server's configs. */
+function SubCard() {
+  const sub = useQuery({ queryKey: keys.sub, queryFn: () => get<{ enabled: boolean; token: string }>('/sub') })
+  const renew = useAction(() => post('/sub/token'), { success: 'لینک جدید ساخته شد؛ لینک قبلی دیگر کار نمی‌کند', invalidate: [keys.sub] })
+  const url = sub.data?.token ? `${window.location.origin}/sub/${sub.data.token}` : ''
+  return (
+    <Card size="small" title="لینک ساب همه سرورها"
+      extra={<ConfirmButton size="small" icon={<ReloadOutlined />} loading={renew.isPending} confirm="لینک جدید ساخته شود؟ لینک فعلی از کار می‌افتد." onConfirm={() => renew.mutate()}>لینک جدید</ConfirmButton>}>
+      <F k="sub.enabled" label="فعال" tip="بعد از تغییر، دکمه ذخیره بالای صفحه را بزنید" bool><Switch /></F>
+      <Flex gap={16} wrap align="center">
+        {url && <QRCode value={url} size={140} bgColor="#fff" color="#000" errorLevel="M" style={{ padding: 4 }} />}
+        <Flex vertical gap={6} style={{ flex: 1, minWidth: 200 }}>
+          <CopyText text={url} maxWidth="100%" />
+          {url && (
+            <>
+              <Typography.Text strong style={{ fontSize: 13 }}>ساب JSON با اتصال خودکار (balancer)</Typography.Text>
+              <CopyText text={`${url}?format=json`} maxWidth="100%" />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                کانفیگ‌های بخش «حالت‌های کانفیگ» (مثل <span dir="ltr">all-auto</span>) به همان ترتیب اول این لیست‌اند و اگر سروری قطع شود خودشان روی بقیه می‌روند.
+                برنامه باید ساب JSON (کانفیگ کامل xray) را بپذیرد؛ لینک معمولی بالا فقط لینک تکی دارد و balancer در آن نیست.
+              </Typography.Text>
+            </>
+          )}
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            همه کانفیگ‌های سرورهای فعال و فیلتر (با ⛔) را دارد و نام هر سرور در اسم کانفیگ است. با هر بار به‌روزرسانی در کلاینت (یا خودکار هر ساعت) سرورهای جدید و IPهای عوض‌شده را می‌گیرد.
+            لینک فقط وقتی کار می‌کند که آدرس همین پنل از گوشی در دسترس باشد. برای دیدن متن خام، آخر لینک <span dir="ltr">?raw=1</span> بگذارید.
+          </Typography.Text>
+        </Flex>
+      </Flex>
+    </Card>
   )
 }
 

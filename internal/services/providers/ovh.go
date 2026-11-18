@@ -91,9 +91,12 @@ func (s *ovhInstance) instance() *Instance {
 	}
 	inst := &Instance{Ref: s.ID, Name: s.Name, Status: status, Region: s.Region}
 	for _, a := range s.IPAddresses {
-		if a.Type == "public" && a.Version == 4 {
+		switch {
+		case a.Type != "public":
+		case a.Version == 4 && inst.IPv4 == "":
 			inst.IPv4 = a.IP
-			break
+		case a.Version == 6 && inst.IPv6 == "":
+			inst.IPv6 = hostIPv6(a.IP)
 		}
 	}
 	return inst

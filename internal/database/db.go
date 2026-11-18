@@ -40,6 +40,18 @@ func Open(path string) (*gorm.DB, error) {
 }
 
 func Migrate(db *gorm.DB) error {
+	// The inbound port became unique per IP family; drop the old index.
+	if m := db.Migrator(); m.HasIndex(&models.InboundTemplate{}, "idx_inbound_templates_port") {
+		if err := m.DropIndex(&models.InboundTemplate{}, "idx_inbound_templates_port"); err != nil {
+			return err
+		}
+	}
+	// Balancer configs are keyed by their mode now, not by location.
+	if m := db.Migrator(); m.HasTable(&models.NodeUpload{}) && m.HasIndex(&models.NodeUpload{}, "idx_node_upload") {
+		if err := m.DropIndex(&models.NodeUpload{}, "idx_node_upload"); err != nil {
+			return err
+		}
+	}
 	return db.AutoMigrate(models.All()...)
 }
 

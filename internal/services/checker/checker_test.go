@@ -2,6 +2,7 @@ package checker
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ func TestDecide(t *testing.T) {
 	}{
 		{"healthy", []Probe{ir("AS1", true), ir("AS2", true), local(true)}, Healthy},
 		{"same network twice is not enough", []Probe{ir("AS1", true), ir("AS1", true), ir("AS2", false), local(true)}, Filtered},
+		{"all answering probes connected on one network is thin coverage", []Probe{ir("AS1", true), ir("AS1", true), local(false)}, Unknown},
 		{"filtered", []Probe{ir("AS1", false), ir("AS2", false), local(true)}, Filtered},
 		{"down everywhere", []Probe{ir("AS1", false), ir("AS2", false), local(false)}, Down},
 		{"too few probes", []Probe{ir("AS1", false), local(true)}, Unknown},
@@ -103,5 +105,146 @@ func TestGlobalpingParsesResults(t *testing.T) {
 	}
 	if len(probes) != 2 || !probes[0].OK || probes[1].OK || probes[0].ASN != "AS197207" {
 		t.Fatalf("%+v", probes)
+	}
+}
+
+func TestAtlasRunsV6TracerouteAndParses(t *testing.T) {
+	var def map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Key k" {
+			t.Errorf("auth %q", r.Header.Get("Authorization"))
+		}
+		switch {
+		case r.Method == http.MethodPost:
+			var in struct {
+				Definitions []map[string]any `json:"definitions"`
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			def = in.Definitions[0]
+			io.WriteString(w, `{"measurements":[77]}`)
+		case strings.HasSuffix(r.URL.Path, "/results/"):
+			io.WriteString(w, `[
+				{"prb_id":1,"dst_addr":"2a01:4f8::1","result":[{"hop":1,"result":[{"from":"2a00::9","rtt":2}]},{"hop":9,"result":[{"from":"2a01:4f8:0::1","rtt":61.5}]}]},
+				{"prb_id":2,"dst_addr":"2a01:4f8::1","result":[{"hop":1,"result":[{"x":"*"}]}]}]`)
+		case strings.HasPrefix(r.URL.Path, "/probes/"):
+			io.WriteString(w, `{"results":[{"id":1,"asn_v4":58224,"asn_v6":197207},{"id":2,"asn_v4":44244,"asn_v6":null}]}`)
+		default:
+			io.WriteString(w, `{"status":{"name":"Stopped"}}`)
+		}
+	}))
+	defer srv.Close()
+	a := NewAtlas("k", 4)
+	a.BaseURL, a.PollEvery = srv.URL, time.Millisecond
+	probes, err := a.Check(context.Background(), "2a01:4f8::1", 443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def["af"] != float64(6) || def["protocol"] != "TCP" || def["port"] != float64(443) {
+		t.Fatalf("definition %v", def)
+	}
+	if len(probes) != 2 || !probes[0].OK || probes[0].ASN != "AS197207" || probes[0].LatencyMs != 61.5 || probes[1].OK {
+		t.Fatalf("%+v", probes)
+	}
+}
+
+func TestGlobalpingProbeWithoutIPv6IsNoAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			io.WriteString(w, `{"id":"m1"}`)
+			return
+		}
+		io.WriteString(w, `{"status":"finished","results":[
+			{"probe":{"country":"IR","asn":197207},"result":{"status":"failed","rawOutput":"connect: Network is unreachable"}}]}`)
+	}))
+	defer srv.Close()
+	g := NewGlobalping("", 4)
+	g.BaseURL, g.PollEvery = srv.URL, time.Millisecond
+	probes, err := g.Check(context.Background(), "2a01:4f8::1", 443)
+	if err != nil || len(probes) != 1 || !probes[0].NoAnswer {
+		t.Fatalf("%+v %v", probes, err)
+	}
+}
+
+type fakeSource struct {
+	name   string
+	probes []Probe
+	err    error
+	calls  *[]string
+}
+
+func (f fakeSource) Name() string { return f.name }
+func (f fakeSource) Check(context.Context, string, int) ([]Probe, error) {
+	*f.calls = append(*f.calls, f.name)
+	return f.probes, f.err
+}
+
+func TestRunFallsThroughDeadSources(t *testing.T) {
+	ir := func(asn string, ok bool) Probe { return Probe{Source: "x", Country: "IR", ASN: asn, OK: ok} }
+	pol := Policy{MinOK: 2, MinASN: 2}
+	run := func(srcs func(calls *[]string) []Source) (*Result, []string) {
+		var calls []string
+		c := &Checker{Sources: srcs(&calls), Policy: pol}
+		return c.Run(context.Background(), "127.0.0.1", 1), calls
+	}
+
+	res, calls := run(func(c *[]string) []Source {
+		return []Source{
+			fakeSource{name: "a", err: io.EOF, calls: c},
+			fakeSource{name: "b", probes: []Probe{ir("AS1", true), ir("AS2", true)}, calls: c},
+			fakeSource{name: "c", calls: c},
+		}
+	})
+	if res.Verdict != Healthy || len(calls) != 2 {
+		t.Errorf("want healthy after b without calling c, got %s calls=%v", res.Verdict, calls)
+	}
+
+	res, calls = run(func(c *[]string) []Source {
+		return []Source{
+			fakeSource{name: "a", err: io.EOF, calls: c},
+			fakeSource{name: "b", calls: c},
+			fakeSource{name: "c", probes: []Probe{{Source: "c", Country: "IR", NoAnswer: true}}, calls: c},
+		}
+	})
+	if res.Verdict != Filtered || len(calls) != 3 {
+		t.Errorf("all dead should fail the IP, got %s (%s)", res.Verdict, res.Summary)
+	}
+}
+
+func TestCheckHostCCParsesResults(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/tcp":
+			io.WriteString(w, `{"success":true,"uuid":"u1"}`)
+		case r.URL.Path == "/report/u1":
+			io.WriteString(w, `{"data":{
+				"IR-TEH-A":{"countryCode":"IR","city":"Tehran","asn":"AS1","checks":[{"status":1,"connectiontime":88}]},
+				"IR-TEH-B":{"countryCode":"IR","asn":"AS1","checks":[{"status":0,"errortext":"timeout"}]},
+				"DE-X":{"countryCode":"DE","checks":[{"status":1,"connectiontime":9}]},
+				"NL-Y":{"countryCode":"NL","checks":[]}}}`)
+		}
+	}))
+	defer srv.Close()
+	c := NewCheckHostCC("")
+	c.BaseURL, c.PollEvery, c.Wait = srv.URL, time.Millisecond, 20*time.Millisecond
+	probes, err := c.Check(context.Background(), "1.2.3.4", 22)
+	if err != nil || len(probes) != 4 {
+		t.Fatalf("%v %v", err, probes)
+	}
+	got := map[string]Probe{}
+	for _, p := range probes {
+		got[p.Node] = p
+	}
+	if !got["IR-TEH-A"].OK || got["IR-TEH-A"].LatencyMs != 88 || got["IR-TEH-B"].OK || got["IR-TEH-B"].Error != "timeout" || !got["NL-Y"].NoAnswer {
+		t.Errorf("unexpected probes: %+v", got)
+	}
+}
+
+func TestRunIPv6NeedsOnlyOneNetwork(t *testing.T) {
+	var calls []string
+	src := fakeSource{name: "a", calls: &calls, probes: []Probe{
+		{Source: "a", Country: "IR", ASN: "AS1", OK: true}, {Source: "a", Country: "IR", ASN: "AS1", OK: true}}}
+	c := &Checker{Sources: []Source{src}, Policy: Policy{MinOK: 2, MinASN: 2}}
+	if res := c.Run(context.Background(), "::1", 1); res.Verdict != Healthy {
+		t.Errorf("got %s (%s)", res.Verdict, res.Summary)
 	}
 }

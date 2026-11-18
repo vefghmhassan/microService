@@ -46,3 +46,38 @@ export const get = <T,>(p: string) => api<T>(p)
 export const post = <T,>(p: string, body?: unknown) => api<T>(p, { method: 'POST', body: body ?? {} })
 export const put = <T,>(p: string, body?: unknown) => api<T>(p, { method: 'PUT', body: body ?? {} })
 export const del = <T,>(p: string) => api<T>(p, { method: 'DELETE' })
+
+async function errorOf(res: Response): Promise<ApiError> {
+  if (res.status === 401) onUnauthorized()
+  let msg = res.statusText
+  try {
+    const d = await res.json()
+    if (d && typeof d === 'object' && 'error' in d) msg = String(d.error)
+  } catch { /* not JSON */ }
+  return new ApiError(res.status, msg)
+}
+
+/** postBlob POSTs JSON and returns the response as a file (name from Content-Disposition). */
+export async function postBlob(path: string, body: unknown): Promise<{ blob: Blob; name: string }> {
+  const res = await fetch('/api/v1' + path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'X-Requested-With': 'microserver', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw await errorOf(res)
+  const m = /filename="?([^";]+)"?/.exec(res.headers.get('Content-Disposition') ?? '')
+  return { blob: await res.blob(), name: m?.[1] ?? 'backup.msbk' }
+}
+
+/** postForm POSTs multipart form data and returns the JSON response. */
+export async function postForm<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch('/api/v1' + path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { Accept: 'application/json', 'X-Requested-With': 'microserver' },
+    body: form,
+  })
+  if (!res.ok) throw await errorOf(res)
+  return res.json() as Promise<T>
+}

@@ -93,7 +93,7 @@ func (a *App) GeoReport(c *fiber.Ctx) error {
 	}
 	const counts = "COUNT(DISTINCT c.ip) AS ips, COUNT(DISTINCT CASE WHEN c.last_seen >= ? THEN c.ip END) AS online, COUNT(DISTINCT c.email) AS users, COALESCE(SUM(c.conns), 0) AS conns"
 	group := func(cols, groupBy string) []geoGroup {
-		var out []geoGroup
+		out := []geoGroup{} // never null in JSON: the page maps over every list
 		q().Select(cols+", "+counts, online).Group(groupBy).Order("ips DESC").Limit(300).Scan(&out)
 		return out
 	}
@@ -107,14 +107,14 @@ func (a *App) GeoReport(c *fiber.Ctx) error {
 	}
 	q().Select(counts+", COUNT(DISTINCT CASE WHEN c.last_seen >= ? THEN c.email END) AS online_users", online, online).Scan(&totals)
 
-	var users []geoUser
+	users := []geoUser{}
 	q().Select(`c.email AS email, COUNT(DISTINCT c.ip) AS ips,
 		COUNT(DISTINCT CASE WHEN c.last_seen >= ? THEN c.ip END) AS online, COALESCE(SUM(c.conns), 0) AS conns,
 		COUNT(DISTINCT c.server_id) AS servers, COALESCE(GROUP_CONCAT(DISTINCT g.city), '') AS cities,
 		COALESCE(GROUP_CONCAT(DISTINCT g.isp), '') AS isps, MAX(c.last_seen) AS last_seen`, online).
 		Group("c.email").Order("online DESC, ips DESC").Limit(500).Scan(&users)
 
-	var ips []geoIP
+	ips := []geoIP{}
 	q().Joins("LEFT JOIN servers s ON s.id = c.server_id").
 		Select(`c.ip AS ip, COALESCE(g.country, '') AS country, COALESCE(g.region, '') AS region, COALESCE(g.city, '') AS city,
 		COALESCE(g.asn, 0) AS asn, COALESCE(g.isp, '') AS isp, GROUP_CONCAT(DISTINCT c.email) AS emails,
@@ -122,12 +122,12 @@ func (a *App) GeoReport(c *fiber.Ctx) error {
 		COALESCE(SUM(c.conns), 0) AS conns, MAX(c.last_seen) AS last_seen, MAX(c.last_seen >= ?) AS online`, online).
 		Group("c.ip").Order("last_seen DESC").Limit(1000).Scan(&ips)
 
-	var servers []geoGroup
+	servers := []geoGroup{}
 	q().Joins("LEFT JOIN servers s ON s.id = c.server_id").
 		Select("COALESCE(s.name, 'server #' || c.server_id) AS key, "+counts, online).
 		Group("c.server_id").Order("ips DESC").Scan(&servers)
 
-	var inbounds []string
+	inbounds := []string{}
 	a.DB.Table("client_ips").Distinct("inbound").Where("last_seen >= ?", now.Add(-orchestrator.ClientIPRetention)).Order("inbound").Pluck("inbound", &inbounds)
 
 	type collectRow struct {
@@ -137,7 +137,7 @@ func (a *App) GeoReport(c *fiber.Ctx) error {
 		IPCollectAt   *time.Time `json:"ip_collect_at"`
 		IPCollectNote string     `json:"ip_collect_note"`
 	}
-	var collect []collectRow
+	collect := []collectRow{}
 	a.DB.Table("servers").Select("id, name, ipv4, ip_collect_at, ip_collect_note").
 		Where("status IN ? AND xui_port > 0", []string{models.ServerActive, models.ServerFiltered}).Order("id").Scan(&collect)
 

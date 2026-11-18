@@ -2,12 +2,12 @@ import { useState, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Badge, Button, Drawer, Flex, Grid, Layout, Menu, Tooltip, Typography } from 'antd'
 import {
-  CodeOutlined,
-  ApiOutlined, AppstoreOutlined, CloudServerOutlined, DashboardOutlined, EnvironmentOutlined, GlobalOutlined,
+  ApartmentOutlined, CodeOutlined, BranchesOutlined,
+  ApiOutlined, AppstoreOutlined, ThunderboltOutlined, CloudOutlined, CloudServerOutlined, DashboardOutlined, EnvironmentOutlined, GlobalOutlined,
   LogoutOutlined, MenuOutlined, MoonOutlined, NodeIndexOutlined, OrderedListOutlined, RadarChartOutlined,
-  SettingOutlined, SunOutlined, UnorderedListOutlined,
+  CloudSyncOutlined, SaveOutlined, SettingOutlined, SunOutlined, UnorderedListOutlined,
 } from '@ant-design/icons'
-import { useDashboard } from '../api/hooks'
+import { useDashboard, useUpdateBranches, useUpdateStatus } from '../api/hooks'
 import { useThemeMode } from '../lib/theme'
 
 const { Sider, Header, Content } = Layout
@@ -17,13 +17,20 @@ const items = [
   { key: '/servers', icon: <CloudServerOutlined />, label: 'سرورها' },
   { key: '/templates', icon: <NodeIndexOutlined />, label: 'تمپلیت مشترک' },
   { key: '/configs', icon: <CodeOutlined />, label: 'ساخت کانفیگ JSON' },
+  { key: '/smart-configs', icon: <BranchesOutlined />, label: 'کانفیگ هوشمند' },
+  { key: '/modes', icon: <ApartmentOutlined />, label: 'حالت‌های کانفیگ' },
   { key: '/geo', icon: <EnvironmentOutlined />, label: 'کاربران و موقعیت' },
   { key: '/checks', icon: <RadarChartOutlined />, label: 'چک از ایران' },
   { key: '/ips', icon: <GlobalOutlined />, label: 'استخر IP' },
   { key: '/locations', icon: <OrderedListOutlined />, label: 'لوکیشن‌ها' },
   { key: '/providers', icon: <ApiOutlined />, label: 'ارائه‌دهنده‌ها' },
+  { key: '/cloudflare', icon: <CloudOutlined />, label: 'دامنه‌ها (کلودفلر)' },
+  { key: '/clean-ips', icon: <ThunderboltOutlined />, label: 'IP تمیز' },
+  { key: '/cdn-addon', icon: <AppstoreOutlined />, label: 'افزونه CDN' },
   { key: '/jobs', icon: <UnorderedListOutlined />, label: 'کارها' },
   { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
+  { key: '/backup', icon: <SaveOutlined />, label: 'بکاپ و بازیابی' },
+  { key: '/update', icon: <CloudSyncOutlined />, label: 'آپدیت پنل' },
 ]
 
 function Brand({ collapsed }: { collapsed?: boolean }) {
@@ -45,6 +52,7 @@ export function AppLayout({ children, onLogout }: { children: ReactNode; onLogou
   const nav = useNavigate()
   const { mode, toggle } = useThemeMode()
   const { data: dash } = useDashboard()
+  const newCommits = useNewCommits()
 
   const selected = items.filter((i) => i.key !== '/' && loc.pathname.startsWith(i.key)).map((i) => i.key)
   const menu = (
@@ -56,6 +64,8 @@ export function AppLayout({ children, onLogout }: { children: ReactNode; onLogou
         ...i,
         label: i.key === '/jobs' && dash?.jobs_active ? (
           <Flex justify="space-between" align="center">{i.label}<Badge count={dash.jobs_active} size="small" /></Flex>
+        ) : i.key === '/update' && newCommits ? (
+          <Flex justify="space-between" align="center">{i.label}<Badge count={newCommits} size="small" color="blue" title="کامیت جدید روی برنچ فعلی" /></Flex>
         ) : i.label,
       }))}
       onClick={({ key }) => {
@@ -108,4 +118,17 @@ export function AppLayout({ children, onLogout }: { children: ReactNode; onLogou
       )}
     </Layout>
   )
+}
+
+/**
+ * useNewCommits counts commits on the running version's branch that are not
+ * deployed yet (checked every 10 minutes), for the menu badge. It stays
+ * quiet when the updater is not installed.
+ */
+function useNewCommits(): number {
+  const st = useUpdateStatus(false)
+  const branch = st.data?.current?.branch || st.data?.panel?.branch
+  const { data } = useUpdateBranches({ enabled: !!branch, background: true })
+  const b = data?.branches.find((x) => x.name === branch)
+  return b && b.ahead > 0 ? b.ahead : 0
 }

@@ -64,6 +64,11 @@ func (c *CheckHost) get(ctx context.Context, u string, out any) error {
 }
 
 func (c *CheckHost) Check(ctx context.Context, host string, port int) ([]Probe, error) {
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		// check-host has no Iranian IPv6 nodes and rejects bracketed hosts;
+		// leave IPv6 to the sources that can probe it.
+		return nil, nil
+	}
 	q := url.Values{}
 	q.Set("host", net.JoinHostPort(host, strconv.Itoa(port)))
 	nodes := append(append([]string{}, c.Nodes...), c.ControlNodes...)

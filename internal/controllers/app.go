@@ -26,6 +26,12 @@ type App struct {
 	Geo      *geoip.DB
 	// TestTelegram sends a test message with the current bot settings.
 	TestTelegram func() error
+	// Restart stops the panel gracefully and starts it again (an import is
+	// applied on boot).
+	Restart func()
+	// SendBackup sends a backup to the Telegram chats with the backup.*
+	// settings.
+	SendBackup func() error
 }
 
 func errJSON(c *fiber.Ctx, status int, msg string) error {

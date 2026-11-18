@@ -20,6 +20,13 @@ import { Templates } from './pages/Templates'
 import { ConfigBuilder } from './pages/ConfigBuilder'
 import { Settings } from './pages/Settings'
 import { Locations } from './pages/Locations'
+import { Cloudflare } from './pages/Cloudflare'
+import { CleanIPs } from './pages/CleanIPs'
+import { CDNAddonPage } from './pages/CDNAddon'
+import { SmartConfigs } from './pages/SmartConfigs'
+import { Modes } from './pages/Modes'
+import { Update } from './pages/Update'
+import { Backup } from './pages/Backup'
 
 export default function App() {
   const qc = useQueryClient()
@@ -56,13 +63,20 @@ export default function App() {
             <Route path="/servers/:id" element={<ServerDetail />} />
             <Route path="/templates" element={<Templates />} />
             <Route path="/configs" element={<ConfigBuilder />} />
+            <Route path="/smart-configs" element={<SmartConfigs />} />
+            <Route path="/modes" element={<Modes />} />
             <Route path="/checks" element={<Checks />} />
             <Route path="/ips" element={<IPPool />} />
             <Route path="/geo" element={<GeoReport />} />
             <Route path="/locations" element={<Locations />} />
             <Route path="/providers" element={<Providers />} />
+            <Route path="/cloudflare" element={<Cloudflare />} />
+            <Route path="/clean-ips" element={<CleanIPs />} />
+            <Route path="/cdn-addon" element={<CDNAddonPage />} />
             <Route path="/jobs" element={<Jobs />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/update" element={<Update />} />
+            <Route path="/backup" element={<Backup />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </AppLayout>

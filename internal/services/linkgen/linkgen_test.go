@@ -82,3 +82,64 @@ func TestDisabledClientsAreSkipped(t *testing.T) {
 		t.Fatalf("%v %v", links, err)
 	}
 }
+
+func TestLinksViaSendsHostnameThroughCDN(t *testing.T) {
+	settings := `{"clients":[{"id":"11111111-1111-1111-1111-111111111111","email":"a"}]}`
+	cases := map[string]string{
+		`{"network":"ws","security":"tls","wsSettings":{"path":"/w"}}`:              "host=fr1.example.com",
+		`{"network":"xhttp","security":"none","xhttpSettings":{"path":"/x"}}`:       "host=fr1.example.com",
+		`{"network":"grpc","security":"tls","grpcSettings":{"serviceName":"g"}}`:    "authority=fr1.example.com",
+		`{"network":"ws","security":"tls","wsSettings":{"path":"/w","host":"own"}}`: "host=own",
+	}
+	for stream, want := range cases {
+		ls, err := LinksVia("vless", settings, stream, "104.16.1.1", "fr1.example.com", 443, "cdn")
+		if err != nil || len(ls) != 1 {
+			t.Fatalf("%s: %v %v", stream, ls, err)
+		}
+		u := ls[0].URL
+		if !strings.Contains(u, "@104.16.1.1:443?") || !strings.Contains(u, want) {
+			t.Errorf("%s: %s lacks %s", stream, u, want)
+		}
+		if strings.Contains(stream, `"tls"`) && !strings.Contains(u, "sni=fr1.example.com") {
+			t.Errorf("%s: no sni in %s", stream, u)
+		}
+	}
+	// Without a CDN hostname nothing is invented for a bare IP.
+	ls, _ := Links("vless", settings, `{"network":"ws","security":"tls","wsSettings":{"path":"/w"}}`, "1.2.3.4", 443, "x")
+	if strings.Contains(ls[0].URL, "sni=") || strings.Contains(ls[0].URL, "host=") {
+		t.Errorf("plain link got sni/host: %s", ls[0].URL)
+	}
+}
+
+func TestLinksOnIPv6Host(t *testing.T) {
+	const host = "2a01:4f8:c17:3f5::1"
+	uuid := `{"clients":[{"id":"11111111-1111-1111-1111-111111111111","email":"a"}]}`
+	cases := []struct{ proto, settings string }{
+		{"vless", uuid},
+		{"trojan", `{"clients":[{"password":"pw","email":"a"}]}`},
+		{"shadowsocks", `{"method":"2022-blake3-aes-128-gcm","password":"AAAAAAAAAAAAAAAAAAAAAA==","clients":[{"password":"AAAAAAAAAAAAAAAAAAAAAA==","email":"a"}]}`},
+	}
+	for _, c := range cases {
+		ls, err := Links(c.proto, c.settings, `{"network":"tcp","security":"none"}`, host, 443, "v6")
+		if err != nil || len(ls) != 1 {
+			t.Fatalf("%s: %v %v", c.proto, ls, err)
+		}
+		if !strings.Contains(ls[0].URL, "@["+host+"]:443") {
+			t.Errorf("%s: unbracketed %s", c.proto, ls[0].URL)
+		}
+		js, err := ClientJSON(ls[0].URL)
+		if err != nil || !strings.Contains(js, `"address":"`+host+`"`) {
+			t.Errorf("%s: client json %v %s", c.proto, err, js)
+		}
+	}
+	// vmess carries the bare address in its JSON.
+	ls, err := Links("vmess", uuid, `{"network":"tcp","security":"none"}`, host, 443, "v6")
+	if err != nil || len(ls) != 1 {
+		t.Fatalf("vmess: %v %v", ls, err)
+	}
+	raw, _ := base64.StdEncoding.DecodeString(strings.TrimPrefix(ls[0].URL, "vmess://"))
+	var v map[string]any
+	if json.Unmarshal(raw, &v) != nil || v["add"] != host {
+		t.Errorf("vmess %s", raw)
+	}
+}

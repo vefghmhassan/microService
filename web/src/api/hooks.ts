@@ -3,8 +3,9 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/
 import { App } from 'antd'
 import { del, get, post, put } from './client'
 import type {
-  CheckRun, Dashboard, IPAddress, Job, Link, LiveStatus, Location, Option, ProviderAccount,
-  ProviderType, Server, ServerEvent, ServerInbounds, Settings, TemplateResponse,
+  BalancerModes, CDNAddon, Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, NodesOverview, Option, ProviderAccount,
+  ProviderType, Server, ServerEvent, ServerInbounds, Settings, SmartProfile, SmartRule, SmartUpload, TemplateResponse,
+  UpdateBackup, UpdateBranch, UpdateCommit, UpdateOp, UpdateStatus, UpdateVersion,
 } from './types'
 
 export const keys = {
@@ -19,9 +20,25 @@ export const keys = {
   job: (id: number) => ['job', id] as const,
   ips: ['ips'] as const,
   locations: ['locations'] as const,
+  nodes: ['nodes'] as const,
+  balancerModes: ['balancer-modes'] as const,
   checks: ['checks'] as const,
   template: ['template'] as const,
   settings: ['settings'] as const,
+  cloudflare: ['cloudflare'] as const,
+  certificates: ['cloudflare', 'certificates'] as const,
+  cleanIPs: ['clean-ips'] as const,
+  cdnAddons: ['cdn-addons'] as const,
+  smartProfiles: ['smart', 'profiles'] as const,
+  smartRules: ['smart', 'rules'] as const,
+  smartUploads: ['smart', 'uploads'] as const,
+  sub: ['sub'] as const,
+  update: ['update'] as const,
+  updateStatus: ['update', 'status'] as const,
+  updateBranches: ['update', 'branches'] as const,
+  updateVersions: ['update', 'versions'] as const,
+  updateBackups: ['update', 'backups'] as const,
+  updateHistory: ['update', 'history'] as const,
 }
 
 export const useDashboard = () => useQuery({ queryKey: keys.dashboard, queryFn: () => get<Dashboard>('/dashboard') })
@@ -32,7 +49,9 @@ export const useServerInbounds = (id: number) =>
 export const useServerChecks = (id: number) =>
   useQuery({ queryKey: keys.serverChecks(id), queryFn: () => get<CheckRun[]>(`/servers/${id}/checks`) })
 export const useServerLinks = (id: number, enabled = true) =>
-  useQuery({ queryKey: keys.serverLinks(id), queryFn: () => get<{ links: Link[]; warning?: string }>(`/servers/${id}/links`), enabled })
+  useQuery({ queryKey: keys.serverLinks(id), queryFn: () => get<{ links: Link[]; clean_links?: Link[] | null; warning?: string }>(`/servers/${id}/links`), enabled })
+export const useCleanIPs = (poll = false) =>
+  useQuery({ queryKey: keys.cleanIPs, queryFn: () => get<CleanIPList>('/clean-ips'), refetchInterval: poll ? 5000 : false })
 export const useServerLive = (id: number, enabled: boolean) =>
   useQuery({ queryKey: ['servers', id, 'live'], queryFn: () => get<LiveStatus>(`/servers/${id}/live`), enabled, retry: false, staleTime: 30_000 })
 export const useProviders = () => useQuery({ queryKey: keys.providers, queryFn: () => get<ProviderAccount[]>('/providers') })
@@ -50,14 +69,63 @@ export const useJobs = (q = '') => useQuery({ queryKey: keys.jobs(q), queryFn: (
 export const useJob = (id: number | null) =>
   useQuery({ queryKey: keys.job(id ?? 0), queryFn: () => get<Job>(`/jobs/${id}`), enabled: !!id })
 export const useLocations = () => useQuery({ queryKey: keys.locations, queryFn: () => get<Location[]>('/locations') })
+export const useNodes = () =>
+  useQuery({ queryKey: keys.nodes, queryFn: () => get<NodesOverview>('/nodes'), refetchInterval: 30_000 })
+export const useBalancerModes = () =>
+  useQuery({ queryKey: keys.balancerModes, queryFn: () => get<BalancerModes>('/balancer-modes'), refetchInterval: 30_000 })
+export const useCloudflare = () => useQuery({ queryKey: keys.cloudflare, queryFn: () => get<CloudflareAccount[]>('/cloudflare') })
+export const useCloudflareZones = (accountId?: number) =>
+  useQuery({
+    queryKey: ['cloudflare', accountId, 'zones'], queryFn: () => get<CloudflareZone[]>(`/cloudflare/${accountId}/zones`),
+    enabled: !!accountId, staleTime: 300_000, retry: false,
+  })
+export const useCDNAddons = () => useQuery({ queryKey: keys.cdnAddons, queryFn: () => get<CDNAddon[]>('/cdn-addons') })
+export const useSmartProfiles = () => useQuery({ queryKey: keys.smartProfiles, queryFn: () => get<SmartProfile[]>('/smart-profiles') })
+export const useSmartRules = () => useQuery({ queryKey: keys.smartRules, queryFn: () => get<SmartRule[]>('/smart-rules') })
+export const useSmartUploads = () =>
+  useQuery({ queryKey: keys.smartUploads, queryFn: () => get<SmartUpload[]>('/smart-uploads'), refetchInterval: 15_000 })
+export const useCertificates = () => useQuery({ queryKey: keys.certificates, queryFn: () => get<Certificate[]>('/cloudflare/certificates') })
 export const useIPs = () => useQuery({ queryKey: keys.ips, queryFn: () => get<IPAddress[]>('/ips') })
 export const useChecks = () => useQuery({ queryKey: keys.checks, queryFn: () => get<CheckRun[]>('/checks') })
 export const useTemplate = () => useQuery({ queryKey: keys.template, queryFn: () => get<TemplateResponse>('/template') })
 export const useSettings = () => useQuery({ queryKey: keys.settings, queryFn: () => get<Settings>('/settings') })
+/** The Cloudflare ports kept for the 3x-ui panel and its subscription; no inbound may use them. */
+export const useReservedPorts = (): number[] => {
+  const { data } = useSettings()
+  return [Number(data?.['xui.cf_panel_port'] || 8443), Number(data?.['xui.cf_sub_port'] || 2096)]
+}
 export const useXUIReleases = () =>
   useQuery({ queryKey: ['xui-releases'], queryFn: () => get<string[]>('/meta/xui-releases'), staleTime: 3_600_000, retry: false })
+export const useXrayReleases = () =>
+  useQuery({ queryKey: ['xray-releases'], queryFn: () => get<string[]>('/meta/xray-releases'), staleTime: 3_600_000, retry: false })
 export const useMeta = () =>
   useQuery({ queryKey: ['meta'], queryFn: () => get<{ ssh_public_key: string }>('/meta'), staleTime: Infinity })
+
+// ---- panel self-update ----
+// While an update swaps the container the panel is briefly down; these
+// queries just keep retrying until it is back.
+
+export const useUpdateStatus = (busy: boolean) =>
+  useQuery({
+    queryKey: keys.updateStatus, queryFn: () => get<UpdateStatus>('/update/status'),
+    refetchInterval: busy ? 1500 : 15_000, retry: false,
+  })
+export const useUpdateBranches = (opts: { enabled?: boolean; background?: boolean } = {}) =>
+  useQuery({
+    queryKey: keys.updateBranches,
+    queryFn: () => get<{ branches: UpdateBranch[]; fetch_error?: string; fetched_at: string }>('/update/branches'),
+    enabled: opts.enabled ?? true, retry: false, staleTime: 60_000,
+    refetchInterval: opts.background ? 600_000 : false,
+  })
+export const useUpdateCommits = (branch?: string) =>
+  useQuery({
+    queryKey: ['update', 'commits', branch], queryFn: () => get<UpdateCommit[]>(`/update/commits?branch=${encodeURIComponent(branch ?? '')}&n=40`),
+    enabled: !!branch, retry: false,
+  })
+export const useUpdateVersions = () => useQuery({ queryKey: keys.updateVersions, queryFn: () => get<UpdateVersion[]>('/update/versions'), retry: false })
+export const useUpdateBackups = (enabled: boolean) =>
+  useQuery({ queryKey: keys.updateBackups, queryFn: () => get<UpdateBackup[]>('/update/backups'), enabled, retry: false })
+export const useUpdateHistory = () => useQuery({ queryKey: keys.updateHistory, queryFn: () => get<UpdateOp[]>('/update/history'), retry: false })
 
 /** useAction wraps a mutation with toast feedback and cache invalidation. */
 export function useAction<TVars = void, TRes = unknown>(
@@ -79,6 +147,8 @@ export function useAction<TVars = void, TRes = unknown>(
 
 export const serverAction = (id: number, action: string, body?: unknown) => post<Job>(`/servers/${id}/${action}`, body)
 export const deleteServer = (id: number) => del<Job>(`/servers/${id}`)
+export const scheduleDelete = (id: number) => post<Job>(`/servers/${id}/schedule-delete`)
+export const cancelScheduledDelete = (id: number) => del<{ ok: boolean }>(`/servers/${id}/schedule-delete`)
 export { del, get, post, put }
 
 /**

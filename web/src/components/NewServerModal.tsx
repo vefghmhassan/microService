@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Alert, Form, Input, InputNumber, Modal, Segmented, Select, Switch, Typography } from 'antd'
 import { Link } from 'react-router-dom'
 import { keys, post, useAction, useLocations, usePlans, useProviders, useRegions } from '../api/hooks'
-import type { Job } from '../api/types'
+import type { IPFamily, Job } from '../api/types'
 import { money } from '../lib/format'
 import { rotateMethod } from '../lib/labels'
 
@@ -16,6 +16,8 @@ interface Values {
   base_name?: string
   upload: boolean
   count: number
+  /** '' (auto mode only): each location's own setting. */
+  ip_family: IPFamily | ''
 }
 
 /**
@@ -32,8 +34,13 @@ export function NewServerModal({ open, onClose, onJob }: { open: boolean; onClos
     if (open) setMode(enabledLocs.length ? 'auto' : 'manual')
   }, [open, enabledLocs.length])
   const auto = mode === 'auto'
+  // Auto mode defaults to each location's family; manual has to pick one.
+  useEffect(() => {
+    form.setFieldValue('ip_family', auto ? '' : 'v4')
+  }, [auto, form])
   const accountId = Form.useWatch('account_id', form)
   const region = Form.useWatch('region', form)
+  const family = Form.useWatch('ip_family', form)
   const { data: accounts } = useProviders()
   const account = accounts?.find((a) => a.id === accountId)
   const regions = useRegions(accountId)
@@ -49,7 +56,7 @@ export function NewServerModal({ open, onClose, onJob }: { open: boolean; onClos
   }, [account, form])
 
   const create = useAction((v: Values) => {
-    if (auto) return post<Job[]>('/servers?auto=1', { count: v.count, upload: v.upload, base_name: v.base_name })
+    if (auto) return post<Job[]>('/servers?auto=1', { count: v.count, upload: v.upload, base_name: v.base_name, ip_family: v.ip_family || undefined })
     const { count, ...body } = v
     return post<Job[]>(`/servers?count=${count}`, body)
   }, {
@@ -93,7 +100,16 @@ export function NewServerModal({ open, onClose, onJob }: { open: boolean; onClos
         <Alert type="warning" showIcon style={{ marginBottom: 16 }}
           title={<span>برای ساخت خودکار و رفتن به لوکیشن بعدی، در <Link to="/locations" onClick={onClose}>صفحه لوکیشن‌ها</Link> اولویت تعریف کنید.</span>} />
       )}
-      <Form form={form} layout="vertical" initialValues={{ upload: true, count: 1 }} requiredMark={false}>
+      <Form form={form} layout="vertical" initialValues={{ upload: true, count: 1, ip_family: '' }} requiredMark={false}>
+        <Form.Item name="ip_family" label="کانفیگ‌ها روی"
+          tooltip="سرور همیشه هر دو IP را دارد (نصب و SSH روی IPv4). با IPv6 لینک‌ها، رکورد AAAA، چک ایران و تمپلیت‌های IPv6 روی آدرس IPv6 ساخته می‌شوند."
+          extra={family === 'v6' ? 'برای چک ایرانِ IPv6، منبع RIPE Atlas یا Globalping را در تنظیمات فعال کنید؛ check-host نود IPv6 ایرانی ندارد.' : undefined}>
+          <Segmented options={[
+            ...(auto ? [{ value: '', label: 'طبق لوکیشن' }] : []),
+            { value: 'v4', label: 'IPv4' },
+            { value: 'v6', label: 'IPv6' },
+          ]} />
+        </Form.Item>
         {!auto && <>
         <Form.Item name="account_id" label="حساب ارائه‌دهنده" rules={[{ required: true, message: 'یک حساب انتخاب کنید' }]}>
           <Select

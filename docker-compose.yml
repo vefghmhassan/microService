@@ -1,6 +1,18 @@
+# The project name is fixed so the updater (which runs docker compose from
+# inside its own container) always addresses the same containers.
+name: microserver
+
 services:
   microserver:
-    build: .
+    # The updater builds microserver:<commit> images and points :current at
+    # the one to run. `build` is only for the very first start (install.sh).
+    image: microserver:current
+    build:
+      context: .
+      args:
+        COMMIT: ${COMMIT:-}
+        BRANCH: ${BRANCH:-}
+        VERSION: ${VERSION:-dev}
     restart: unless-stopped
     env_file: .env
     environment:
@@ -9,3 +21,19 @@ services:
       - ./data:/data
     ports:
       - "8090:8090"
+
+  # Builds and deploys new versions when you press "Update" in the panel.
+  # Not reachable from outside; only the panel talks to it.
+  updater:
+    image: microserver-updater:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.updater
+    restart: unless-stopped
+    environment:
+      # Same path inside as on the host, so compose resolves ./data correctly.
+      REPO_DIR: ${HOST_REPO_DIR:?set HOST_REPO_DIR in .env to this directory's absolute path}
+    working_dir: ${HOST_REPO_DIR}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOST_REPO_DIR}:${HOST_REPO_DIR}

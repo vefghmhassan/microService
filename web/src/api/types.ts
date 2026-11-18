@@ -38,7 +38,45 @@ export interface ProviderType {
   docs: string
 }
 
-export interface Location {
+/** DNS is the Cloudflare part of a location, copied onto its servers. */
+export interface DNSFields {
+  cf_account_id: number
+  cf_zone_id: string
+  cf_zone_name: string
+  dns_pattern: string
+  dns_proxied: boolean
+  ssl: boolean
+}
+
+export interface CloudflareAccount {
+  id: number
+  name: string
+  acme_email: string
+  enabled: boolean
+  has_token: boolean
+  location_count: number
+  server_count: number
+  created_at: string
+}
+
+export interface CloudflareZone {
+  id: string
+  name: string
+  status: string
+}
+
+export interface Certificate {
+  id: number
+  cf_account_id: number
+  cf_zone_id: string
+  zone_name: string
+  not_after: string | null
+  issued_at: string | null
+  last_error: string
+  server_count: number
+}
+
+export interface Location extends DNSFields {
   id: number
   priority: number
   provider_account_id: number
@@ -48,9 +86,90 @@ export interface Location {
   image: string
   country: string
   capacity: number
+  traffic_limit_gb: number
   enabled: boolean
   note: string
+  ip_family: IPFamily
+  name_prefix: string
+  /** The CDN add-on servers built here get (0 = none). */
+  cdn_addon_id: number
+  /** Upload the panel's own JSON configs to vpn-pannel instead of links. */
+  panel_json: boolean
+  /** Inbound profile of servers built here ('' = only the inbounds open to all). */
+  profile: string
+  /** Reality targets near this location, one per line; a new server takes one. */
+  reality_snis: string
+  /** Servers built here are nodes of the master 3x-ui panel, behind one balancer config. */
+  node_mode: boolean
+  /** Strategy of that balancer ('' = leastPing). */
+  balancer_strategy: string
 }
+
+/** A node as the master 3x-ui panel sees it. */
+export interface PanelNode {
+  id: number
+  name: string
+  address: string
+  port: number
+  status: string
+  lastError?: string
+  lastHeartbeat?: number
+  latencyMs?: number
+  panelVersion?: string
+  xrayVersion?: string
+  onlineCount?: number
+  server_id: number
+}
+
+/** A balancer config the admin keeps: some node locations behind one balancer. */
+export interface BalancerMode {
+  id: number
+  name: string
+  enabled: boolean
+  priority: number
+  /** Comma separated location IDs; '' = every node. */
+  location_ids: string
+  /** '' = leastPing. */
+  strategy: string
+  /** '' = 30s. */
+  probe_interval: string
+  /** '' follows each destination panel's own ads mode. */
+  ads_mode: '' | 'normal' | 'ads' | 'both'
+  country: string
+}
+
+export interface BalancerModes {
+  /** Destination panels hold only balancer and smart configs. */
+  only: boolean
+  modes: BalancerMode[]
+  uploads: NodeUpload[]
+}
+
+/** One balancer mode's config in one vpn-pannel. */
+export interface NodeUpload {
+  id: number
+  mode_id: number
+  location_id: number
+  destination_id: number
+  ads: boolean
+  name: string
+  outbounds: number
+  active: boolean
+  pushed_at: string | null
+  error: string
+}
+
+export interface NodesOverview {
+  master: Server | null
+  nodes: PanelNode[]
+  uploads: NodeUpload[]
+  error: string
+}
+
+/** What a server's configs, DNS and checks use. Every server is dual-stack. */
+export type IPFamily = 'v4' | 'v6'
+/** Which servers an inbound template goes on. */
+export type TemplateFamily = IPFamily | 'both'
 
 export interface Option {
   id: string
@@ -61,8 +180,27 @@ export interface Option {
   price_monthly?: number
 }
 
-export interface Server {
+export interface Server extends DNSFields {
   id: number
+  location_id: number
+  /** Inbound profile, copied from the location when the server was built. */
+  profile: string
+  /** Reality target picked for this server ('' = the template's). */
+  reality_sni: string
+  hostname: string
+  dns_record_id: string
+  dns_error: string
+  cert_not_after: string | null
+  /** CDN add-on: hostname is then the grey name and cdn_hostname the orange one. */
+  cdn_addon_id: number
+  cdn_hostname: string
+  cdn_dns_error: string
+  addon_hash: string
+  /** The 3x-ui panel's own side: the one client on every inbound and its subscription. */
+  panel_client: string
+  sub_id: string
+  panel_sub_url: string
+  panel_sub_json: string
   name: string
   provider_account_id: number
   provider_account?: ProviderAccount
@@ -74,11 +212,19 @@ export interface Server {
   status: ServerStatus
   ipv4: string
   ip_ref: string
+  ipv6: string
+  ip_family: IPFamily
   xui_port: number
   xui_base_path: string
   xui_username: string
   xui_scheme: string
   xui_public: boolean
+  /** '' ordinary, 'node' registered on the master panel, 'master' the master panel itself. */
+  role: '' | 'node' | 'master'
+  node_id: number
+  node_error: string
+  /** The panel is served with a six-day Let's Encrypt certificate for the IP. */
+  ip_cert: boolean
   panel_version: string
   xray_version: string
   want_panel_version: string
@@ -98,6 +244,8 @@ export interface Server {
   stats_error: string
   traffic_limit_gb: number
   replacing_at: string | null
+  panel_removed_at?: string | null
+  delete_at?: string | null
   last_error: string
   created_at: string
   updated_at: string
@@ -203,7 +351,7 @@ export interface XrayTemplate {
 export interface InboundTemplate {
   id: number
   remark: string
-  protocol: 'vless' | 'vmess' | 'trojan' | 'shadowsocks'
+  protocol: 'vless' | 'vmess' | 'trojan' | 'shadowsocks' | 'hysteria'
   port: number
   enabled: boolean
   settings: string
@@ -211,20 +359,93 @@ export interface InboundTemplate {
   sniffing: string
   upload: boolean
   upload_json: boolean
+  cdn: boolean
+  family: TemplateFamily
+  /** CDN add-on inbounds only (addon_id 0 = shared template). */
+  addon_id?: number
+  route?: 'direct' | 'cdn'
+  fragment?: boolean
+  clean_ips?: boolean
+  /** Comma separated profiles the inbound is limited to ('' = every server). */
+  profiles?: string
+  created_at: string
+  updated_at: string
+}
+
+/** The CDN add-on: two Cloudflare names per server, SSL from the start and its own inbounds. */
+export interface CDNAddon {
+  id: number
+  name: string
+  enabled: boolean
+  cf_account_id: number
+  cf_zone_id: string
+  cf_zone_name: string
+  direct_pattern: string
+  cdn_pattern: string
+  clean_ip_count: number
+  hash: string
+  note: string
+  inbounds: InboundTemplate[]
+  locations: number
+  servers: number
   created_at: string
   updated_at: string
 }
 
 export interface TemplateResponse {
   xray: XrayTemplate
+  /** The IPv6 servers' xray template; unset (xray_v6_set false) means they use xray. */
+  xray_v6: XrayTemplate
+  xray_v6_set: boolean
   inbounds: InboundTemplate[]
   hash: string
-  servers: Pick<Server, 'id' | 'name' | 'ipv4' | 'status' | 'sync_status' | 'applied_hash'>[]
+  hash_v6: string
+  servers: Pick<Server, 'id' | 'name' | 'ipv4' | 'ipv6' | 'ip_family' | 'status' | 'sync_status' | 'applied_hash'>[]
 }
 
 export interface Link {
   email: string
   url: string
+}
+
+export interface CleanIP {
+  id: number
+  address: string
+  operator: string
+  source: string
+  enabled: boolean
+  last_seen: string
+  checked_at: string | null
+  check_ok: boolean | null
+  check_note: string
+  /** Last test through one of our orange (CDN add-on) names; null: never. */
+  cdn_ok: boolean | null
+  cdn_ms: number
+}
+
+/** One client config of a server, tried from the server itself. */
+export interface ConfigTest {
+  name: string
+  via: 'direct' | 'cdn' | 'clean'
+  ok: boolean
+  ms: number
+  error?: string
+}
+
+export interface CleanIPSource {
+  id: number
+  url: string
+  builtin: boolean
+  enabled: boolean
+  last_fetch: string | null
+  last_error: string
+  count: number
+}
+
+export interface CleanIPList {
+  ips: CleanIP[]
+  sources: CleanIPSource[]
+  checking: boolean
 }
 
 export interface Dashboard {
@@ -326,6 +547,30 @@ export interface GeoReport {
   collect: { id: number; name: string; ipv4: string; ip_collect_at: string | null; ip_collect_note: string }[]
 }
 
+// RealityScan is one 3x-ui Reality target probe, run from a server.
+export interface RealityScan {
+  target: string
+  host: string
+  ip: string
+  port: number
+  feasible: boolean
+  privateTarget: boolean
+  tls13: boolean
+  tlsVersion: string
+  h2: boolean
+  alpn: string
+  x25519: boolean
+  curveID: string
+  certValid: boolean
+  certChainValid: boolean
+  certSubject: string
+  certIssuer: string
+  notAfter: string
+  serverNames: string[] | null
+  latencyMs: number
+  reason: string
+}
+
 export interface OutboundTestResult {
   tag: string
   ok: boolean
@@ -349,4 +594,157 @@ export interface Destination {
   has_password: boolean
   created_at: string
   updated_at: string
+}
+
+// ---- panel self-update (served by the updater sidecar via /update/*) ----
+
+export interface UpdateCommit {
+  sha: string
+  short: string
+  subject: string
+  author: string
+  date: string
+}
+
+export interface UpdateBranch {
+  name: string
+  commit: UpdateCommit
+  /** Commits relative to the running version; -1 when unknown. */
+  ahead: number
+  behind: number
+  active: boolean
+}
+
+export interface UpdateVersion {
+  id: string
+  tags: string[] | null
+  commit: string
+  short: string
+  branch: string
+  subject: string
+  version: string
+  built: string
+  created: string
+  size_mb: number
+  current: boolean
+}
+
+export type UpdateStep = 'fetch' | 'build' | 'backup' | 'swap' | 'health' | 'rollback' | 'done'
+export type UpdateOpStatus = 'running' | 'success' | 'failed' | 'rolled_back' | 'canceled' | 'interrupted'
+
+export interface UpdateOp {
+  id: string
+  kind: 'update' | 'switch'
+  ref: string
+  branch?: string
+  target?: string
+  subject?: string
+  from?: string
+  user?: string
+  step: UpdateStep
+  status: UpdateOpStatus
+  error?: string
+  backup_id?: string
+  restore_db?: string
+  warnings?: string[] | null
+  started_at: string
+  finished_at?: string
+}
+
+export interface UpdateStatus {
+  busy: boolean
+  op: UpdateOp | null
+  current: UpdateVersion | null
+  panel?: { version: string; commit: string; branch: string; build_time: string }
+  panel_error?: string
+  repo_dir: string
+  remote: string
+  remote_url: string
+  checked_out: string
+  server_time: string
+  docker_error?: string
+}
+
+export interface UpdateBackup {
+  id: string
+  commit: string
+  reason: string
+  created: string
+  size_kb: number
+}
+
+// ---- smart (intelligent) configs ----
+
+export interface SmartProfile {
+  id: number
+  name: string
+  enabled: boolean
+  /** server: one config per server; all: one config with every server. */
+  scope: 'server' | 'all'
+  family: 'v4' | 'v6' | 'both'
+  countries: string
+  inbound_ids: string
+  name_template: string
+  country: string
+  obs_kind: 'observatory' | 'burst'
+  probe_url: string
+  probe_interval: string
+  timeout: string
+  sampling: number
+  http_method: 'HEAD' | 'GET'
+  strategy: 'leastPing' | 'leastLoad' | 'random' | 'roundRobin'
+  expected: number
+  max_rtt: string
+  fragment: boolean
+  dns_preset: 'smart' | 'simple'
+  iran_direct: boolean
+  block_ads: boolean
+  block_udp443: boolean
+  rule_ids: string
+  destination_ids: string
+  max_outbounds: number
+  created_at: string
+  updated_at: string
+}
+
+export interface SmartRule {
+  id: number
+  key: string
+  name: string
+  enabled: boolean
+  builtin: boolean
+  domains: string
+  ips: string
+  ports: string
+  network: string
+  order: number
+}
+
+export interface SmartUpload {
+  id: number
+  profile_id: number
+  server_id: number
+  destination_id: number
+  ads: boolean
+  name: string
+  panel_node_id: number
+  outbounds: number
+  active: boolean
+  pushed_at: string | null
+  error: string
+  updated_at: string
+  profile: string
+  server: string
+  destination: string
+}
+
+export interface SmartPreview {
+  server_id: number
+  name: string
+  country: string
+  outbounds: number
+  skipped: string[] | null
+  off: string
+  error: string
+  json: string
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -187,7 +188,48 @@ func streamParams(stream obj) url.Values {
 			q.Set("spx", spx)
 		}
 	}
+	// A FinalMask both sides must share (Sudoku on PQ) travels as fm=<json>,
+	// the v2rayN / 3x-ui convention.
+	if fm := clientFinalMask(stream); fm != "" {
+		q.Set("fm", fm)
+	}
 	return q
+}
+
+// clientFinalMask is the JSON of the part of a stream's finalmask a client
+// repeats: everything but the server-only "filter" mask. Hysteria2 carries
+// its Salamander in the standard obfs fields instead.
+func clientFinalMask(stream obj) string {
+	fm, ok := stream["finalmask"].(obj)
+	if !ok || str(stream, "network") == "hysteria" {
+		return ""
+	}
+	out := obj{}
+	for k, v := range fm {
+		masks, isList := v.([]any)
+		if !isList {
+			out[k] = v
+			continue
+		}
+		var kept []any
+		for _, m := range masks {
+			if mm, ok := m.(obj); ok && strings.EqualFold(str(mm, "type"), "filter") {
+				continue
+			}
+			kept = append(kept, m)
+		}
+		if len(kept) > 0 {
+			out[k] = kept
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 func clients(settings obj) []obj {
@@ -205,12 +247,49 @@ func clients(settings obj) []obj {
 	return out
 }
 
+// Security is an inbound's stream security ("none", "tls", "reality").
+func Security(streamJSON string) string {
+	return firstNonEmpty(str(parse(streamJSON), "security"), "none")
+}
+
 // Links builds one share link per enabled client. remark is the visible name;
 // each link gets "remark-email" so configs stay distinguishable.
 func Links(protocol, settingsJSON, streamJSON, host string, port int, remark string) ([]Link, error) {
+	return LinksVia(protocol, settingsJSON, streamJSON, host, "", port, remark)
+}
+
+// LinksVia is Links for an inbound reached through a CDN: the address may be
+// any edge IP, and sniHost (the server's hostname, when not empty) fills the
+// SNI, the ws/httpupgrade/xhttp Host and the gRPC authority the inbound does
+// not set itself, since the CDN routes by those.
+func LinksVia(protocol, settingsJSON, streamJSON, host, sniHost string, port int, remark string) ([]Link, error) {
 	settings := parse(settingsJSON)
 	stream := parse(streamJSON)
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	// A TLS inbound without its own serverName is reached by the hostname
+	// the link points at; with a bare IP there is nothing to send.
+	if sniHost == "" && host != "" && net.ParseIP(host) == nil {
+		sniHost = host
+	}
+	params := func() url.Values {
+		q := streamParams(stream)
+		if q.Get("security") == "tls" && q.Get("sni") == "" && sniHost != "" {
+			q.Set("sni", sniHost)
+		}
+		if sniHost != "" && sniHost != host {
+			switch q.Get("type") {
+			case "ws", "httpupgrade", "xhttp":
+				if q.Get("host") == "" {
+					q.Set("host", sniHost)
+				}
+			case "grpc":
+				if q.Get("authority") == "" {
+					q.Set("authority", sniHost)
+				}
+			}
+		}
+		return q
+	}
 	var out []Link
 	for _, c := range clients(settings) {
 		email := str(c, "email")
@@ -221,7 +300,7 @@ func Links(protocol, settingsJSON, streamJSON, host string, port int, remark str
 		var u string
 		switch protocol {
 		case "vless":
-			q := streamParams(stream)
+			q := params()
 			// "decryption" is the server half of VLESS Encryption (holds the private key); links carry the client half.
 			q.Set("encryption", firstNonEmpty(str(settings, "encryption"), "none"))
 			if flow := str(c, "flow"); flow != "" {
@@ -229,16 +308,19 @@ func Links(protocol, settingsJSON, streamJSON, host string, port int, remark str
 			}
 			u = "vless://" + str(c, "id") + "@" + addr + "?" + q.Encode() + "#" + url.PathEscape(label)
 		case "trojan":
-			q := streamParams(stream)
+			q := params()
 			u = "trojan://" + url.PathEscape(str(c, "password")) + "@" + addr + "?" + q.Encode() + "#" + url.PathEscape(label)
 		case "vmess":
-			q := streamParams(stream)
+			q := params()
 			v := map[string]string{
 				"v": "2", "ps": label, "add": host, "port": strconv.Itoa(port), "id": str(c, "id"),
 				"aid": "0", "scy": firstNonEmpty(str(c, "security"), "auto"), "net": q.Get("type"),
 				"type": firstNonEmpty(q.Get("headerType"), "none"), "host": q.Get("host"),
 				"path": firstNonEmpty(q.Get("path"), q.Get("serviceName")), "tls": q.Get("security"),
 				"sni": q.Get("sni"), "alpn": q.Get("alpn"), "fp": q.Get("fp"),
+			}
+			if fm := q.Get("fm"); fm != "" {
+				v["fm"] = fm
 			}
 			if v["tls"] == "none" {
 				v["tls"] = ""
@@ -254,12 +336,45 @@ func Links(protocol, settingsJSON, streamJSON, host string, port int, remark str
 			}
 			cred := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + password))
 			u = "ss://" + cred + "@" + addr + "#" + url.PathEscape(label)
+		case "hysteria":
+			u = hysteria2Link(c, stream, addr, sniHost, label)
 		default:
 			return nil, fmt.Errorf("links for protocol %q are not supported", protocol)
 		}
 		out = append(out, Link{Email: email, URL: u})
 	}
 	return out, nil
+}
+
+// hysteria2Link is the hysteria2:// share link of an Xray hysteria (v2)
+// inbound: the client's auth, TLS SNI/ALPN and, with a Salamander
+// FinalMask, the obfs password.
+func hysteria2Link(c obj, stream obj, addr, sniHost, label string) string {
+	q := url.Values{}
+	t := sub(stream, "tlsSettings")
+	if sni := firstNonEmpty(str(t, "serverName"), sniHost); sni != "" {
+		q.Set("sni", sni)
+	}
+	q.Set("alpn", firstNonEmpty(joinList(t, "alpn"), "h3"))
+	if pw := salamander(stream); pw != "" {
+		q.Set("obfs", "salamander")
+		q.Set("obfs-password", pw)
+	}
+	q.Set("insecure", "0")
+	auth := firstNonEmpty(str(c, "auth"), str(c, "password"))
+	return "hysteria2://" + url.PathEscape(auth) + "@" + addr + "/?" + q.Encode() + "#" + url.PathEscape(label)
+}
+
+// salamander is the Salamander FinalMask password of a stream ("" without).
+func salamander(stream obj) string {
+	if arr, ok := sub(stream, "finalmask")["udp"].([]any); ok {
+		for _, m := range arr {
+			if mm, ok := m.(obj); ok && str(mm, "type") == "salamander" {
+				return str(mm, "settings", "password")
+			}
+		}
+	}
+	return ""
 }
 
 func firstNonEmpty(v ...string) string {
@@ -294,6 +409,15 @@ func X25519() (private, public string, err error) {
 	if _, err = rand.Read(priv); err != nil {
 		return
 	}
+	return X25519From(priv)
+}
+
+// X25519From is the Reality key pair of a 32-byte seed, clamped as xray does.
+func X25519From(seed []byte) (private, public string, err error) {
+	if len(seed) != 32 {
+		return "", "", errors.New("x25519: seed must be 32 bytes")
+	}
+	priv := append([]byte(nil), seed...)
 	priv[0] &= 248
 	priv[31] &= 127
 	priv[31] |= 64
@@ -330,6 +454,13 @@ func PrepareSettings(protocol, settingsJSON string, count int, emailPrefix strin
 		case "shadowsocks":
 			c["method"] = str(settings, "method")
 			c["password"] = randHex(16)
+			if strings.HasPrefix(str(settings, "method"), "2022-") {
+				// SS-2022 user keys are base64 of the cipher's key size, and
+				// the method is the inbound's (as the panel's form does).
+				c["method"], c["password"] = "", randKey(ssKeyLen(str(settings, "method")))
+			}
+		case "hysteria":
+			c["auth"] = randHex(16)
 		default:
 			return "", fmt.Errorf("cannot generate clients for %q", protocol)
 		}
@@ -342,13 +473,62 @@ func PrepareSettings(protocol, settingsJSON string, count int, emailPrefix strin
 	return marshal(settings)
 }
 
+// ssKeyLen is the key size, in bytes, of an SS-2022 method.
+func ssKeyLen(method string) int {
+	if strings.Contains(method, "aes-128") {
+		return 16
+	}
+	return 32
+}
+
+func randKey(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+// VLESSEnc generates a VLESS Encryption pair the way `xray vlessenc` does
+// with X25519 authentication: decryption (the server half, with the private
+// key) and encryption (the client half, with the public key).
+func VLESSEnc() (decryption, encryption string, err error) {
+	priv, pub, err := X25519()
+	if err != nil {
+		return "", "", err
+	}
+	return "mlkem768x25519plus.native.600s." + priv, "mlkem768x25519plus.native.0rtt." + pub, nil
+}
+
+// PrepareVLESSEnc fills in a VLESS Encryption pair when a vless inbound asks
+// for one with "decryption": "vlessenc"; like Reality keys, it is generated
+// once so every server shares it.
+func PrepareVLESSEnc(protocol, settingsJSON string) (string, error) {
+	settings := parse(settingsJSON)
+	if protocol != "vless" || str(settings, "decryption") != "vlessenc" {
+		return settingsJSON, nil
+	}
+	dec, enc, err := VLESSEnc()
+	if err != nil {
+		return "", err
+	}
+	settings["decryption"], settings["encryption"] = dec, enc
+	// Xray refuses fallbacks next to a decryption.
+	delete(settings, "fallbacks")
+	return marshal(settings)
+}
+
 // NormalizeSettings fixes client fields to the types 3x-ui v3 decodes strictly
 // (tgId is an int64; older templates and panels used ""), leaving the rest as is.
 func NormalizeSettings(settingsJSON string) string {
 	settings := parse(settingsJSON)
 	arr, ok := settings["clients"].([]any)
-	if !ok {
+	_, hasFallbacks := settings["fallbacks"]
+	if !ok && !hasFallbacks {
 		return settingsJSON
+	}
+	// Xray refuses "fallbacks" (even an empty list) next to a VLESS
+	// Encryption "decryption"; the whole xray would not start.
+	if d := str(settings, "decryption"); hasFallbacks && d != "" && d != "none" {
+		delete(settings, "fallbacks")
 	}
 	for _, c := range arr {
 		m, ok := c.(obj)
@@ -390,6 +570,21 @@ func PrepareStream(streamJSON string) (string, error) {
 			r["shortIds"] = []any{randHex(4)}
 		}
 		stream["realitySettings"] = r
+	}
+	// A Salamander FinalMask (Hysteria2) without a password gets one, shared
+	// by every server like the Reality keys.
+	if fm, ok := stream["finalmask"].(obj); ok {
+		if arr, ok := fm["udp"].([]any); ok {
+			for _, m := range arr {
+				if mm, ok := m.(obj); ok && str(mm, "type") == "salamander" {
+					st := sub(mm, "settings")
+					if str(st, "password") == "" {
+						st["password"] = randHex(16)
+					}
+					mm["settings"] = st
+				}
+			}
+		}
 	}
 	return marshal(stream)
 }

@@ -62,6 +62,9 @@ type hzServer struct {
 			ID int64  `json:"id"`
 			IP string `json:"ip"`
 		} `json:"ipv4"`
+		IPv6 *struct {
+			IP string `json:"ip"` // the routed /64
+		} `json:"ipv6"`
 	} `json:"public_net"`
 	Datacenter struct {
 		Location struct {
@@ -75,6 +78,9 @@ func (s *hzServer) instance() *Instance {
 	if s.PublicNet.IPv4 != nil {
 		inst.IPv4 = s.PublicNet.IPv4.IP
 		inst.IPRef = strconv.FormatInt(s.PublicNet.IPv4.ID, 10)
+	}
+	if s.PublicNet.IPv6 != nil {
+		inst.IPv6 = hostIPv6(s.PublicNet.IPv6.IP)
 	}
 	return inst
 }
@@ -275,6 +281,12 @@ func (h *Hetzner) action(ctx context.Context, path string, body any) error {
 // RotateIP swaps the Primary IPv4: poweroff → unassign old → assign new (or a
 // kept one) → poweron, then deletes the old IP unless it should be kept.
 func (h *Hetzner) RotateIP(ctx context.Context, inst *Instance, opts RotateOptions) (*RotateResult, error) {
+	if opts.IPv6 {
+		// The /64 belongs to the server: only a new server gets a new one.
+		opts.KeepOld = false
+		opts.ReuseIPRef = ""
+		return recreate(ctx, h, inst, opts, nil)
+	}
 	s, err := h.get(ctx, inst.Ref)
 	if err != nil {
 		return nil, err

@@ -1,7 +1,7 @@
 import { Table, Tag, Typography } from 'antd'
 import type { CheckProbe } from '../api/types'
 
-const sourceLabel: Record<string, string> = { 'check-host': 'check-host', globalping: 'Globalping', local: 'کنترل (خارج)' }
+const sourceLabel: Record<string, string> = { 'check-host': 'check-host', 'check-host.cc': 'check-host.cc', globalping: 'Globalping', atlas: 'RIPE Atlas', local: 'کنترل (خارج)' }
 
 /** ProbeTable lists the vantage points behind one reachability verdict. */
 export function ProbeTable({ probes }: { probes: CheckProbe[] }) {

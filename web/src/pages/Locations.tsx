@@ -1,12 +1,42 @@
-import { useEffect, useState } from 'react'
-import { Alert, Button, Col, Flex, Form, Input, InputNumber, Modal, Row, Select, Switch, Table, Tag, Typography } from 'antd'
-import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
-import { del, keys, post, put, useAction, useLocations, usePlans, useProviders, useRegions, useSettings } from '../api/hooks'
+import { createContext, useContext, useEffect, useState, type HTMLAttributes } from 'react'
+import { Alert, Badge, Button, Card, Col, Divider, Flex, Form, Input, InputNumber, Modal, Row, Select, Switch, Table, Tag, Tooltip, Typography } from 'antd'
+import { ApartmentOutlined, ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, HolderOutlined, LockOutlined, PlusOutlined, SyncOutlined } from '@ant-design/icons'
+import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import {
+  del, keys, post, put, useAction, useCDNAddons, useCloudflare, useCloudflareZones, useLocations, useNodes, usePlans, useProviders, useRegions, useSettings,
+} from '../api/hooks'
+import { Link } from 'react-router-dom'
 import type { Location } from '../api/types'
 import { PageHeader } from '../components/PageHeader'
 import { ConfirmButton } from '../components/ConfirmButton'
 import { EmptyState } from '../components/EmptyState'
-import { flagEmoji, money } from '../lib/format'
+import { flagEmoji, formatGB, money } from '../lib/format'
+
+type DragHandle = Pick<ReturnType<typeof useSortable>, 'attributes' | 'listeners' | 'setActivatorNodeRef'>
+const HandleContext = createContext<DragHandle | null>(null)
+
+export function DragHandleButton() {
+  const h = useContext(HandleContext)
+  return (
+    <Button
+      size="small" type="text" icon={<HolderOutlined />} aria-label="بکشید تا جابه‌جا شود"
+      style={{ cursor: 'grab', touchAction: 'none' }}
+      ref={h?.setActivatorNodeRef as never} {...h?.attributes} {...h?.listeners}
+    />
+  )
+}
+
+export function SortableRow(props: HTMLAttributes<HTMLTableRowElement> & { 'data-row-key'?: number }) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: props['data-row-key'] ?? 0 })
+  const style = { ...props.style, transform: CSS.Translate.toString(transform), transition, ...(isDragging ? { position: 'relative' as const, zIndex: 9, background: 'rgba(22,119,255,.08)' } : {}) }
+  return (
+    <HandleContext.Provider value={{ attributes, listeners, setActivatorNodeRef }}>
+      <tr {...props} ref={setNodeRef} style={style} />
+    </HandleContext.Provider>
+  )
+}
 
 /**
  * Locations is the automatic placement list. A new server (or a replacement
@@ -18,20 +48,34 @@ import { flagEmoji, money } from '../lib/format'
 export function Locations() {
   const { data, isLoading } = useLocations()
   const { data: settings } = useSettings()
+  const { data: addons } = useCDNAddons()
+  const addonName = new Map((addons ?? []).map((a) => [a.id, a]))
   const [editing, setEditing] = useState<Location | 'new' | null>(null)
   const inv = [keys.locations]
   const reorder = useAction((ids: number[]) => post('/locations/reorder', { ids }), { invalidate: inv })
   const remove = useAction((id: number) => del(`/locations/${id}`), { success: 'حذف شد', invalidate: inv })
   const toggle = useAction((l: Location) => put(`/locations/${l.id}`, { ...l, enabled: !l.enabled }), { invalidate: inv })
-  const list = data ?? []
+  // The dragged order shows at once; the server's answer replaces it.
+  const [dragged, setDragged] = useState<Location[] | null>(null)
+  const list = dragged ?? data ?? []
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
+  const apply = (next: Location[]) => {
+    setDragged(next)
+    reorder.mutate(next.map((l) => l.id), { onSettled: () => setDragged(null) })
+  }
+  const onDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return
+    const from = list.findIndex((l) => l.id === active.id)
+    const to = list.findIndex((l) => l.id === over.id)
+    if (from < 0 || to < 0) return
+    apply(arrayMove(list, from, to))
+  }
   const defaultCap = settings?.['auto.max_per_location'] ?? '5'
 
   const move = (i: number, dir: -1 | 1) => {
-    const ids = list.map((l) => l.id)
     const j = i + dir
-    if (j < 0 || j >= ids.length) return
-    ;[ids[i], ids[j]] = [ids[j], ids[i]]
-    reorder.mutate(ids)
+    if (j < 0 || j >= list.length) return
+    apply(arrayMove(list, i, j))
   }
 
   return (
@@ -49,16 +93,21 @@ export function Locations() {
           <li>اگر هیچ IP سالمی نبود، همه پاک و لوکیشن بعدی امتحان می‌شود. تعویض IP ناموفق هم به همین‌جا می‌آید.</li>
         </ol>
       } />
+      <MasterCard locations={list} />
       {!isLoading && list.length === 0 ? (
         <EmptyState text="هنوز لوکیشنی اضافه نشده" action={<Button type="primary" onClick={() => setEditing('new')}>افزودن لوکیشن</Button>} />
       ) : (
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <SortableContext items={list.map((l) => l.id)} strategy={verticalListSortingStrategy}>
         <Table<Location>
-          loading={isLoading || reorder.isPending} rowKey="id" size="small" dataSource={list} pagination={false} scroll={{ x: 760 }}
+          loading={isLoading} rowKey="id" size="small" dataSource={list} pagination={false} scroll={{ x: 760 }}
+          components={{ body: { row: SortableRow } }}
           columns={[
             {
-              title: 'اولویت', width: 110,
+              title: 'اولویت', width: 150,
               render: (_, _l, i) => (
                 <Flex gap={4} align="center">
+                  <DragHandleButton />
                   <Typography.Text strong style={{ width: 20 }}>{i + 1}</Typography.Text>
                   <Button size="small" type="text" icon={<ArrowUpOutlined />} disabled={i === 0} onClick={() => move(i, -1)} aria-label="بالاتر" />
                   <Button size="small" type="text" icon={<ArrowDownOutlined />} disabled={i === list.length - 1} onClick={() => move(i, 1)} aria-label="پایین‌تر" />
@@ -68,7 +117,31 @@ export function Locations() {
             { title: 'حساب', render: (_, l) => <Tag>{l.provider_account?.name ?? l.provider_account_id}</Tag> },
             { title: 'منطقه', dataIndex: 'region', render: (r: string, l) => <span dir="ltr">{flagEmoji(l.country)} {r}</span> },
             { title: 'پلن', dataIndex: 'plan', render: (p: string) => <span dir="ltr">{p}</span> },
+            { title: 'IP', dataIndex: 'ip_family', render: (f: string) => (f === 'v6' ? <Tag color="purple">IPv6</Tag> : <Tag>IPv4</Tag>) },
+            {
+              title: 'دامنه', render: (_, l) => (l.cdn_addon_id ? (
+                <Tooltip title={addonName.get(l.cdn_addon_id) ? `${addonName.get(l.cdn_addon_id)!.direct_pattern.replace('{n}', '1')} + ${addonName.get(l.cdn_addon_id)!.cdn_pattern.replace('{n}', '1')}.${addonName.get(l.cdn_addon_id)!.cf_zone_name}` : undefined}>
+                  <Tag color="orange">افزونه CDN: {addonName.get(l.cdn_addon_id)?.name ?? l.cdn_addon_id}</Tag>
+                </Tooltip>
+              ) : l.cf_account_id ? (
+                <Flex gap={4} align="center">
+                  <span dir="ltr">{l.dns_pattern.replace('{n}', '1')}.{l.cf_zone_name}</span>
+                  {l.ssl && <Tooltip title="SSL"><LockOutlined style={{ color: '#52c41a' }} /></Tooltip>}
+                  {l.dns_proxied && <Tag color="orange" style={{ marginInlineStart: 2 }}>proxied</Tag>}
+                </Flex>
+              ) : <Typography.Text type="secondary">IP</Typography.Text>),
+            },
+            {
+              title: 'نود', dataIndex: 'node_mode', render: (on: boolean) => (on
+                ? <Tooltip title="سرورهای این لوکیشن نود پنل مادرند و در کانفیگ‌های balancer بخش «حالت‌های کانفیگ» می‌آیند"><Tag color="blue" icon={<ApartmentOutlined />}>نود</Tag></Tooltip>
+                : <Typography.Text type="secondary">—</Typography.Text>),
+            },
+            { title: 'پیشوند نام', dataIndex: 'name_prefix', render: (p: string) => (p ? <span dir="ltr">{p}-1</span> : <Typography.Text type="secondary">پیش‌فرض</Typography.Text>) },
             { title: 'ظرفیت هم‌زمان', dataIndex: 'capacity', render: (c: number) => (c > 0 ? c : <Typography.Text type="secondary">تا محدودیت ({defaultCap})</Typography.Text>) },
+            {
+              title: 'سقف ترافیک هر سرور', dataIndex: 'traffic_limit_gb',
+              render: (g: number) => (g > 0 ? <span dir="ltr">{formatGB(g)}</span> : <Typography.Text type="secondary">سراسری</Typography.Text>),
+            },
             { title: 'فعال', dataIndex: 'enabled', render: (_, l) => <Switch size="small" checked={l.enabled} onChange={() => toggle.mutate(l)} /> },
             {
               title: '', width: 90, render: (_, l) => (
@@ -80,6 +153,8 @@ export function Locations() {
             },
           ]}
         />
+        </SortableContext>
+        </DndContext>
       )}
       <LocationModal value={editing} onClose={() => setEditing(null)} />
     </>
@@ -93,8 +168,131 @@ interface FormValues {
   image?: string
   country?: string
   capacity: number
+  traffic_limit_gb: number
   enabled: boolean
   note?: string
+  cf_account_id?: number
+  cf_zone_id?: string
+  cf_zone_name?: string
+  dns_pattern?: string
+  dns_proxied: boolean
+  ssl: boolean
+  ip_family: 'v4' | 'v6'
+  name_prefix?: string
+  cdn_addon_id?: number
+  panel_json?: boolean
+  profile?: string
+  reality_snis?: string
+  node_mode?: boolean
+  balancer_strategy?: string
+}
+
+/**
+ * MasterCard shows the master 3x-ui panel that node locations register their
+ * servers on, the nodes as the master sees them, and builds the master.
+ */
+function MasterCard({ locations }: { locations: Location[] }) {
+  const { data, isLoading } = useNodes()
+  const { data: accounts } = useProviders()
+  const [open, setOpen] = useState(false)
+  const [form] = Form.useForm<{ account_id?: number; region?: string; plan?: string }>()
+  const accountId = Form.useWatch('account_id', form)
+  const region = Form.useWatch('region', form)
+  const regions = useRegions(accountId)
+  const plans = usePlans(accountId, region)
+  const create = useAction((v: { account_id?: number; region?: string; plan?: string }) => post('/nodes/master', v), {
+    success: 'ساخت پنل مادر در صف قرار گرفت', invalidate: [keys.nodes, keys.servers, ['jobs']], onSuccess: () => setOpen(false),
+  })
+  const sync = useAction(() => post('/nodes/sync', {}), { success: 'همگام‌سازی در صف قرار گرفت', invalidate: [keys.nodes, ['jobs']] })
+  const master = data?.master
+  const ready = !!master && master.status === 'active' && master.xui_port > 0
+  const locName = new Map(locations.map((l) => [l.id, `${flagEmoji(l.country)} ${l.region}`]))
+  const anyNode = locations.some((l) => l.node_mode)
+  if (isLoading) return null
+  return (
+    <Card size="small" style={{ marginBottom: 16 }} title={<Flex gap={8} align="center"><ApartmentOutlined /> پنل مادر و نودها</Flex>}
+      extra={ready
+        ? <Button size="small" icon={<SyncOutlined />} loading={sync.isPending} disabled={!anyNode && !data?.uploads.length} onClick={() => sync.mutate()}>همگام‌سازی کانفیگ balancer</Button>
+        : !master && <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>ساخت پنل مادر</Button>}>
+      {!master && (
+        <Typography.Text type="secondary">
+          برای «حالت نود» یک سرور جدا لازم است که پنل مادر 3x-ui روی آن نصب شود؛ سرورهای لوکیشن‌های نود خودکار با SSL به آن اضافه می‌شوند.
+        </Typography.Text>
+      )}
+      {master && (
+        <Flex vertical gap={8}>
+          <Flex gap={8} align="center" wrap>
+            <Badge status={ready ? 'success' : master.status === 'error' ? 'error' : 'processing'} />
+            <Typography.Text strong>{master.name}</Typography.Text>
+            <span dir="ltr">{master.ipv4 || '—'}</span>
+            {!ready && <Tag>{master.status}</Tag>}
+            {master.panel_version && <Tag>3x-ui {master.panel_version}</Tag>}
+          </Flex>
+          {data?.error && <Alert type="error" showIcon title="پنل مادر در دسترس نیست" description={data.error} />}
+          {ready && !data?.error && (data?.nodes.length ?? 0) === 0 && (
+            <Typography.Text type="secondary">هنوز نودی ثبت نشده؛ «حالت نود» را روی یک لوکیشن روشن کنید.</Typography.Text>
+          )}
+          {(data?.nodes.length ?? 0) > 0 && (
+            <Flex gap={6} wrap>
+              {data!.nodes.map((n) => (
+                <Tooltip key={n.id} title={n.lastError || `${n.address}:${n.port}${n.latencyMs ? ` · ${n.latencyMs}ms` : ''}${n.xrayVersion ? ` · xray ${n.xrayVersion}` : ''}`}>
+                  <Tag color={n.status === 'online' ? 'green' : n.status === 'offline' ? 'red' : 'default'}>{n.name}</Tag>
+                </Tooltip>
+              ))}
+            </Flex>
+          )}
+          {(data?.uploads.length ?? 0) > 0 && (
+            <Flex gap={6} wrap align="center">
+              <Typography.Text type="secondary">کانفیگ‌های balancer:</Typography.Text>
+              {data!.uploads.map((u) => (
+                <Tooltip key={u.id} title={u.error || `${u.location_id ? (locName.get(u.location_id) ?? '') : 'همهٔ نودها'} · ${u.outbounds} پروکسی`}>
+                  <Tag color={u.error ? 'warning' : u.active ? 'blue' : 'default'} dir="ltr">{u.name} ({u.outbounds})</Tag>
+                </Tooltip>
+              ))}
+            </Flex>
+          )}
+        </Flex>
+      )}
+      <Modal open={open} title="ساخت پنل مادر" okText="ساخت" cancelText="انصراف" confirmLoading={create.isPending}
+        onCancel={() => setOpen(false)} onOk={() => form.validateFields().then((v) => create.mutate(v))} destroyOnHidden>
+        <Alert type="info" showIcon style={{ marginBottom: 12 }} title="یک سرور کوچک کافی است"
+          description="روی این سرور فقط 3x-ui نصب می‌شود (بدون کانفیگ). پنل آن فقط از داخل تونل SSH در دسترس است و لازم نیست از ایران باز باشد." />
+        <Form form={form} layout="vertical" requiredMark={false}>
+          <Form.Item name="account_id" label="حساب ارائه‌دهنده" rules={[{ required: true, message: 'حساب را انتخاب کنید' }]}>
+            <Select options={accounts?.filter((a) => a.enabled).map((a) => ({ value: a.id, label: `${a.name} (${a.type})` }))}
+              onChange={() => form.setFieldsValue({ region: undefined, plan: undefined })} />
+          </Form.Item>
+          <Form.Item name="region" label="منطقه" rules={[{ required: true, message: 'منطقه را انتخاب کنید' }]}>
+            <Select showSearch={{ optionFilterProp: 'label' }} disabled={!accountId} loading={regions.isLoading}
+              options={regions.data?.map((r) => ({ value: r.id, label: `${r.country ? r.country + ' · ' : ''}${r.name}` }))}
+              onChange={() => form.setFieldsValue({ plan: undefined })} />
+          </Form.Item>
+          <Form.Item name="plan" label="پلن" rules={[{ required: true, message: 'پلن را انتخاب کنید' }]}>
+            <Select showSearch={{ optionFilterProp: 'label' }} disabled={!region} loading={plans.isLoading}
+              options={plans.data?.map((p) => ({ value: p.id, label: `${p.name}${p.price_hourly ? ` — ${money(p.price_hourly)}/h` : ''}` }))} />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </Card>
+  )
+}
+
+/** CapInput edits a cap stored in GB, typed in GB or TB (1 TB = 1024 GB). */
+function CapInput({ value, onChange }: { value?: number; onChange?: (v: number) => void }) {
+  const [unit, setUnit] = useState<1 | 1024>(value && value >= 1024 && value % 1024 === 0 ? 1024 : 1)
+  const shown = value ? value / unit : 0
+  return (
+    <Flex gap={8} wrap>
+      <InputNumber
+        min={0} step={unit === 1024 ? 0.5 : 10} value={shown} style={{ width: 200 }}
+        onChange={(v) => onChange?.(Math.round(Number(v || 0) * unit))}
+        addonAfter={<Select<1 | 1024> value={unit} onChange={setUnit} style={{ width: 70 }} options={[{ value: 1, label: 'GB' }, { value: 1024, label: 'TB' }]} />}
+      />
+      <Button onClick={() => { setUnit(1); onChange?.(200) }}>200 GB</Button>
+      <Button onClick={() => { setUnit(1024); onChange?.(9 * 1024) }}>9 TB</Button>
+      <Button type="text" onClick={() => onChange?.(0)}>سراسری</Button>
+    </Flex>
+  )
 }
 
 function LocationModal({ value, onClose }: { value: Location | 'new' | null; onClose: () => void }) {
@@ -105,15 +303,33 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
   const { data: accounts } = useProviders()
   const regions = useRegions(accountId)
   const plans = usePlans(accountId, region)
+  const cfAccountId = Form.useWatch('cf_account_id', form)
+  const zoneName = Form.useWatch('cf_zone_name', form)
+  const pattern = Form.useWatch('dns_pattern', form)
+  const proxied = Form.useWatch('dns_proxied', form)
+  const addonId = Form.useWatch('cdn_addon_id', form)
+  const { data: addons } = useCDNAddons()
+  const { data: cfAccounts } = useCloudflare()
+  const zones = useCloudflareZones(cfAccountId || undefined)
+  const nodeMode = Form.useWatch('node_mode', form)
+  const sslOn = Form.useWatch('ssl', form)
+  const { data: nodes } = useNodes()
+  const masterReady = !!nodes?.master && nodes.master.status === 'active' && nodes.master.xui_port > 0
+  // Without a zone certificate the nodes get a six-day certificate for their IP.
+  const ipCert = !addonId && !(cfAccountId && sslOn)
 
   useEffect(() => {
     if (!value) return
     form.resetFields()
-    if (existing) form.setFieldsValue(existing)
+    if (existing) form.setFieldsValue({ ...existing, cf_account_id: existing.cf_account_id || undefined, cdn_addon_id: existing.cdn_addon_id || undefined })
   }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const save = useAction((v: FormValues) => (existing ? put(`/locations/${existing.id}`, v) : post('/locations', v)), {
-    success: 'ذخیره شد', invalidate: [keys.locations], onSuccess: onClose,
+  const save = useAction((f: FormValues) => {
+    // The add-on brings its own domain and SSL; the location's own section is then off.
+    const v = { ...f, cdn_addon_id: f.cdn_addon_id ?? 0, cf_account_id: f.cdn_addon_id ? 0 : (f.cf_account_id ?? 0) }
+    return existing ? put(`/locations/${existing.id}`, v) : post('/locations', v)
+  }, {
+    success: 'ذخیره شد', invalidate: [keys.locations, keys.nodes, keys.servers, ['jobs']], onSuccess: onClose,
   })
 
   return (
@@ -126,7 +342,7 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
       onOk={() => form.validateFields().then((v) => save.mutate(v))}
       destroyOnHidden
     >
-      <Form form={form} layout="vertical" requiredMark={false} initialValues={{ capacity: 0, enabled: true }}>
+      <Form form={form} layout="vertical" requiredMark={false} initialValues={{ capacity: 0, traffic_limit_gb: 0, enabled: true, ip_family: 'v4', dns_proxied: false, ssl: true, dns_pattern: '', panel_json: false, node_mode: false, balancer_strategy: 'leastPing' }}>
         <Form.Item name="provider_account_id" label="حساب ارائه‌دهنده" rules={[{ required: true, message: 'حساب را انتخاب کنید' }]}>
           <Select
             options={accounts?.map((a) => ({ value: a.id, label: `${a.name} (${a.type})` }))}
@@ -162,12 +378,125 @@ function LocationModal({ value, onClose }: { value: Location | 'new' | null; onC
           <Col xs={12} sm={8}>
             <Form.Item name="country" label="کد کشور"><Input maxLength={2} dir="ltr" placeholder="SG" /></Form.Item>
           </Col>
+          <Col xs={24} sm={12}>
+            <Form.Item name="name_prefix" label="پیشوند نام در vpn-pannel" tooltip="کانفیگ‌های سرورهای این لوکیشن sama-1، sama-2، … نام می‌گیرند. خالی = نام پیش‌فرض"
+              rules={[{ pattern: /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/, message: 'فقط حروف انگلیسی، عدد، - و _' }]}>
+              <Input dir="ltr" maxLength={30} placeholder="sama" />
+            </Form.Item>
+          </Col>
+          <Col xs={24} sm={12}>
+            <Form.Item name="panel_json" label="ارسال JSON پنل به vpn-pannel" valuePropName="checked"
+              tooltip="روشن: کانفیگ‌های JSON خود پنل 3x-ui (همان /json/…) به‌جای لینک در vpn-pannel گذاشته می‌شود. خاموش: مثل قبل لینک">
+              <Switch />
+            </Form.Item>
+          </Col>
           <Col xs={24} sm={8}>
+            <Form.Item name="profile" label="پروفایل ورودی‌ها" tooltip="سرورهای این لوکیشن، ورودی‌های بدون پروفایل به‌علاوهٔ ورودی‌هایی که این پروفایل را دارند می‌گیرند. خالی = فقط ورودی‌های بدون پروفایل. روی سرورهایی که از این پس ساخته می‌شوند اثر دارد."
+              rules={[{ pattern: /^[a-z0-9_-]{1,32}$/, message: 'فقط حروف کوچک انگلیسی، عدد، - و _' }]}>
+              <Input dir="ltr" maxLength={32} placeholder="a" />
+            </Form.Item>
+          </Col>
+          <Col xs={24} sm={16}>
+            <Form.Item name="reality_snis" label="SNIهای Reality این لوکیشن" tooltip="هر خط یک دامنه که نزدیک سرورهای این لوکیشن (همان دیتاسنتر/ASN) میزبانی می‌شود و TLS 1.3 و H2 دارد؛ با اسکنر Reality در فرم ورودی پیدا کنید. هر سرور جدید یکی را برای همهٔ ورودی‌های Reality خودش برمی‌دارد. خالی = انتخاب خودکار: هنگام نصب، از خود سرور اسکن می‌شود (اول سایت‌های همسایه در همان /24، بعد فهرست پیش‌فرض) و یکی از هدف‌های سالم تصادفی انتخاب می‌شود.">
+              <Input.TextArea dir="ltr" autoSize={{ minRows: 2, maxRows: 6 }} placeholder={'example-one.com\nexample-two.net'} />
+            </Form.Item>
+          </Col>
+          <Col xs={12} sm={4}>
             <Form.Item name="enabled" label="فعال" valuePropName="checked"><Switch /></Form.Item>
           </Col>
+          <Col xs={12} sm={4}>
+            <Form.Item name="ip_family" label="کانفیگ‌ها روی" tooltip="ساخت خودکار در این لوکیشن، سرورها را روی این IP می‌سازد (مگر هنگام ساخت عوض شود)">
+              <Select options={[{ value: 'v4', label: 'IPv4' }, { value: 'v6', label: 'IPv6' }]} />
+            </Form.Item>
+          </Col>
         </Row>
+        <Form.Item name="traffic_limit_gb" label="سقف ترافیک هر سرور"
+          tooltip="جمع آپلود و دانلود همه اینباندهای هر سرور این لوکیشن؛ با رسیدن به آن مثل سقف سراسری عمل می‌شود. 0 = سقف سراسری تنظیمات. سقف خود سرور بر این مقدم است">
+          <CapInput />
+        </Form.Item>
         <Form.Item name="image" label="ایمیج (اختیاری)"><Input dir="ltr" /></Form.Item>
         <Form.Item name="note" label="یادداشت"><Input /></Form.Item>
+
+        <Divider titlePlacement="start" plain>حالت نود و اتصال خودکار</Divider>
+        <Row gutter={12}>
+          <Col xs={24} sm={10}>
+            <Form.Item name="node_mode" label="حالت نود" valuePropName="checked"
+              tooltip="سرورهای این لوکیشن (فعلی و جدید) خودکار به پنل مادر 3x-ui اضافه می‌شوند و در کانفیگ‌های balancer بخش «حالت‌های کانفیگ» می‌آیند؛ اگر یکی قطع شود کلاینت خودش به بقیه وصل می‌شود.">
+              <Switch disabled={!masterReady && !nodeMode} />
+            </Form.Item>
+          </Col>
+          <Col xs={24} sm={14}>
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 30 }}>
+              نام، استراتژی و لوکیشن‌های هر کانفیگ balancer در بخش <Link to="/modes">حالت‌های کانفیگ</Link> است.
+            </Typography.Paragraph>
+          </Col>
+        </Row>
+        {!masterReady && !nodeMode && (
+          <Alert type="info" showIcon style={{ marginBottom: 12 }} title="اول پنل مادر را از بالای صفحهٔ لوکیشن‌ها بسازید" />
+        )}
+        {nodeMode && ipCert && (
+          <Alert type="warning" showIcon style={{ marginBottom: 12 }} title="SSL شش‌روزهٔ IP و پورت 80"
+            description="سرورهای این لوکیشن دامنه ندارند؛ برای پنلشان گواهی IP شش‌روزهٔ Let's Encrypt گرفته و خودکار تمدید می‌شود. صدور و تمدید روی پورت 80 انجام می‌شود، پس ورودی‌های پورت 80 روی این سرورها گذاشته نمی‌شوند." />
+        )}
+
+        <Divider titlePlacement="start" plain>افزونه CDN (اختیاری)</Divider>
+        <Form.Item name="cdn_addon_id" label="افزونه CDN"
+          extra={addonId ? 'هر سرور این لوکیشن دو رکورد (مستقیم و CDN) و SSL از ابتدا می‌گیرد؛ بخش کلودفلر پایین استفاده نمی‌شود.' : 'خالی = بدون افزونه'}>
+          <Select allowClear placeholder="بدون افزونه"
+            options={addons?.map((a) => ({ value: a.id, label: `${a.name}${a.enabled ? '' : ' (غیرفعال)'} — ${a.cf_zone_name}` }))} />
+        </Form.Item>
+        {!addonId && <>
+        <Divider titlePlacement="start" plain>دامنه و SSL (کلودفلر، اختیاری)</Divider>
+        <Form.Item name="cf_account_id" label="حساب کلودفلر" extra="خالی بماند تا سرورهای این لوکیشن مثل قبل فقط با IP کار کنند.">
+          <Select
+            allowClear placeholder="بدون دامنه"
+            options={cfAccounts?.filter((a) => a.enabled).map((a) => ({ value: a.id, label: a.name }))}
+            onChange={() => form.setFieldsValue({ cf_zone_id: undefined, cf_zone_name: undefined })}
+          />
+        </Form.Item>
+        {!!cfAccountId && (
+          <>
+            <Row gutter={12}>
+              <Col xs={24} sm={12}>
+                <Form.Item name="cf_zone_id" label="دامنه" rules={[{ required: true, message: 'دامنه را انتخاب کنید' }]}
+                  validateStatus={zones.error ? 'error' : undefined} help={zones.error ? (zones.error as Error).message : undefined}>
+                  <Select
+                    showSearch={{ optionFilterProp: 'label' }} loading={zones.isLoading}
+                    options={zones.data?.map((z) => ({ value: z.id, label: z.name }))}
+                    onChange={(id) => form.setFieldsValue({ cf_zone_name: zones.data?.find((z) => z.id === id)?.name })}
+                  />
+                </Form.Item>
+                <Form.Item name="cf_zone_name" hidden><Input /></Form.Item>
+              </Col>
+              <Col xs={24} sm={12}>
+                <Form.Item name="dns_pattern" label="الگوی ساب‌دامین"
+                  rules={[
+                    { required: true, message: 'الگو لازم است' },
+                    { pattern: /^[a-zA-Z0-9-]*\{n\}[a-zA-Z0-9-]*$/, message: 'یک برچسب با {n}، مثل fr{n}' },
+                  ]}
+                  extra={zoneName && pattern?.includes('{n}') ? <span dir="ltr">{pattern.toLowerCase().replace('{n}', '1')}.{zoneName}, {pattern.toLowerCase().replace('{n}', '2')}.{zoneName}, …</span> : 'مثلاً fr{n} → fr1، fr2، …'}>
+                  <Input dir="ltr" placeholder="fr{n}" />
+                </Form.Item>
+              </Col>
+              <Col xs={12}>
+                <Form.Item name="ssl" label="SSL (گواهی wildcard)" valuePropName="checked"
+                  tooltip={`گواهی *.دامنه از Let's Encrypt گرفته و در ${'/root/cert/'} سرور کپی می‌شود؛ پنل 3x-ui هم https می‌شود.`}>
+                  <Switch />
+                </Form.Item>
+              </Col>
+              <Col xs={12}>
+                <Form.Item name="dns_proxied" label="Proxied (ابر نارنجی)" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+              </Col>
+            </Row>
+            {proxied && (
+              <Alert type="warning" showIcon style={{ marginBottom: 12 }} title="با Proxied ترافیک از کلودفلر رد می‌شود"
+                description="فقط اینباندهای ws / grpc / xhttp روی پورت‌های مجاز کلودفلر (مثل 443، 2053، 2083، 2087، 2096، 8443) کار می‌کنند. برای اتصال مستقیم خاموش بماند." />
+            )}
+          </>
+        )}
+        </>}
       </Form>
     </Modal>
   )

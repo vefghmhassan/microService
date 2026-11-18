@@ -13,7 +13,15 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /web/dist ./web/dist
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /microserver ./cmd/server
+# Build info, passed by the updater (or install.sh). Declared after the
+# dependency layers so a new commit does not invalidate their cache.
+ARG VERSION=dev
+ARG COMMIT=
+ARG BRANCH=
+ARG BUILD_TIME=
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w -X microserver/internal/version.Version=${VERSION} -X microserver/internal/version.Commit=${COMMIT} -X microserver/internal/version.Branch=${BRANCH} -X microserver/internal/version.BuildTime=${BUILD_TIME}" \
+    -o /microserver ./cmd/server
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata su-exec && adduser -D -u 10001 app && mkdir /data && chown app /data
@@ -26,3 +34,10 @@ VOLUME /data
 EXPOSE 8090
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["microserver"]
+# Labels let the updater list the versions kept on this host.
+ARG VERSION=dev
+ARG COMMIT=
+ARG BRANCH=
+ARG BUILD_TIME=
+ARG SUBJECT=
+LABEL ms.app="microserver" ms.version="${VERSION}" ms.commit="${COMMIT}" ms.branch="${BRANCH}" ms.built="${BUILD_TIME}" ms.subject="${SUBJECT}"

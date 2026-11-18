@@ -55,7 +55,43 @@ cd web && npm ci && npm run build && cd ..
 go run ./cmd/server    # http://localhost:8090
 ```
 
-Or with Docker: `docker compose up -d --build`
+Or with Docker on a server (installs Docker if needed, clones to `/opt/microserver`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vefghmhassan/microService/main/install.sh | sudo sh
+```
+
+## Updating from the panel
+
+The **آپدیت پنل** page builds any branch or commit from git on the server and switches the panel to it. Older versions stay on the server, so you can go back to one without building it again.
+
+How it works:
+- It runs through a second container, `updater`, which has the docker socket and the checkout mounted (see `internal/updater`).
+- The panel container itself cannot rebuild or restart itself.
+
+What an update does:
+1. `git fetch`.
+2. `git archive <commit> | docker build`. This produces the image `microserver:<commit>`. The old panel keeps running while it builds, and the working tree is never touched.
+3. Backs up the database into `data/backups/` with `VACUUM INTO`, together with `master.key`. The 10 most recent backups are kept.
+4. Points `microserver:current` at the new image and recreates the container. This causes a few seconds of downtime.
+5. Waits for `/api/v1/version` to report the new commit, then checks again 10 seconds later.
+6. If either check fails, the previous image is put back automatically.
+
+The 5 most recent versions are kept.
+
+Moving to a version that is already on the server needs no build. This works for downgrades as well as upgrades. You can optionally restore a database backup at the same time; the current database is backed up first.
+
+Moving an existing Docker install to the updater (once):
+
+```bash
+cd /path/to/checkout && git pull && sudo sh install.sh
+```
+
+This sets `HOST_REPO_DIR` in `.env` and starts both containers. After that, do not run `docker compose up -d --build` by hand: it would rebuild `microserver:current` from whatever is checked out. The updater does warn when an update changes `docker-compose.yml` or the updater itself, because it cannot apply those. In that case run:
+
+```bash
+git pull && docker compose up -d --build updater
+```
 
 The container fixes the ownership of `./data` on every start, so no `chown` is needed on a new server. Back up `data/master.key` together with `data/microserver.db`. Without the key, the stored tokens and passwords cannot be decrypted.
 
@@ -72,6 +108,7 @@ What the tests cover:
 - Parsing check-host and Globalping responses, and the verdict rules.
 - Generating vless/vmess/trojan links, with Reality keys that stay stable.
 - The vpn-pannel client, including re-login when the session expires.
+- The updater: build → swap → health check, automatic rollback when the new version does not come up, no swap after a failed build, one operation at a time, and database backup and restore.
 - The full provision → filtered → rotate → install → apply → upload → rotate → replace-address flow, using a fake provider, SSH and panel.
 
 ## Settings worth knowing

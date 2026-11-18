@@ -3,12 +3,54 @@ package orchestrator
 import (
 	"context"
 	"encoding/base64"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"microserver/internal/models"
 )
+
+// The proxy script must end once its requests are answered. xray keeps
+// running until the script kills it, so waiting for every child would hang
+// the script (and the install job behind it) forever.
+func TestProxyScriptEndsWhileXrayRuns(t *testing.T) {
+	bin := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("xray-linux-amd64", "#!/bin/sh\nexec sleep 60\n")
+	write("curl", "#!/bin/sh\nprintf '204 0.01'\n")
+
+	all := []map[string]any{{"tag": "a", "protocol": "vless"}, {"tag": "b", "protocol": "vless"}}
+	script, err := proxyScript(TestReal, all, all, 30000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script = strings.ReplaceAll(script, "/usr/local/x-ui/bin", bin)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash")
+	cmd.Stdin = strings.NewReader(script)
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+	start := time.Now()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v after %s: %s", err, time.Since(start), out)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("script took %s", d)
+	}
+	got, err := parseTestOutput(TestReal, string(out), all)
+	if err != nil || len(got) != 2 || !got[0].OK || !got[1].OK {
+		t.Fatalf("results %+v (%v) from %q", got, err, out)
+	}
+}
 
 func TestApplyFullTemplateReplacesSetting(t *testing.T) {
 	p := &fakePanel{}

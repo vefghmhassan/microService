@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { Button, Checkbox, Dropdown, Flex, Modal, Space, Typography } from 'antd'
 import {
-  CloudUploadOutlined, DeleteOutlined, MoreOutlined, RetweetOutlined, RadarChartOutlined, ReloadOutlined, SwapOutlined, SyncOutlined, ToolOutlined,
+  ApartmentOutlined, ClockCircleOutlined, CloseCircleOutlined, CloudOutlined, CloudUploadOutlined, DeleteOutlined, DisconnectOutlined, SafetyCertificateOutlined, MoreOutlined, RetweetOutlined, RadarChartOutlined, ReloadOutlined, SwapOutlined, SyncOutlined, ToolOutlined,
 } from '@ant-design/icons'
-import { deleteServer, keys, serverAction, useAction } from '../api/hooks'
+import { cancelScheduledDelete, deleteServer, keys, scheduleDelete, serverAction, useAction } from '../api/hooks'
 import type { Job, Server } from '../api/types'
+import { publicIP } from './ServerIP'
 
 /**
  * ServerActions is the action bar for one server. "Rotate IP" is the main
@@ -18,6 +19,10 @@ export function ServerActions({ server, compact, onJob }: { server: Server; comp
     success: 'در صف قرار گرفت', invalidate: inv, onSuccess: (j) => onJob?.(j as Job),
   })
   const remove = useAction(() => deleteServer(server.id), { success: 'حذف در صف قرار گرفت', invalidate: inv, onSuccess: (j) => onJob?.(j as Job) })
+  const schedule = useAction(() => scheduleDelete(server.id), {
+    success: 'کانفیگ‌ها در حال حذف از پنل‌ها؛ سرور ۱۰ دقیقه بعد حذف می‌شود', invalidate: inv, onSuccess: (j) => onJob?.(j as Job),
+  })
+  const unschedule = useAction(() => cancelScheduledDelete(server.id), { success: 'حذف زمان‌بندی‌شده لغو شد', invalidate: inv })
   const busy = ['creating', 'rotating', 'installing', 'configuring', 'deleting'].includes(server.status)
   const installed = server.xui_port > 0
   const canKeep = server.provider_account?.capabilities?.can_keep_old_ip
@@ -28,7 +33,20 @@ export function ServerActions({ server, compact, onJob }: { server: Server; comp
     { key: 'upload', icon: <CloudUploadOutlined />, label: 'بارگذاری در vpn-pannel', disabled: !installed },
     { key: 'install', icon: <ToolOutlined />, label: 'نصب مجدد 3x-ui و تمپلیت' },
     { key: 'replace', icon: <RetweetOutlined />, label: 'جایگزینی با سرور جدید', disabled: !!server.replacing_at },
+    ...(server.hostname ? [{ key: 'dns', icon: <CloudOutlined />, label: 'به‌روزرسانی رکورد DNS' }] : []),
+    ...(server.ssl ? [{ key: 'cert', icon: <SafetyCertificateOutlined />, label: 'کپی مجدد گواهی SSL', disabled: !installed }] : []),
+    ...(!server.ssl && server.role !== 'master' ? [{ key: 'ip-cert', icon: <SafetyCertificateOutlined />, label: server.ip_cert ? 'تمدید SSL آی‌پی (۶ روزه)' : 'گرفتن SSL آی‌پی (۶ روزه)', disabled: !installed }] : []),
+    ...(server.role === 'node'
+      ? [
+        { key: 'node-join', icon: <ApartmentOutlined />, label: 'ثبت دوباره در پنل مادر', disabled: !installed },
+        { key: 'node-leave', icon: <ApartmentOutlined />, label: 'خروج از پنل مادر' },
+      ]
+      : server.role === '' ? [{ key: 'node-join', icon: <ApartmentOutlined />, label: 'تبدیل به نود پنل مادر', disabled: !installed }] : []),
     { type: 'divider' as const },
+    { key: 'unpublish', icon: <DisconnectOutlined />, label: 'حذف کانفیگ از پنل مقصدها', danger: true },
+    server.delete_at
+      ? { key: 'cancel-delete', icon: <CloseCircleOutlined />, label: 'لغو حذف زمان‌بندی‌شده' }
+      : { key: 'schedule-delete', icon: <ClockCircleOutlined />, label: 'حذف از پنل‌ها و حذف سرور بعد از ۱۰ دقیقه', danger: true },
     { key: 'delete', icon: <DeleteOutlined />, label: 'حذف سرور', danger: true },
   ]
 
@@ -40,6 +58,28 @@ export function ServerActions({ server, compact, onJob }: { server: Server; comp
         okText: 'حذف', okButtonProps: { danger: true }, cancelText: 'انصراف',
         onOk: () => remove.mutateAsync(),
       })
+      return
+    }
+    if (key === 'unpublish') {
+      Modal.confirm({
+        title: `کانفیگ‌های ${server.name} از پنل‌های مقصد حذف شود؟`,
+        content: 'کانفیگ‌های این سرور از همه پنل‌های مقصد (vpn-pannel) و کانفیگ‌های هوشمند پاک می‌شود. خود سرور حذف نمی‌شود و بعداً با «بارگذاری در vpn-pannel» می‌توان دوباره فرستاد.',
+        okText: 'حذف از پنل‌ها', okButtonProps: { danger: true }, cancelText: 'انصراف',
+        onOk: () => run.mutateAsync({ action: 'unpublish' }),
+      })
+      return
+    }
+    if (key === 'schedule-delete') {
+      Modal.confirm({
+        title: `سرور ${server.name} حذف شود؟`,
+        content: 'کانفیگ‌های این سرور همین الان از همه پنل‌های مقصد و کانفیگ‌های هوشمند پاک می‌شود و ۱۰ دقیقه بعد خود سرور به‌طور کامل حذف می‌شود. تا قبل از آن می‌توانید حذف را لغو کنید.',
+        okText: 'حذف', okButtonProps: { danger: true }, cancelText: 'انصراف',
+        onOk: () => schedule.mutateAsync(),
+      })
+      return
+    }
+    if (key === 'cancel-delete') {
+      unschedule.mutate()
       return
     }
     if (key === 'replace') {
@@ -91,7 +131,7 @@ export function ServerActions({ server, compact, onJob }: { server: Server; comp
       >
         <Flex vertical gap={12}>
           <Typography.Text>
-            IP فعلی <Typography.Text code>{server.ipv4 || '—'}</Typography.Text> کنار گذاشته می‌شود، IP جدید از ایران چک می‌شود
+            IP فعلی <Typography.Text code>{publicIP(server) || '—'}</Typography.Text> کنار گذاشته می‌شود، IP جدید از ایران چک می‌شود
             و کانفیگ‌ها در vpn-pannel به IP جدید منتقل می‌شوند.
           </Typography.Text>
           {canKeep && (

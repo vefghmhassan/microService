@@ -60,11 +60,123 @@ type Location struct {
 	Country           string           `gorm:"size:2" json:"country"`
 	// Capacity is how many servers may be tried at once here. 0 means
 	// "until the provider refuses", bounded by the auto.max_per_location setting.
-	Capacity  int       `json:"capacity"`
-	Enabled   bool      `json:"enabled"`
-	Note      string    `gorm:"size:255" json:"note"`
+	Capacity int  `json:"capacity"`
+	Enabled  bool `json:"enabled"`
+	// TrafficLimitGB is the cap of every server built here, unless the
+	// server has its own (0 = use the global setting).
+	TrafficLimitGB int `json:"traffic_limit_gb"`
+	// IPFamily is what servers built here are used over: "v4" or "v6".
+	IPFamily string `gorm:"size:2;default:v4" json:"ip_family"`
+	// DNS: when CFAccountID is set, every server built here gets a numbered
+	// subdomain of CFZoneName from DNSPattern ("fr{n}" → fr1.example.com),
+	// and a replacement here takes over its predecessor's name.
+	DNS
+	// NamePrefix names the configs servers built here get in vpn-pannel:
+	// "sama" gives sama-1, sama-2, … Empty keeps the default name.
+	NamePrefix string `gorm:"size:40" json:"name_prefix"`
+	// CDNAddonID turns the CDN add-on on for servers built here (0 = off). It
+	// replaces the DNS fields above: the add-on brings its own zone.
+	CDNAddonID uint `gorm:"column:cdn_addon_id;index" json:"cdn_addon_id"`
+	// PanelJSON uploads the 3x-ui panel's own JSON subscription configs to
+	// vpn-pannel for servers built here, instead of share links (off = links).
+	PanelJSON bool `gorm:"column:panel_json" json:"panel_json"`
+	// Profile is the inbound profile of servers built here: they get the
+	// template inbounds open to every server plus those listing this profile.
+	Profile string `gorm:"size:32" json:"profile"`
+	// RealitySNIs are Reality targets hosted near this location's servers
+	// (same ASN), one per line or comma separated. A server built here takes
+	// one of them for all its Reality inbounds; empty keeps the template's.
+	RealitySNIs string `gorm:"column:reality_snis;type:text" json:"reality_snis"`
+	// NodeMode registers every server built here as a node of the master
+	// 3x-ui panel and puts them behind one balancer config in vpn-pannel, so
+	// a client moves to another server by itself when one goes away.
+	NodeMode bool `gorm:"column:node_mode" json:"node_mode"`
+	// BalancerStrategy is that balancer's strategy (empty = leastPing).
+	BalancerStrategy string    `gorm:"column:balancer_strategy;size:12" json:"balancer_strategy"`
+	Note             string    `gorm:"size:255" json:"note"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// CDNAddon is the CDN add-on: every server built in a location that uses it
+// gets two Cloudflare records for its IP — DirectPattern with the proxy off
+// (TLS, Hysteria2 and the 3x-ui panel over SSL) and CDNPattern with the proxy
+// on (CDN inbounds and clean IPs) — the zone's certificate before 3x-ui is
+// installed, and the add-on's own inbounds next to the shared template.
+type CDNAddon struct {
+	ID            uint   `gorm:"primaryKey" json:"id"`
+	Name          string `gorm:"column:name;size:100;not null" json:"name"`
+	Enabled       bool   `gorm:"column:enabled" json:"enabled"`
+	CFAccountID   uint   `gorm:"column:cf_account_id;index" json:"cf_account_id"`
+	CFZoneID      string `gorm:"column:cf_zone_id;size:64" json:"cf_zone_id"`
+	CFZoneName    string `gorm:"column:cf_zone_name;size:255" json:"cf_zone_name"`
+	DirectPattern string `gorm:"column:direct_pattern;size:63" json:"direct_pattern"`
+	CDNPattern    string `gorm:"column:cdn_pattern;size:63" json:"cdn_pattern"`
+	// CleanIPCount is how many clean Cloudflare addresses each inbound marked
+	// CleanIPs gets as extra configs (also uploaded to vpn-pannel).
+	CleanIPCount int `gorm:"column:clean_ip_count" json:"clean_ip_count"`
+	// Hash is the content hash of the add-on's inbounds; servers whose
+	// AddonHash differs have drifted.
+	Hash      string    `gorm:"column:hash;size:64" json:"hash"`
+	Note      string    `gorm:"column:note;size:255" json:"note"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// On reports whether the add-on can be used for new servers.
+func (a CDNAddon) On() bool {
+	return a.Enabled && a.CFAccountID != 0 && a.CFZoneID != "" && a.DirectPattern != "" && a.CDNPattern != ""
+}
+
+// Routes of an add-on inbound: which of the server's two names its links use.
+const (
+	RouteDirect = "direct" // the grey (DNS-only) name
+	RouteCDN    = "cdn"    // the orange (proxied) name
+)
+
+// DNS is the Cloudflare part of a Location, copied onto each server built
+// there so editing or deleting the location never orphans a record.
+type DNS struct {
+	CFAccountID uint   `gorm:"column:cf_account_id;index" json:"cf_account_id"`
+	CFZoneID    string `gorm:"column:cf_zone_id;size:64" json:"cf_zone_id"`
+	CFZoneName  string `gorm:"column:cf_zone_name;size:255" json:"cf_zone_name"`
+	DNSPattern  string `gorm:"column:dns_pattern;size:63" json:"dns_pattern"`
+	DNSProxied  bool   `gorm:"column:dns_proxied" json:"dns_proxied"`
+	// SSL pushes the zone's wildcard certificate to the server and serves
+	// the 3x-ui panel over https.
+	SSL bool `gorm:"column:ssl" json:"ssl"`
+}
+
+// On reports whether DNS is configured.
+func (d DNS) On() bool { return d.CFAccountID != 0 && d.CFZoneID != "" && d.DNSPattern != "" }
+
+// CloudflareAccount is one Cloudflare API token (Zone:Read + DNS:Edit).
+type CloudflareAccount struct {
+	ID    uint          `gorm:"primaryKey" json:"id"`
+	Name  string        `gorm:"size:100;not null" json:"name"`
+	Token secret.String `json:"-"`
+	// AcmeEmail is the Let's Encrypt contact for this account's certificates.
+	AcmeEmail string    `gorm:"size:255" json:"acme_email"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Certificate is the wildcard certificate of one zone (*.zone and zone),
+// issued centrally over DNS-01 and copied to every server that uses it.
+type Certificate struct {
+	ID          uint          `gorm:"primaryKey" json:"id"`
+	CFAccountID uint          `gorm:"column:cf_account_id;index" json:"cf_account_id"`
+	CFZoneID    string        `gorm:"column:cf_zone_id;size:64" json:"cf_zone_id"`
+	ZoneName    string        `gorm:"size:255;uniqueIndex" json:"zone_name"`
+	CertPEM     string        `gorm:"type:text" json:"-"`
+	KeyPEM      secret.String `json:"-"`
+	AccountKey  secret.String `json:"-"` // the ACME account key (PEM)
+	NotAfter    *time.Time    `json:"not_after"`
+	IssuedAt    *time.Time    `json:"issued_at"`
+	LastError   string        `gorm:"type:text" json:"last_error"`
+	CreatedAt   time.Time     `json:"created_at"`
+	UpdatedAt   time.Time     `json:"updated_at"`
 }
 
 // Server lifecycle states.
@@ -102,7 +214,60 @@ type Server struct {
 	Status            string           `gorm:"size:20;index" json:"status"`
 	IPv4              string           `gorm:"size:45;index" json:"ipv4"`
 	IPRef             string           `gorm:"size:64" json:"ip_ref"`
-	SSHHostKey        string           `gorm:"type:text" json:"-"`
+	// IPv6 is the server's public IPv6 (every server is dual-stack).
+	IPv6 string `gorm:"size:45;index" json:"ipv6"`
+	// IPFamily is what clients use: "v4", or "v6" for links, DNS (AAAA),
+	// reachability checks and the v6 templates. SSH and installs always go
+	// over IPv4.
+	IPFamily   string `gorm:"size:2;default:v4" json:"ip_family"`
+	SSHHostKey string `gorm:"type:text" json:"-"`
+	// LocationID is the placement entry the server was built for (0 = manual).
+	LocationID uint `gorm:"index" json:"location_id"`
+	// IdentitySeed makes the server's Reality inbounds its own: keys, short
+	// IDs, spiderX, client IDs and paths are derived from it, so a config
+	// taken from the app only identifies this one server. Empty (servers
+	// built before the feature) keeps the shared template values.
+	IdentitySeed secret.String `gorm:"column:identity_seed" json:"-"`
+	// IdentityVer is what the seed covers: 1 (or 0 with a seed) only the
+	// Reality inbounds, 2 the client IDs and passwords of every inbound, 3
+	// the same with one ID per client email instead of one per inbound. A
+	// server keeps the version it was built with, so its links never change
+	// under a panel that still has the old values.
+	IdentityVer int `gorm:"column:identity_ver" json:"-"`
+	// RealitySNI is the Reality target picked for this server from its
+	// location's list when the seed was set (empty = the template's).
+	RealitySNI string `gorm:"column:reality_sni;size:255" json:"reality_sni"`
+	// RealitySNIAuto marks a target the server found by scanning; while the
+	// server is new, one that fails the config test is replaced by another.
+	RealitySNIAuto bool `gorm:"column:reality_sni_auto" json:"reality_sni_auto"`
+	// Profile is the inbound profile, copied from the location at creation.
+	Profile string `gorm:"size:32" json:"profile"`
+	// PanelName is the base name this server's configs carry in vpn-pannel
+	// when it came from a location with a name prefix ("sama-3").
+	PanelName string `gorm:"size:80;index" json:"panel_name"`
+	DNS
+	// Hostname is the server's subdomain (empty without DNS); links and
+	// uploads use it instead of the IP.
+	Hostname     string     `gorm:"size:255;index" json:"hostname"`
+	DNSRecordID  string     `gorm:"column:dns_record_id;size:64" json:"dns_record_id"`
+	DNSError     string     `gorm:"column:dns_error;size:255" json:"dns_error"`
+	CertNotAfter *time.Time `json:"cert_not_after"`
+	// CDN add-on (CDNAddonID 0 = none). Hostname above is then the grey
+	// (DNS-only) name and CDNHostname the orange (proxied) one, same number.
+	CDNAddonID  uint   `gorm:"column:cdn_addon_id;index" json:"cdn_addon_id"`
+	CDNPattern  string `gorm:"column:cdn_pattern;size:63" json:"cdn_pattern"`
+	CDNHostname string `gorm:"column:cdn_hostname;size:255;index" json:"cdn_hostname"`
+	CDNRecordID string `gorm:"column:cdn_record_id;size:64" json:"cdn_record_id"`
+	CDNDNSError string `gorm:"column:cdn_dns_error;size:255" json:"cdn_dns_error"`
+	// AddonHash is the add-on inbounds' hash last applied to this server.
+	AddonHash string `gorm:"column:addon_hash;size:64" json:"addon_hash"`
+	// The 3x-ui panel's own side, set up like pdnczone/3x-ui-pro-configs:
+	// one client (PanelClient, with SubID) attached to every managed inbound,
+	// and the panel's subscription links (PanelSubURL, PanelSubJSON).
+	PanelClient  string `gorm:"column:panel_client;size:64" json:"panel_client"`
+	SubID        string `gorm:"column:sub_id;size:32" json:"sub_id"`
+	PanelSubURL  string `gorm:"column:panel_sub_url;size:512" json:"panel_sub_url"`
+	PanelSubJSON string `gorm:"column:panel_sub_json;size:512" json:"panel_sub_json"`
 
 	XUIPort     int           `gorm:"column:xui_port" json:"xui_port"`
 	XUIBasePath string        `gorm:"column:xui_base_path;size:64" json:"xui_base_path"`
@@ -112,19 +277,39 @@ type Server struct {
 	XUIScheme   string        `gorm:"column:xui_scheme;size:8" json:"xui_scheme"`
 	// XUIPublic is true when the panel listens on the public IP (reachable in
 	// a browser); otherwise only through the SSH tunnel.
-	XUIPublic     bool       `gorm:"column:xui_public" json:"xui_public"`
-	PanelVersion  string     `gorm:"size:32" json:"panel_version"`
-	XrayVersion   string     `gorm:"size:32" json:"xray_version"`
-	WantPanelVer  string     `gorm:"size:32" json:"want_panel_version"`
-	WantXrayVer   string     `gorm:"size:32" json:"want_xray_version"`
-	AppliedHash   string     `gorm:"size:64" json:"applied_hash"`
-	SyncStatus    string     `gorm:"size:16" json:"sync_status"`
-	UploadedAt    *time.Time `json:"uploaded_at"`
-	UploadedIP    string     `gorm:"size:45" json:"uploaded_ip"`
-	LastCheckAt   *time.Time `json:"last_check_at"`
-	LastCheckOK   *bool      `json:"last_check_ok"`
-	LastCheckNote string     `gorm:"size:255" json:"last_check_note"`
-	RotateCount   int        `json:"rotate_count"`
+	XUIPublic bool `gorm:"column:xui_public" json:"xui_public"`
+	// Role is "" for an ordinary server, RoleNode for one registered on the
+	// master 3x-ui panel and RoleMaster for the server that runs that panel.
+	Role string `gorm:"size:8;index;not null;default:''" json:"role"`
+	// NodeID is the node's id on the master panel (0 = not registered);
+	// NodeToken the node-admin API token the master reaches this panel with.
+	NodeID    int           `gorm:"column:node_id" json:"node_id"`
+	NodeToken secret.String `gorm:"column:node_token" json:"-"`
+	NodeError string        `gorm:"column:node_error;size:255" json:"node_error"`
+	// IPCert marks a panel served with a Let's Encrypt certificate for the
+	// server's bare IP (the short-lived, six-day profile); CertNotAfter is
+	// then that certificate's expiry.
+	IPCert bool `gorm:"column:ip_cert;not null;default:false" json:"ip_cert"`
+	// CertIP is the address the IP certificate was issued for.
+	CertIP       string     `gorm:"column:cert_ip;size:45" json:"-"`
+	PanelVersion string     `gorm:"size:32" json:"panel_version"`
+	XrayVersion  string     `gorm:"size:32" json:"xray_version"`
+	WantPanelVer string     `gorm:"size:32" json:"want_panel_version"`
+	WantXrayVer  string     `gorm:"size:32" json:"want_xray_version"`
+	AppliedHash  string     `gorm:"size:64" json:"applied_hash"`
+	SyncStatus   string     `gorm:"size:16" json:"sync_status"`
+	UploadedAt   *time.Time `json:"uploaded_at"`
+	// UploadedIP is the address the links in vpn-pannel point at: the IP, or
+	// the hostname when the server has one.
+	UploadedIP string `gorm:"size:255" json:"uploaded_ip"`
+	// UploadedInbounds lists the template inbound IDs (comma separated) whose
+	// links are in vpn-pannel now, so one removed or disabled later can be
+	// told apart and taken out.
+	UploadedInbounds string     `gorm:"size:1024" json:"-"`
+	LastCheckAt      *time.Time `json:"last_check_at"`
+	LastCheckOK      *bool      `json:"last_check_ok"`
+	LastCheckNote    string     `gorm:"size:255" json:"last_check_note"`
+	RotateCount      int        `json:"rotate_count"`
 	// Traffic and online users as last read from 3x-ui (all inbounds).
 	TrafficUp   int64      `json:"traffic_up"`
 	TrafficDown int64      `json:"traffic_down"`
@@ -134,13 +319,117 @@ type Server struct {
 	// How the last client-address collection for the GeoIP report went.
 	IPCollectAt   *time.Time `json:"ip_collect_at"`
 	IPCollectNote string     `gorm:"size:255" json:"ip_collect_note"`
-	// TrafficLimitGB overrides the global cap (0 = use the setting).
+	// TrafficLimitGB overrides the location's and the global cap (0 = use those).
 	TrafficLimitGB int `json:"traffic_limit_gb"`
+	// WatchFrom starts the low-usage window after the server went live on a
+	// new IP (nil = not watched); WatchBase is its traffic at that moment.
+	WatchFrom *time.Time `json:"watch_from"`
+	WatchBase int64      `json:"-"`
 	// ReplacingAt is set once a replacement was queued, so the cap fires once.
 	ReplacingAt *time.Time `json:"replacing_at"`
-	LastError   string     `gorm:"type:text" json:"last_error"`
-	CreatedAt   time.Time  `json:"created_at"`
+	// PanelRemovedAt is set when the server's configs were taken out of
+	// every vpn-pannel by hand (the server itself stays); an upload clears it.
+	PanelRemovedAt *time.Time `json:"panel_removed_at"`
+	// DeleteAt is when a scheduled full deletion runs (nil = none).
+	DeleteAt  *time.Time `gorm:"index" json:"delete_at"`
+	LastError string     `gorm:"type:text" json:"last_error"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// Server roles.
+const (
+	RoleNode   = "node"
+	RoleMaster = "master"
+)
+
+// BalancerMode is one balancer config the admin keeps: a named set of node
+// locations behind one balancer. Every enabled mode is a config in each
+// vpn-pannel and, in the same order, in the app's JSON subscription.
+type BalancerMode struct {
+	ID      uint   `gorm:"primaryKey" json:"id"`
+	Name    string `gorm:"size:100;not null;uniqueIndex" json:"name"`
+	Enabled bool   `json:"enabled"`
+	// Priority orders the modes (lower first).
+	Priority int `json:"priority"`
+	// LocationIDs (comma separated) are the locations whose nodes the mode
+	// holds; empty = every node, also those without a location.
+	LocationIDs string `gorm:"column:location_ids;size:512" json:"location_ids"`
+	// Strategy is the balancer's: leastPing (empty), leastLoad, random or
+	// roundRobin.
+	Strategy string `gorm:"size:12" json:"strategy"`
+	// ProbeInterval is how often the config tests its servers (empty = 30s).
+	ProbeInterval string `gorm:"size:16" json:"probe_interval"`
+	// AdsMode is "normal", "ads" or "both"; empty follows each vpn-pannel's
+	// own ads mode.
+	AdsMode string `gorm:"size:10" json:"ads_mode"`
+	// Country is the vpn-pannel country (empty = that of the first node).
+	Country   string    `gorm:"size:2" json:"country"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// AdsValues lists the ads flags the mode sets itself, nil when it follows
+// the vpn-pannel.
+func (m BalancerMode) AdsValues() []bool {
+	switch m.AdsMode {
+	case AdsNormal:
+		return []bool{false}
+	case AdsOnly:
+		return []bool{true}
+	case AdsBoth:
+		return []bool{false, true}
+	}
+	return nil
+}
+
+// NodeUpload is one balancer mode's config in one vpn-pannel.
+type NodeUpload struct {
+	ID uint `gorm:"primaryKey" json:"id"`
+	// ModeID is the BalancerMode the config belongs to.
+	ModeID uint `gorm:"uniqueIndex:idx_node_upload_mode" json:"mode_id"`
+	// LocationID is what older versions keyed the row by (0 = all nodes);
+	// it is only read to attach such rows to their mode. It is in the index
+	// because those rows all have mode 0 until then.
+	LocationID    uint `gorm:"uniqueIndex:idx_node_upload_mode" json:"location_id"`
+	DestinationID uint `gorm:"uniqueIndex:idx_node_upload_mode" json:"destination_id"`
+	Ads           bool `gorm:"uniqueIndex:idx_node_upload_mode" json:"ads"`
+	// BalancerID is the sub-balancer on the master panel.
+	BalancerID  int        `json:"balancer_id"`
+	Name        string     `gorm:"size:100" json:"name"`
+	PanelNodeID uint       `json:"panel_node_id"`
+	Hash        string     `gorm:"size:64" json:"hash"`
+	Outbounds   int        `json:"outbounds"`
+	Active      bool       `json:"active"`
+	PushedAt    *time.Time `json:"pushed_at"`
+	Error       string     `gorm:"size:512" json:"error"`
 	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+// IP families.
+const (
+	FamilyV4   = "v4"
+	FamilyV6   = "v6"
+	FamilyBoth = "both" // templates only: on v4 and v6 servers
+)
+
+// NormFamily returns "v6" for "v6" and "v4" for anything else.
+func NormFamily(f string) string {
+	if f == FamilyV6 {
+		return FamilyV6
+	}
+	return FamilyV4
+}
+
+// Family is the server's IP family ("v4" when unset).
+func (s *Server) Family() string { return NormFamily(s.IPFamily) }
+
+// PublicIP is the address clients use: the IPv6 on a v6 server, else the IPv4.
+func (s *Server) PublicIP() string {
+	if s.Family() == FamilyV6 {
+		return s.IPv6
+	}
+	return s.IPv4
 }
 
 // InboundStat is the latest traffic/online reading of one inbound on a server.
@@ -286,7 +575,22 @@ type CheckProbe struct {
 	Error      string  `gorm:"size:255" json:"error"`
 }
 
-// XrayTemplate is the singleton (ID=1) holding the xray parts every panel shares.
+// Template IDs of the xray rows.
+const (
+	XrayV4ID = 1
+	XrayV6ID = 2
+)
+
+// XrayID is the xray template row for an IP family.
+func XrayID(family string) uint {
+	if NormFamily(family) == FamilyV6 {
+		return XrayV6ID
+	}
+	return XrayV4ID
+}
+
+// XrayTemplate holds the xray parts every panel shares: ID=1 for IPv4
+// servers, ID=2 for IPv6 ones (empty means v6 servers use ID=1).
 type XrayTemplate struct {
 	ID        uint   `gorm:"primaryKey" json:"id"`
 	Outbounds string `gorm:"type:text" json:"outbounds"`
@@ -305,19 +609,80 @@ type XrayTemplate struct {
 // InboundTemplate is one inbound created identically on every panel. Settings
 // already carries its clients so links are the same on every server.
 type InboundTemplate struct {
-	ID             uint   `gorm:"primaryKey" json:"id"`
-	Remark         string `gorm:"size:100;not null" json:"remark"`
-	Protocol       string `gorm:"size:16;not null" json:"protocol"`
-	Port           int    `gorm:"uniqueIndex;not null" json:"port"`
+	ID       uint   `gorm:"primaryKey" json:"id"`
+	Remark   string `gorm:"size:100;not null" json:"remark"`
+	Protocol string `gorm:"size:16;not null" json:"protocol"`
+	// Port is unique per family; "both" may not share a port with either.
+	Port int `gorm:"uniqueIndex:idx_inbound_port_family;not null" json:"port"`
+	// Family is "v4", "v6" or "both": which servers get this inbound.
+	Family         string `gorm:"size:4;default:both;uniqueIndex:idx_inbound_port_family" json:"family"`
 	Enabled        bool   `json:"enabled"`
 	Settings       string `gorm:"type:text" json:"settings"`
 	StreamSettings string `gorm:"type:text" json:"stream_settings"`
 	Sniffing       string `gorm:"type:text" json:"sniffing"`
 	Upload         bool   `json:"upload"`
 	// UploadJSON sends this inbound to vpn-pannel as full client JSON configs instead of share links.
-	UploadJSON bool      `json:"upload_json"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	UploadJSON bool `json:"upload_json"`
+	// CDN marks an inbound meant to be reached through Cloudflare's proxy
+	// (ws/grpc/xhttp on a Cloudflare port). Its links send the server's
+	// hostname as SNI/Host, so they also work with a clean Cloudflare IP as
+	// the address; with TLS it needs the zone certificate and is only put on
+	// servers that have SSL.
+	CDN bool `json:"cdn"`
+	// AddonID puts the inbound in a CDN add-on instead of the shared template
+	// (0 = shared): only servers on that add-on get it.
+	AddonID uint `gorm:"column:addon_id;index" json:"addon_id"`
+	// Route is the add-on inbound's address: RouteDirect or RouteCDN.
+	Route string `gorm:"column:route;size:8" json:"route"`
+	// Fragment adds a TLS-hello fragment to this inbound's client JSON configs.
+	Fragment bool `gorm:"column:fragment" json:"fragment"`
+	// CleanIPs gives this (CDN) inbound one extra config per clean
+	// Cloudflare address, uploaded to vpn-pannel too.
+	CleanIPs bool `gorm:"column:clean_ips" json:"clean_ips"`
+	// Profiles limits the inbound to servers of these profiles (comma
+	// separated); empty puts it on every server of its family.
+	Profiles  string    `gorm:"size:255" json:"profiles"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CleanIP is a Cloudflare edge address (IP or a domain that resolves to
+// one) that is reachable from an Iranian operator. CDN links of proxied
+// servers are built with it as the address and the server's hostname as
+// SNI/Host.
+type CleanIP struct {
+	ID       uint   `gorm:"primaryKey" json:"id"`
+	Address  string `gorm:"size:255;uniqueIndex;not null" json:"address"`
+	Operator string `gorm:"size:16;index" json:"operator"`
+	// Source is "manual" or "source:<id>" of the CleanIPSource it came from;
+	// fetched rows disappear when their source no longer lists them.
+	Source    string     `gorm:"size:32;index" json:"source"`
+	Enabled   bool       `json:"enabled"`
+	LastSeen  time.Time  `json:"last_seen"`
+	CheckedAt *time.Time `json:"checked_at"`
+	// CheckOK is the last test from Iranian probes on port 443 (nil: never tested).
+	CheckOK   *bool  `json:"check_ok"`
+	CheckNote string `gorm:"size:255" json:"check_note"`
+	// CDNOK is the last test through one of our own proxied hostnames: the
+	// address really is a Cloudflare edge that serves our zone (nil: never).
+	CDNOK     *bool     `gorm:"column:cdn_ok" json:"cdn_ok"`
+	CDNMS     int       `gorm:"column:cdn_ms" json:"cdn_ms"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CleanIPSource is a URL the clean-IP list is fetched from: Clean-IP-Resolver
+// style JSON or plain text with one address (and optionally an operator) per
+// line. The built-in one is filtered by the cleanip.operators setting.
+type CleanIPSource struct {
+	ID        uint       `gorm:"primaryKey" json:"id"`
+	URL       string     `gorm:"size:1024;not null" json:"url"`
+	Builtin   bool       `json:"builtin"`
+	Enabled   bool       `json:"enabled"`
+	LastFetch *time.Time `json:"last_fetch"`
+	LastError string     `gorm:"type:text" json:"last_error"`
+	Count     int        `json:"count"`
+	CreatedAt time.Time  `json:"created_at"`
 }
 
 // Job states.
@@ -366,5 +731,111 @@ func All() []any {
 		&AdminUser{}, &ProviderAccount{}, &Location{}, &Server{}, &InboundStat{}, &IPAddress{},
 		&CheckRun{}, &CheckProbe{}, &XrayTemplate{}, &InboundTemplate{},
 		&Job{}, &JobLog{}, &Setting{}, &ClientIP{}, &IPGeo{}, &Destination{},
+		&CloudflareAccount{}, &Certificate{}, &CleanIP{}, &CleanIPSource{}, &CDNAddon{},
+		&SmartProfile{}, &SmartRule{}, &SmartUpload{}, &PanelCleanup{}, &NodeUpload{}, &BalancerMode{},
 	}
+}
+
+// PanelCleanup is a deletion in a destination panel that failed (the panel
+// was down or answered with an error): every config on Address in
+// destination DestID still has to go. It is retried until it succeeds, the
+// address is in use again, or the destination is gone.
+type PanelCleanup struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	DestID    uint      `gorm:"uniqueIndex:idx_panel_cleanup" json:"dest_id"`
+	Address   string    `gorm:"size:255;uniqueIndex:idx_panel_cleanup" json:"address"`
+	Attempts  int       `json:"attempts"`
+	LastError string    `gorm:"type:text" json:"last_error"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Smart profile scopes.
+const (
+	SmartScopeServer = "server" // one config per server, with all its nodes
+	SmartScopeAll    = "all"    // one config with every server
+)
+
+// SmartProfile defines "smart" client configs: one xray JSON holding many
+// proxy outbounds (proxy-1..N) behind an observatory and a balancer, pushed
+// to vpn-pannel and rebuilt whenever the servers change.
+type SmartProfile struct {
+	ID      uint   `gorm:"primaryKey" json:"id"`
+	Name    string `gorm:"size:100;not null" json:"name"`
+	Enabled bool   `json:"enabled"`
+	Scope   string `gorm:"size:10" json:"scope"`
+	// Family filters servers by IP family for scope "all": v4, v6 or both.
+	Family string `gorm:"size:4" json:"family"`
+	// Countries (comma separated, upper case) limits the servers; empty = all.
+	Countries string `gorm:"size:255" json:"countries"`
+	// InboundIDs (comma separated) limits the template inbounds; empty = all.
+	InboundIDs string `gorm:"column:inbound_ids;size:512" json:"inbound_ids"`
+	// NameTemplate is the vpn-pannel node name; {base} is the server's base
+	// name, {country} its country (lower case), {name} the profile name.
+	NameTemplate string `gorm:"size:100" json:"name_template"`
+	// Country is the vpn-pannel country of a scope "all" config.
+	Country string `gorm:"size:2" json:"country"`
+
+	// Observatory: "observatory" or "burst" (burstObservatory).
+	ObsKind       string `gorm:"size:12" json:"obs_kind"`
+	ProbeURL      string `gorm:"size:255" json:"probe_url"`
+	ProbeInterval string `gorm:"size:16" json:"probe_interval"`
+	Timeout       string `gorm:"size:16" json:"timeout"`
+	Sampling      int    `json:"sampling"`
+	HTTPMethod    string `gorm:"column:http_method;size:8" json:"http_method"`
+
+	// Balancer: leastPing, leastLoad, random or roundRobin.
+	Strategy string `gorm:"size:12" json:"strategy"`
+	Expected int    `json:"expected"`
+	MaxRTT   string `gorm:"column:max_rtt;size:16" json:"max_rtt"`
+
+	Fragment    bool   `json:"fragment"`
+	DNSPreset   string `gorm:"column:dns_preset;size:12" json:"dns_preset"`
+	IranDirect  bool   `json:"iran_direct"`
+	BlockAds    bool   `json:"block_ads"`
+	BlockUDP443 bool   `gorm:"column:block_udp443" json:"block_udp443"`
+	// RuleIDs are the SmartRules sent through the balancer, in order.
+	RuleIDs string `gorm:"column:rule_ids;size:512" json:"rule_ids"`
+	// DestinationIDs limits the vpn-pannels; empty = every enabled one.
+	DestinationIDs string `gorm:"column:destination_ids;size:255" json:"destination_ids"`
+	// MaxOutbounds caps the proxies in one config (0 = no cap).
+	MaxOutbounds int       `json:"max_outbounds"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// SmartRule is a routing rule smart profiles can send through their
+// balancer (Instagram, Telegram, ...).
+type SmartRule struct {
+	ID      uint   `gorm:"primaryKey" json:"id"`
+	Key     string `gorm:"size:40;index" json:"key"` // built-in preset key, empty for custom
+	Name    string `gorm:"size:100;not null" json:"name"`
+	Enabled bool   `json:"enabled"`
+	Builtin bool   `json:"builtin"`
+	// Domains and IPs hold one xray matcher per line (geosite:, domain:,
+	// full:, regexp:, keyword: / geoip:, CIDR).
+	Domains   string    `gorm:"type:text" json:"domains"`
+	IPs       string    `gorm:"column:ips;type:text" json:"ips"`
+	Ports     string    `gorm:"size:100" json:"ports"`
+	Network   string    `gorm:"size:10" json:"network"`
+	Order     int       `gorm:"column:sort_order" json:"order"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// SmartUpload is one smart config node in one vpn-pannel.
+type SmartUpload struct {
+	ID            uint       `gorm:"primaryKey" json:"id"`
+	ProfileID     uint       `gorm:"uniqueIndex:idx_smart_upload" json:"profile_id"`
+	ServerID      uint       `gorm:"uniqueIndex:idx_smart_upload" json:"server_id"` // 0 for scope "all"
+	DestinationID uint       `gorm:"uniqueIndex:idx_smart_upload" json:"destination_id"`
+	Ads           bool       `gorm:"uniqueIndex:idx_smart_upload" json:"ads"`
+	Name          string     `gorm:"size:100" json:"name"`
+	PanelNodeID   uint       `json:"panel_node_id"`
+	Hash          string     `gorm:"size:64" json:"hash"`
+	Outbounds     int        `json:"outbounds"`
+	Active        bool       `json:"active"`
+	PushedAt      *time.Time `json:"pushed_at"`
+	Error         string     `gorm:"size:512" json:"error"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }

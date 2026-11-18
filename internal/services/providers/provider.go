@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -45,7 +46,34 @@ type Instance struct {
 	Status string `json:"status"` // provider status, normalised to "running" when ready
 	IPv4   string `json:"ipv4"`
 	IPRef  string `json:"ip_ref"`
+	// IPv6 is the server's public IPv6 address (empty when it has none).
+	IPv6   string `json:"ipv6"`
 	Region string `json:"region"`
+}
+
+// hostIPv6 turns what providers report for IPv6 into one usable address:
+// "addr/128" loses its prefix length, and a routed prefix ("2a01::/64", as
+// Hetzner assigns) becomes its ::1, the address the server's image configures.
+func hostIPv6(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	ip, n, err := net.ParseCIDR(s)
+	if err != nil {
+		if p := net.ParseIP(s); p != nil && p.To4() == nil {
+			return p.String()
+		}
+		return ""
+	}
+	if ip.To4() != nil {
+		return ""
+	}
+	if ones, _ := n.Mask.Size(); ones < 128 && ip.Equal(n.IP) {
+		ip = append(net.IP(nil), n.IP...)
+		ip[15] |= 1
+	}
+	return ip.String()
 }
 
 func (i *Instance) Running() bool { return i != nil && i.Status == "running" && i.IPv4 != "" }
@@ -58,6 +86,9 @@ type RotateOptions struct {
 	ReuseIPRef string
 	// Create carries the original create parameters for recreate-based rotation.
 	Create CreateRequest
+	// IPv6 is set for servers used over IPv6: swapping the IPv4 would not
+	// change the address clients use, so providers rotate by recreating.
+	IPv6 bool
 }
 
 type RotateResult struct {
@@ -178,8 +209,9 @@ func isNotFound(err error) bool { return errors.Is(err, ErrNotFound) }
 
 // capacityHints are fragments providers use when an account or location has
 // no room: Hetzner resource_limit_exceeded / resource_unavailable, Vultr
-// "maximum", DigitalOcean "droplet limit", OVH "quota", Linode "limit".
-var capacityHints = []string{"limit", "unavailable", "quota", "maximum", "insufficient", "capacity", "no available"}
+// "maximum", DigitalOcean "droplet limit", OVH "quota", Linode "limit",
+// X-ZoneServers LOCATION_SOLD_OUT.
+var capacityHints = []string{"limit", "unavailable", "quota", "maximum", "insufficient", "capacity", "no available", "sold out", "sold_out"}
 
 // IsCapacityErr reports whether a create failed because there is no room
 // (account limit, quota, or the location being sold out), as opposed to a

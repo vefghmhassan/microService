@@ -3,16 +3,18 @@ import { useNavigate, useParams } from 'react-router-dom'
 import {
   Alert, Button, Card, Col, Descriptions, Flex, InputNumber, Modal, Progress, QRCode, Row, Select, Skeleton, Space, Switch, Table, Tabs, Tag, Typography,
 } from 'antd'
-import { ArrowRightOutlined, CloudUploadOutlined, ExportOutlined, EyeOutlined, LeftOutlined, QrcodeOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons'
+import { ArrowRightOutlined, CloudUploadOutlined, ExportOutlined, EyeOutlined, LeftOutlined, QrcodeOutlined, ReloadOutlined, RightOutlined, ExperimentOutlined } from '@ant-design/icons'
 import {
   get, keys, post, put, serverAction, useAction, useJobs, useServer, useServerChecks, useServerInbounds, useServerLinks, useServerLive, useXUIReleases,
 } from '../api/hooks'
-import type { CheckRun, InboundStat, Job } from '../api/types'
+import type { CheckRun, InboundStat, Job, ConfigTest } from '../api/types'
 import { StatCard } from '../components/StatCard'
 import { TrafficBar } from '../components/TrafficBar'
 import { PageHeader } from '../components/PageHeader'
 import { StatusTag } from '../components/StatusTag'
+import { ServerMarks } from '../components/ServerMarks'
 import { CopyText } from '../components/CopyText'
+import { HostBadge } from '../components/HostBadge'
 import { ServerActions } from '../components/ServerActions'
 import { ProbeTable } from '../components/ProbeTable'
 import { CheckBadge } from '../components/ServerCard'
@@ -20,6 +22,7 @@ import { useOpenJob } from '../components/JobViewer'
 import { jobKind, jobStatus, rotateMethod, serverStatus, syncStatus, verdict } from '../lib/labels'
 import { bytes, flagEmoji, fmtDate, timeAgo } from '../lib/format'
 import { linkRemark } from '../lib/outbound'
+import { ServerIP } from '../components/ServerIP'
 
 export function ServerDetail() {
   const id = Number(useParams().id)
@@ -35,7 +38,7 @@ export function ServerDetail() {
     <>
       <PageHeader
         title={<Space><Button type="text" icon={<ArrowRightOutlined />} onClick={() => nav('/servers')} />{flagEmoji(s.country)} {s.name}</Space>}
-        subtitle={<Space wrap><StatusTag map={serverStatus} value={s.status} /><CopyText text={s.ipv4} /><CheckBadge server={s} /></Space>}
+        subtitle={<Space wrap><StatusTag map={serverStatus} value={s.status} /><ServerMarks server={s} /><ServerIP server={s} showV4 /><CheckBadge server={s} /></Space>}
         extra={<ServerActions server={s} onJob={(j) => openJob(j.id)} />}
       />
       {s.last_error && s.status === 'error' && <Alert type="error" showIcon title="خطای آخرین عملیات" description={s.last_error} style={{ marginBottom: 16 }} />}
@@ -84,6 +87,13 @@ function Overview({ id, installed }: { id: number; installed: boolean }) {
             { label: 'تعداد تعویض IP', children: s.rotate_count },
             { label: 'آخرین چک', children: `${timeAgo(s.last_check_at)} — ${s.last_check_note || '—'}` },
             { label: 'تمپلیت', children: <StatusTag map={syncStatus} value={s.sync_status} /> },
+            ...(s.hostname ? [
+              { label: 'دامنه', children: <HostBadge server={s} /> },
+              { label: 'SSL', children: s.ssl ? (s.cert_not_after ? `تا ${fmtDate(s.cert_not_after)}` + (s.xui_scheme === 'https' ? ' · پنل https' : '') : 'هنوز کپی نشده') : 'خاموش' },
+            ] : []),
+            ...(s.panel_sub_url ? [
+              { label: 'ساب پنل 3x-ui', children: <Flex vertical gap={2}><CopyText text={s.panel_sub_url} /><CopyText text={s.panel_sub_json} /><Typography.Text type="secondary" style={{ fontSize: 12 }}>کلاینت {s.panel_client} · JSON برای FinalMask</Typography.Text></Flex> },
+            ] : []),
             { label: 'vpn-pannel', children: s.uploaded_at ? `${s.uploaded_ip} · ${timeAgo(s.uploaded_at)}` : 'بارگذاری نشده' },
             { label: 'ساخته شده', children: fmtDate(s.created_at) },
           ]} />
@@ -180,13 +190,13 @@ function Usage({ id, installed }: { id: number; installed: boolean }) {
             {s.replacing_at && <Tag color="processing">جایگزینی در جریان است ({timeAgo(s.replacing_at)})</Tag>}
           </Flex>
           <Space.Compact>
-            <InputNumber min={0} placeholder={s.traffic_limit_gb ? String(s.traffic_limit_gb) : 'سراسری'} value={limit} onChange={(v) => setLimit(v)} addonAfter="GB" style={{ width: 170 }} />
+            <InputNumber min={0} placeholder={s.traffic_limit_gb ? String(s.traffic_limit_gb) : 'لوکیشن/سراسری'} value={limit} onChange={(v) => setLimit(v)} addonAfter="GB" style={{ width: 170 }} />
             <Button loading={saveLimit.isPending} disabled={limit === null} onClick={() => limit !== null && saveLimit.mutate(limit)}>ذخیره</Button>
           </Space.Compact>
           <Button icon={<ReloadOutlined />} loading={refresh.isPending} onClick={() => refresh.mutate()}>خواندن الان</Button>
         </Flex>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          آخرین خواندن: {timeAgo(s.stats_at)}{s.stats_error ? ` — خطا: ${s.stats_error}` : ''} · 0 یعنی استفاده از سقف سراسری تنظیمات
+          آخرین خواندن: {timeAgo(s.stats_at)}{s.stats_error ? ` — خطا: ${s.stats_error}` : ''} · 0 یعنی استفاده از سقف لوکیشن، و اگر آن هم نبود سقف سراسری تنظیمات
         </Typography.Text>
       </Card>
       <Table<InboundStat>
@@ -225,27 +235,71 @@ function Checks({ id }: { id: number }) {
 
 function Links({ id, active }: { id: number; active: boolean }) {
   const { data, isLoading } = useServerLinks(id, active)
-  const links = data?.links ?? []
+  const direct = data?.links ?? []
+  const clean = data?.clean_links ?? []
+  // QR browsing walks the direct links, then the clean-IP ones.
+  const links = [...direct, ...clean]
   const [qr, setQr] = useState<number | null>(null)
   const cur = qr === null ? undefined : links[qr]
   const openJob = useOpenJob()
   const upload = useAction(() => serverAction(id, 'upload'), { success: 'بارگذاری در صف قرار گرفت', invalidate: [['jobs']], onSuccess: (j) => openJob((j as Job).id) })
-  const all = data?.links.map((l) => l.url).join('\n') ?? ''
+  const [tests, setTests] = useState<ConfigTest[] | null>(null)
+  const testConfigs = useAction(() => post<ConfigTest[]>(`/servers/${id}/test-configs`), { onSuccess: setTests })
+  const all = direct.map((l) => l.url).join('\n')
+  const allClean = clean.map((l) => l.url).join('\n')
   return (
     <Flex vertical gap={12}>
       <Flex gap={8} wrap>
         <Button icon={<CloudUploadOutlined />} loading={upload.isPending} onClick={() => upload.mutate()}>بارگذاری در vpn-pannel</Button>
+        <Button icon={<ExperimentOutlined />} loading={testConfigs.isPending} onClick={() => testConfigs.mutate()}>تست همه کانفیگ‌ها</Button>
         {all && <Typography.Text copyable={{ text: all, tooltips: ['کپی همه', 'کپی شد'] }}>کپی همه لینک‌ها</Typography.Text>}
       </Flex>
       {data?.warning && <Alert type="warning" showIcon title={data.warning} />}
+      {tests && (
+        <Card size="small" title={`نتیجه تست: ${tests.filter((t) => t.ok).length} از ${tests.length} کار می‌کند`}
+          extra={<Button size="small" type="text" onClick={() => setTests(null)}>بستن</Button>}>
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+            از خود سرور با Xray: کانفیگ‌های مستقیم روی 127.0.0.1، و کانفیگ‌های CDN واقعاً از کلودفلر (رکورد نارنجی و IP تمیز). مقصد: generate_204 گوگل.
+          </Typography.Paragraph>
+          <Table<ConfigTest>
+            size="small" rowKey={(t) => t.name + t.via} dataSource={tests} pagination={false}
+            columns={[
+              { title: 'کانفیگ', dataIndex: 'name', render: (n: string) => <span dir="ltr">{n}</span> },
+              { title: 'مسیر', dataIndex: 'via', width: 110, render: (v: ConfigTest['via']) => <Tag color={v === 'direct' ? 'blue' : 'orange'}>{v === 'direct' ? 'مستقیم' : v === 'cdn' ? 'CDN' : 'IP تمیز'}</Tag> },
+              { title: 'نتیجه', width: 220, render: (_, t) => (t.ok
+                ? <Tag color="green">OK · {t.ms}ms</Tag>
+                : <Typography.Text type="danger" style={{ fontSize: 12 }}>FAIL {t.error}</Typography.Text>) },
+            ]}
+          />
+        </Card>
+      )}
       <Table
-        loading={isLoading} size="small" rowKey="url" dataSource={data?.links ?? []} pagination={{ pageSize: 20, hideOnSinglePage: true }}
+        loading={isLoading} size="small" rowKey="url" dataSource={direct} pagination={{ pageSize: 20, hideOnSinglePage: true }}
         columns={[
           { title: 'کاربر', dataIndex: 'email', width: 160 },
           { title: 'لینک', dataIndex: 'url', render: (u: string) => <CopyText text={u} maxWidth={520} /> },
-          { title: 'QR', width: 56, render: (_, __, i) => <Button size="small" icon={<QrcodeOutlined />} onClick={() => setQr(i)} /> },
+          { title: 'QR', width: 56, render: (_, l) => <Button size="small" icon={<QrcodeOutlined />} onClick={() => setQr(links.indexOf(l))} /> },
         ]}
       />
+      {clean.length > 0 && (
+        <>
+          <Flex gap={8} wrap align="center" style={{ marginTop: 8 }}>
+            <Typography.Title level={5} style={{ margin: 0 }}>لینک‌های IP تمیز کلودفلر</Typography.Title>
+            <Typography.Text copyable={{ text: allClean, tooltips: ['کپی همه', 'کپی شد'] }}>کپی همه</Typography.Text>
+          </Flex>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            آدرس = IP تمیز، SNI/Host = ساب‌دامین این سرور. فقط اینجا و در ربات نمایش داده می‌شوند و در vpn-pannel آپلود نمی‌شوند.
+          </Typography.Text>
+          <Table
+            size="small" rowKey="url" dataSource={clean} pagination={{ pageSize: 20, hideOnSinglePage: true }}
+            columns={[
+              { title: 'کاربر', dataIndex: 'email', width: 160 },
+              { title: 'لینک', dataIndex: 'url', render: (u: string) => <CopyText text={u} maxWidth={520} /> },
+              { title: 'QR', width: 56, render: (_, l) => <Button size="small" icon={<QrcodeOutlined />} onClick={() => setQr(links.indexOf(l))} /> },
+            ]}
+          />
+        </>
+      )}
       <Modal open={!!cur} onCancel={() => setQr(null)} footer={null} width={380} centered title={cur && linkRemark(cur.url) || cur?.email}>
         {cur && (
           <Flex vertical align="center" gap={12}>
