@@ -10,6 +10,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"microserver/internal/models"
+	"microserver/internal/services/settings"
 	"microserver/internal/services/cleanip"
 	"microserver/internal/services/orchestrator"
 )
@@ -340,12 +341,18 @@ func (a *App) ReplaceServer(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusAccepted).JSON(j)
 }
 
-// ScheduledDeleteDelay is how long after "remove from panels and delete"
-// the server itself is deleted.
-const ScheduledDeleteDelay = 10 * time.Minute
+// scheduledDeleteDelay is how long after "remove from panels and delete"
+// the server itself is deleted (server.delete_delay_min, at least a minute).
+func (a *App) scheduledDeleteDelay() time.Duration {
+	m := a.Settings.Int(settings.ServerDeleteDelayMin)
+	if m < 1 {
+		m = 1
+	}
+	return time.Duration(m) * time.Minute
+}
 
 // ScheduleDelete removes the server's configs from vpn-pannel now and
-// deletes the server after ScheduledDeleteDelay.
+// deletes the server after scheduledDeleteDelay.
 func (a *App) ScheduleDelete(c *fiber.Ctx) error {
 	s, err := a.server(c)
 	if err != nil {
@@ -357,7 +364,7 @@ func (a *App) ScheduleDelete(c *fiber.Ctx) error {
 	if s.DeleteAt != nil {
 		return errJSON(c, fiber.StatusConflict, "a deletion is already scheduled")
 	}
-	j, err := a.Orch.ScheduleDelete(s.ID, ScheduledDeleteDelay, source(c))
+	j, err := a.Orch.ScheduleDelete(s.ID, a.scheduledDeleteDelay(), source(c))
 	if err != nil {
 		return err
 	}

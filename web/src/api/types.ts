@@ -281,6 +281,7 @@ export interface IPAddress {
   reusable: boolean
   server_id: number | null
   filtered_at: string | null
+  banned_until: string | null
   last_check_at: string | null
   last_check_ok: boolean | null
   note: string

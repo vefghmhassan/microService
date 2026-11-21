@@ -37,32 +37,37 @@ const (
 	RotateKeepOld     = "rotate.keep_filtered_ip"
 	RotateV6InPrefix  = "rotate.v6_in_prefix"
 	RotateRetryHours  = "rotate.retry_kept_after_hours"
-	AutoRotate        = "rotate.auto"
-	RotateFallback    = "rotate.fallback_location"
-	AutoMaxPerLoc     = "auto.max_per_location"
-	TrafficLimitGB    = "traffic.limit_gb"
-	TrafficAuto       = "traffic.auto_replace"
-	WatchLowUsage     = "watch.low_usage"
-	WatchMinutes      = "watch.minutes"
-	WatchMinMB        = "watch.min_mb"
-	StatsIntervalMin  = "stats.interval_min"
-	VPNPanelURL       = "vpnpannel.url"
-	VPNPanelEmail     = "vpnpannel.email"
-	VPNPanelPassword  = "vpnpannel.password"
-	VPNPanelAds       = "vpnpannel.ads"
-	VPNPanelAuto      = "vpnpannel.auto_upload"
-	TelegramToken     = "telegram.token"
-	TelegramChatIDs   = "telegram.chat_ids"
-	TelegramProxy     = "telegram.proxy"
-	TelegramNotify    = "telegram.notify"
-	GeoIPCityURL      = "geoip.city_url"
-	GeoIPASNURL       = "geoip.asn_url"
-	AcmeStaging       = "acme.staging"
-	CleanIPOperators  = "cleanip.operators"
-	CleanIPInterval   = "cleanip.interval_hours"
-	CleanIPPerLink    = "cleanip.per_link"
-	SubEnabled        = "sub.enabled"
-	SubToken          = "sub.token"
+	// IPBanHours: a filtered or swapped-away IP is not taken again for this
+	// many hours (0 turns bans off).
+	IPBanHours = "ip.ban_hours"
+	// ServerDeleteDelayMin: "remove from panels, delete later" waits this long.
+	ServerDeleteDelayMin = "server.delete_delay_min"
+	AutoRotate           = "rotate.auto"
+	RotateFallback       = "rotate.fallback_location"
+	AutoMaxPerLoc        = "auto.max_per_location"
+	TrafficLimitGB       = "traffic.limit_gb"
+	TrafficAuto          = "traffic.auto_replace"
+	WatchLowUsage        = "watch.low_usage"
+	WatchMinutes         = "watch.minutes"
+	WatchMinMB           = "watch.min_mb"
+	StatsIntervalMin     = "stats.interval_min"
+	VPNPanelURL          = "vpnpannel.url"
+	VPNPanelEmail        = "vpnpannel.email"
+	VPNPanelPassword     = "vpnpannel.password"
+	VPNPanelAds          = "vpnpannel.ads"
+	VPNPanelAuto         = "vpnpannel.auto_upload"
+	TelegramToken        = "telegram.token"
+	TelegramChatIDs      = "telegram.chat_ids"
+	TelegramProxy        = "telegram.proxy"
+	TelegramNotify       = "telegram.notify"
+	GeoIPCityURL         = "geoip.city_url"
+	GeoIPASNURL          = "geoip.asn_url"
+	AcmeStaging          = "acme.staging"
+	CleanIPOperators     = "cleanip.operators"
+	CleanIPInterval      = "cleanip.interval_hours"
+	CleanIPPerLink       = "cleanip.per_link"
+	SubEnabled           = "sub.enabled"
+	SubToken             = "sub.token"
 	// Scheduled backup sent to the Telegram chats.
 	BackupTelegram = "backup.telegram"
 	BackupInterval = "backup.interval_hours"
@@ -100,31 +105,33 @@ var Defaults = map[string]string{
 	GlobalpingToken:  "",
 	GlobalpingLimit:  "8",
 	// RIPE Atlas has Iranian probes with IPv6; add "atlas" to check.sources.
-	AtlasKey:          "",
-	CheckHostCCKey:    "",
-	AtlasLimit:        "8",
-	RotateMaxAttempts: "5",
-	RotateKeepOld:     "false",
-	RotateV6InPrefix:  "true",
-	RotateRetryHours:  "24",
-	AutoRotate:        "false",
-	RotateFallback:    "true",
-	AutoMaxPerLoc:     "5",
-	TrafficLimitGB:    "0",
-	TrafficAuto:       "false",
-	WatchLowUsage:     "false",
-	WatchMinutes:      "30",
-	WatchMinMB:        "1024",
-	StatsIntervalMin:  "5",
-	VPNPanelURL:       "",
-	VPNPanelEmail:     "",
-	VPNPanelPassword:  "",
-	VPNPanelAds:       "false",
-	VPNPanelAuto:      "true",
-	TelegramToken:     "",
-	TelegramChatIDs:   "",
-	TelegramProxy:     "",
-	TelegramNotify:    "true",
+	AtlasKey:             "",
+	CheckHostCCKey:       "",
+	AtlasLimit:           "8",
+	RotateMaxAttempts:    "5",
+	RotateKeepOld:        "false",
+	RotateV6InPrefix:     "true",
+	RotateRetryHours:     "24",
+	IPBanHours:           "10",
+	ServerDeleteDelayMin: "10",
+	AutoRotate:           "false",
+	RotateFallback:       "true",
+	AutoMaxPerLoc:        "5",
+	TrafficLimitGB:       "0",
+	TrafficAuto:          "false",
+	WatchLowUsage:        "false",
+	WatchMinutes:         "30",
+	WatchMinMB:           "1024",
+	StatsIntervalMin:     "5",
+	VPNPanelURL:          "",
+	VPNPanelEmail:        "",
+	VPNPanelPassword:     "",
+	VPNPanelAds:          "false",
+	VPNPanelAuto:         "true",
+	TelegramToken:        "",
+	TelegramChatIDs:      "",
+	TelegramProxy:        "",
+	TelegramNotify:       "true",
 	// Empty: DB-IP Lite of the current month.
 	GeoIPCityURL: "",
 	GeoIPASNURL:  "",

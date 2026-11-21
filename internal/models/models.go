@@ -540,11 +540,14 @@ type IPAddress struct {
 	Reusable          bool       `json:"reusable"`
 	ServerID          *uint      `gorm:"index" json:"server_id"`
 	FilteredAt        *time.Time `json:"filtered_at"`
-	LastCheckAt       *time.Time `json:"last_check_at"`
-	LastCheckOK       *bool      `json:"last_check_ok"`
-	Note              string     `gorm:"size:255" json:"note"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	// BannedUntil keeps a filtered or swapped-away address from being bought
+	// or reused again before this time, whichever account it comes from.
+	BannedUntil *time.Time `gorm:"index" json:"banned_until"`
+	LastCheckAt *time.Time `json:"last_check_at"`
+	LastCheckOK *bool      `json:"last_check_ok"`
+	Note        string     `gorm:"size:255" json:"note"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // CheckRun is one reachability verdict for host:port, with the probes behind it.

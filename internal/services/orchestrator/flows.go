@@ -288,8 +288,15 @@ func (o *Orchestrator) ensureReachable(ctx context.Context, r *jobs.Run, prov pr
 	canHold := prov.Capabilities().CanKeepOldIP
 	downRetries, unknownRetries := 0, 0
 	for attempt := 1; ; {
-		res := o.Check(ctx, s.PublicIP(), o.checkPort(s))
-		o.recordCheck(r, s, res)
+		res := &checker.Result{}
+		if until, banned := o.isBanned(s.PublicIP()); banned {
+			// Filtered or swapped away recently: no check spent, rotate again.
+			r.Info("%s is banned until %s; treating it as filtered", s.PublicIP(), until.Format("2006-01-02 15:04"))
+			res.Verdict = checker.Filtered
+		} else {
+			res = o.Check(ctx, s.PublicIP(), o.checkPort(s))
+			o.recordCheck(r, s, res)
+		}
 		switch res.Verdict {
 		case checker.Healthy:
 			return nil
@@ -349,6 +356,7 @@ func (o *Orchestrator) releaseHeld(r *jobs.Run, prov providers.Provider, s *mode
 			continue
 		}
 		o.poolRetire(s, h.addr, h.ref, false, true, false, "filtered; released after the job")
+		o.banIP(r, s.ProviderAccountID, s.Region, h.addr, "filtered")
 		r.Info("released filtered IP %s", h.addr)
 	}
 }
@@ -365,6 +373,7 @@ func (o *Orchestrator) rotateOnce(ctx context.Context, r *jobs.Run, prov provide
 		// Another address of the server's own /64: no rebuild, no new server.
 		res, err := o.rotateInPrefix(ctx, r, s)
 		if err == nil {
+			o.banIP(r, s.ProviderAccountID, s.Region, res.OldIP, "rotated away in /64")
 			return res, nil
 		}
 		r.Logf("warn", "rotating inside the /64 failed (%v); rotating through the provider", err)
@@ -399,6 +408,15 @@ func (o *Orchestrator) rotateOnce(ctx context.Context, r *jobs.Run, prov provide
 	o.poolRetire(s, res.OldIP, res.OldIPRef, res.OldKept, oldFiltered, caps.CanKeepOldIP, "rotated away")
 
 	oldPublic := s.PublicIP()
+	// Filtered or swapped on request: either way, not this address again soon.
+	banReason := "rotated away"
+	if oldFiltered {
+		banReason = "filtered; rotated away"
+	}
+	o.banIP(r, s.ProviderAccountID, s.Region, res.OldIP, banReason)
+	if oldPublic != res.OldIP {
+		o.banIP(r, s.ProviderAccountID, s.Region, oldPublic, banReason)
+	}
 	s.IPv4, s.IPRef, s.IPv6 = res.Instance.IPv4, res.Instance.IPRef, res.Instance.IPv6
 	if res.Recreated {
 		s.ProviderRef = res.Instance.Ref
@@ -1161,6 +1179,7 @@ func (o *Orchestrator) check(ctx context.Context, r *jobs.Run) error {
 	o.recordCheck(r, s, res)
 	switch res.Verdict {
 	case checker.Filtered:
+		o.banServerIPs(r, s, "filtered (periodic check)")
 		if s.Status != models.ServerFiltered {
 			o.setStatus(r, s, models.ServerFiltered)
 			// Once per block: which of the other inbound ports still answer.

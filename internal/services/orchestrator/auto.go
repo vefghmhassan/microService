@@ -306,6 +306,10 @@ func (o *Orchestrator) probeCandidate(ctx context.Context, r *jobs.Run, prov pro
 	if s.PublicIP() == "" {
 		return "", fmt.Errorf("the provider gave the server no public IP%s", s.Family())
 	}
+	if until, banned := o.isBanned(s.PublicIP()); banned {
+		r.Info("%s is banned until %s; discarding the candidate", s.PublicIP(), until.Format("2006-01-02 15:04"))
+		return checker.Filtered, nil
+	}
 	if err := o.waitBooted(ctx, r, s); err != nil {
 		return "", err
 	}
@@ -332,6 +336,9 @@ func (o *Orchestrator) discardCandidate(ctx context.Context, r *jobs.Run, prov p
 	}
 	if s.IPv4 != "" {
 		o.poolRetire(s, s.IPv4, s.IPRef, false, filtered, false, "auto placement: "+reason)
+	}
+	if filtered {
+		o.banServerIPs(r, s, "auto placement: "+reason)
 	}
 	s.Status = models.ServerDeleted
 	s.LastError = truncate("discarded: "+reason, 500)

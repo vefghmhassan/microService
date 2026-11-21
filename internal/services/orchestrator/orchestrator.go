@@ -439,8 +439,8 @@ func (o *Orchestrator) pickReusable(accountID uint, region string) *models.IPAdd
 	hours := o.Settings.Int(settings.RotateRetryHours)
 	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour)
 	var ip models.IPAddress
-	err := o.DB.Where("provider_account_id = ? AND region = ? AND reusable = ? AND status IN ? AND (filtered_at IS NULL OR filtered_at < ?)",
-		accountID, region, true, []string{models.IPFiltered, models.IPKept}, cutoff).
+	err := o.DB.Where("provider_account_id = ? AND region = ? AND reusable = ? AND status IN ? AND (filtered_at IS NULL OR filtered_at < ?) AND (banned_until IS NULL OR banned_until < ?)",
+		accountID, region, true, []string{models.IPFiltered, models.IPKept}, cutoff, time.Now()).
 		Order("filtered_at").First(&ip).Error
 	if err != nil {
 		return nil

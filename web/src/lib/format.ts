@@ -84,3 +84,18 @@ export function copyText(t: string): Promise<void> {
     else reject(new Error('copy failed'))
   })
 }
+
+// minutesLabel shows a minute count in Persian: 25 → «۲۵ دقیقه», 90 → «۱ ساعت و ۳۰ دقیقه».
+export function minutesLabel(m: number): string {
+  const fa = (n: number) => n.toLocaleString('fa-IR')
+  const h = Math.floor(m / 60), r = m % 60
+  if (h === 0) return `${fa(r)} دقیقه`
+  return r === 0 ? `${fa(h)} ساعت` : `${fa(h)} ساعت و ${fa(r)} دقیقه`
+}
+
+// untilLabel shows how long is left until a time: «۳ ساعت و ۱۰ دقیقه».
+export function untilLabel(s?: string | null): string {
+  if (!s) return '—'
+  const m = Math.ceil((new Date(s).getTime() - Date.now()) / 60000)
+  return m > 0 ? minutesLabel(m) : '—'
+}

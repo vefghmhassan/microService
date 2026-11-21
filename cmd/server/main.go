@@ -234,7 +234,7 @@ func scheduleBackups(ctx context.Context, db *gorm.DB, st *settings.Store, tg *b
 }
 
 // scheduleDeletes runs the server deletions scheduled from the panel
-// ("remove from panels, delete after 10 minutes") once their time comes,
+// ("remove from panels, delete after server.delete_delay_min") once their time comes,
 // and retries config deletions a destination panel did not take.
 func scheduleDeletes(ctx context.Context, o *orchestrator.Orchestrator) {
 	t := time.NewTicker(20 * time.Second)

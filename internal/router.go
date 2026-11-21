@@ -123,6 +123,7 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 
 	p.Get("/ips", a.ListIPs)
 	p.Delete("/ips/:id", a.ReleaseIP)
+	p.Post("/ips/:id/unban", a.UnbanIP)
 
 	p.Get("/checks", a.ListChecks)
 	p.Post("/checks", a.RunCheck)

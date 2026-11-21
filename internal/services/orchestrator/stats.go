@@ -258,6 +258,8 @@ func (o *Orchestrator) QueueReplace(s *models.Server, reason, source string) (*m
 	now := time.Now()
 	s.ReplacingAt = &now
 	o.DB.Model(s).Update("replacing_at", now)
+	// The replacement must not land on the address being replaced.
+	o.banServerIPs(nil, s, "replaced: "+reason)
 	o.notify("♻️ جایگزینی سرور %s شروع شد\nدلیل: %s", s.Name, reason)
 	return j, nil
 }

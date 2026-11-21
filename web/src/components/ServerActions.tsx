@@ -3,7 +3,8 @@ import { Button, Checkbox, Dropdown, Flex, Modal, Space, Typography } from 'antd
 import {
   ApartmentOutlined, ClockCircleOutlined, CloseCircleOutlined, CloudOutlined, CloudUploadOutlined, DeleteOutlined, DisconnectOutlined, SafetyCertificateOutlined, MoreOutlined, RetweetOutlined, RadarChartOutlined, ReloadOutlined, SwapOutlined, SyncOutlined, ToolOutlined,
 } from '@ant-design/icons'
-import { cancelScheduledDelete, deleteServer, keys, scheduleDelete, serverAction, useAction } from '../api/hooks'
+import { cancelScheduledDelete, deleteServer, keys, scheduleDelete, serverAction, useAction, useSettings } from '../api/hooks'
+import { minutesLabel } from '../lib/format'
 import type { Job, Server } from '../api/types'
 import { publicIP } from './ServerIP'
 
@@ -15,12 +16,14 @@ export function ServerActions({ server, compact, onJob }: { server: Server; comp
   const [rotateOpen, setRotateOpen] = useState(false)
   const [keepOld, setKeepOld] = useState(false)
   const inv = [keys.servers, keys.server(server.id), ['jobs']]
+  const { data: settings } = useSettings()
+  const delay = minutesLabel(Math.max(1, Number(settings?.['server.delete_delay_min']) || 10))
   const run = useAction(({ action, body }: { action: string; body?: unknown }) => serverAction(server.id, action, body), {
     success: 'در صف قرار گرفت', invalidate: inv, onSuccess: (j) => onJob?.(j as Job),
   })
   const remove = useAction(() => deleteServer(server.id), { success: 'حذف در صف قرار گرفت', invalidate: inv, onSuccess: (j) => onJob?.(j as Job) })
   const schedule = useAction(() => scheduleDelete(server.id), {
-    success: 'کانفیگ‌ها در حال حذف از پنل‌ها؛ سرور ۱۰ دقیقه بعد حذف می‌شود', invalidate: inv, onSuccess: (j) => onJob?.(j as Job),
+    success: `کانفیگ‌ها در حال حذف از پنل‌ها؛ سرور ${delay} بعد حذف می‌شود`, invalidate: inv, onSuccess: (j) => onJob?.(j as Job),
   })
   const unschedule = useAction(() => cancelScheduledDelete(server.id), { success: 'حذف زمان‌بندی‌شده لغو شد', invalidate: inv })
   const busy = ['creating', 'rotating', 'installing', 'configuring', 'deleting'].includes(server.status)
@@ -46,7 +49,7 @@ export function ServerActions({ server, compact, onJob }: { server: Server; comp
     { key: 'unpublish', icon: <DisconnectOutlined />, label: 'حذف کانفیگ از پنل مقصدها', danger: true },
     server.delete_at
       ? { key: 'cancel-delete', icon: <CloseCircleOutlined />, label: 'لغو حذف زمان‌بندی‌شده' }
-      : { key: 'schedule-delete', icon: <ClockCircleOutlined />, label: 'حذف از پنل‌ها و حذف سرور بعد از ۱۰ دقیقه', danger: true },
+      : { key: 'schedule-delete', icon: <ClockCircleOutlined />, label: `حذف از پنل‌ها و حذف سرور بعد از ${delay}`, danger: true },
     { key: 'delete', icon: <DeleteOutlined />, label: 'حذف سرور', danger: true },
   ]
 
@@ -72,7 +75,7 @@ export function ServerActions({ server, compact, onJob }: { server: Server; comp
     if (key === 'schedule-delete') {
       Modal.confirm({
         title: `سرور ${server.name} حذف شود؟`,
-        content: 'کانفیگ‌های این سرور همین الان از همه پنل‌های مقصد و کانفیگ‌های هوشمند پاک می‌شود و ۱۰ دقیقه بعد خود سرور به‌طور کامل حذف می‌شود. تا قبل از آن می‌توانید حذف را لغو کنید.',
+        content: `کانفیگ‌های این سرور همین الان از همه پنل‌های مقصد و کانفیگ‌های هوشمند پاک می‌شود و ${delay} بعد خود سرور به‌طور کامل حذف می‌شود. تا قبل از آن می‌توانید حذف را لغو کنید.`,
         okText: 'حذف', okButtonProps: { danger: true }, cancelText: 'انصراف',
         onOk: () => schedule.mutateAsync(),
       })

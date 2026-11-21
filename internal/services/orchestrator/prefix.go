@@ -89,9 +89,19 @@ echo "added $NEW on $IF"
 // rotateInPrefix moves the server to a new address of its own /64. SSH keeps
 // using the IPv4, so the connection survives the change.
 func (o *Orchestrator) rotateInPrefix(ctx context.Context, r *jobs.Run, s *models.Server) (*providers.RotateResult, error) {
-	next, err := randomInPrefix(s.IPv6)
-	if err != nil {
-		return nil, err
+	var next string
+	for i := 0; i < 8; i++ {
+		n, err := randomInPrefix(s.IPv6)
+		if err != nil {
+			return nil, err
+		}
+		if _, banned := o.isBanned(n); !banned {
+			next = n
+			break
+		}
+	}
+	if next == "" {
+		return nil, fmt.Errorf("every address picked in the /64 was banned")
 	}
 	remote, _, err := o.Connect(ctx, s)
 	if err != nil {

@@ -75,6 +75,24 @@ func (a *App) ListIPs(c *fiber.Ctx) error {
 	return c.JSON(ips)
 }
 
+// UnbanIP lifts an IP's ban so it may be bought or reused again.
+func (a *App) UnbanIP(c *fiber.Ctx) error {
+	id, err := idParam(c)
+	if err != nil {
+		return err
+	}
+	var ip models.IPAddress
+	if err := a.DB.First(&ip, id).Error; err != nil {
+		return errJSON(c, fiber.StatusNotFound, "ip not found")
+	}
+	// Lift it on every account's row: the ban matches the address alone.
+	if err := a.DB.Model(&models.IPAddress{}).Where("address = ?", ip.Address).
+		Update("banned_until", nil).Error; err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"ok": true})
+}
+
 // ReleaseIP gives a kept IP back to the provider so it stops costing money.
 func (a *App) ReleaseIP(c *fiber.Ctx) error {
 	id, err := idParam(c)
