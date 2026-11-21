@@ -50,6 +50,11 @@ const (
 	WatchLowUsage        = "watch.low_usage"
 	WatchMinutes         = "watch.minutes"
 	WatchMinMB           = "watch.min_mb"
+	// WatchOnlinePct: warn when online users after the window are below this
+	// percent of those before the change (0 = off).
+	WatchOnlinePct = "watch.online_pct"
+	// WatchMinOnline: warn when a server with no "before" has fewer online (0 = off).
+	WatchMinOnline = "watch.min_online"
 	StatsIntervalMin     = "stats.interval_min"
 	VPNPanelURL          = "vpnpannel.url"
 	VPNPanelEmail        = "vpnpannel.email"
@@ -122,6 +127,8 @@ var Defaults = map[string]string{
 	WatchLowUsage:        "false",
 	WatchMinutes:         "30",
 	WatchMinMB:           "1024",
+	WatchOnlinePct:       "50",
+	WatchMinOnline:       "0",
 	StatsIntervalMin:     "5",
 	VPNPanelURL:          "",
 	VPNPanelEmail:        "",

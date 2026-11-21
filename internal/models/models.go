@@ -325,6 +325,9 @@ type Server struct {
 	// new IP (nil = not watched); WatchBase is its traffic at that moment.
 	WatchFrom *time.Time `json:"watch_from"`
 	WatchBase int64      `json:"-"`
+	// WatchOnlineBase is how many users were online before the change (on
+	// this server before a rotation, or on the server it replaces); 0 = none.
+	WatchOnlineBase int `json:"-"`
 	// ReplacingAt is set once a replacement was queued, so the cap fires once.
 	ReplacingAt *time.Time `json:"replacing_at"`
 	// PanelRemovedAt is set when the server's configs were taken out of

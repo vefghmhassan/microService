@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"gorm.io/gorm/clause"
 
+	"microserver/internal/jobs"
 	"microserver/internal/models"
 	"microserver/internal/services/providers"
 	"microserver/internal/services/settings"
@@ -199,10 +201,26 @@ func (o *Orchestrator) watchWindow() time.Duration {
 
 // startWatch opens the low-usage window of a server that just went live on
 // a new IP.
-func (o *Orchestrator) startWatch(s *models.Server) {
+// onlineBase is the online count before the change (0 = no history).
+func (o *Orchestrator) startWatch(s *models.Server, onlineBase int) {
 	now := time.Now()
-	s.WatchFrom, s.WatchBase = &now, s.TrafficUp+s.TrafficDown
-	o.DB.Model(s).Select("watch_from", "watch_base").Updates(s)
+	s.WatchFrom, s.WatchBase, s.WatchOnlineBase = &now, s.TrafficUp+s.TrafficDown, onlineBase
+	o.DB.Model(s).Select("watch_from", "watch_base", "watch_online_base").Updates(s)
+}
+
+// lowOnline says whether too few users came back after the change, and why.
+func (o *Orchestrator) lowOnline(s *models.Server) (bool, string) {
+	online, base := s.OnlineCount, s.WatchOnlineBase
+	if pct := o.Settings.Int(settings.WatchOnlinePct); base > 0 && pct > 0 {
+		if online*100 < base*pct {
+			return true, fmt.Sprintf("👥 آنلاین: %d (قبل از تعویض %d) · کمتر از %d٪", online, base, pct)
+		}
+		return false, ""
+	}
+	if min := o.Settings.Int(settings.WatchMinOnline); base == 0 && min > 0 && online < min {
+		return true, fmt.Sprintf("👥 آنلاین: %d · کمتر از حداقل %d", online, min)
+	}
+	return false, ""
 }
 
 // checkLowUsage closes a server's low-usage window once it has passed and,
@@ -225,15 +243,29 @@ func (o *Orchestrator) checkLowUsage(s *models.Server) {
 		used = total
 	}
 	threshold := int64(o.Settings.Int(settings.WatchMinMB)) << 20
-	if used >= threshold {
+	lowTraffic := used < threshold
+	lowOn, onlineNote := o.lowOnline(s)
+	if !lowTraffic && !lowOn {
 		return
 	}
 	host := s.PublicIP()
 	if s.Hostname != "" {
 		host += " · " + s.Hostname
 	}
-	text := fmt.Sprintf("⚠️ احتمال مشکل IP در سرور %s\nIP: %s\nدر %d دقیقه پس از راه‌اندازی فقط %s مصرف شد (کمتر از %s) · 👥 آنلاین: %d\nممکن است IP فیلتر شده باشد.",
-		s.Name, host, int(time.Since(from).Round(time.Minute).Minutes()), humanBytes(used), humanBytes(threshold), s.OnlineCount)
+	mins := int(time.Since(from).Round(time.Minute).Minutes())
+	var lines []string
+	if lowTraffic {
+		lines = append(lines, fmt.Sprintf("در %d دقیقه پس از راه‌اندازی فقط %s مصرف شد (کمتر از %s)", mins, humanBytes(used), humanBytes(threshold)))
+	} else {
+		lines = append(lines, fmt.Sprintf("مصرف %d دقیقه: %s", mins, humanBytes(used)))
+	}
+	if lowOn {
+		lines = append(lines, onlineNote)
+	} else {
+		lines = append(lines, fmt.Sprintf("👥 آنلاین: %d", s.OnlineCount))
+	}
+	text := fmt.Sprintf("⚠️ احتمال مشکل IP در سرور %s\nIP: %s\n%s\nممکن است IP فیلتر شده باشد.",
+		s.Name, host, strings.Join(lines, "\n"))
 	if o.Alert != nil {
 		o.Alert(s, text)
 		return
@@ -272,4 +304,10 @@ func humanBytes(n int64) string {
 		return fmt.Sprintf("%.1f MB", float64(n)/float64(1<<20))
 	}
 	return fmt.Sprintf("%d B", n)
+}
+
+// onlineBefore is the online count a job saved before its change (0 = none).
+func onlineBefore(r *jobs.Run) int {
+	n, _ := strconv.Atoi(r.GetString("online_before"))
+	return n
 }

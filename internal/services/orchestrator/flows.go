@@ -211,7 +211,7 @@ func (o *Orchestrator) provision(ctx context.Context, r *jobs.Run) error {
 	s.Status = models.ServerActive
 	s.LastError = ""
 	o.save(r, &s, "status", "last_error")
-	o.startWatch(&s)
+	o.startWatch(&s, 0)
 	o.notify("✅ سرور %s آماده شد\nIP: %s\n%s", s.Name, s.PublicIP(), s.LastCheckNote)
 	return nil
 }
@@ -465,6 +465,10 @@ func (o *Orchestrator) rotate(ctx context.Context, r *jobs.Run) error {
 		r.Info("reason: %s", p.Reason)
 	}
 
+	if r.GetString("online_before") == "" {
+		// Users on the old IP: the low-online watch compares against them.
+		r.Set("online_before", strconv.Itoa(s.OnlineCount))
+	}
 	if !r.Done("rotate") {
 		r.Step("rotate IP")
 		// The old IP counts as filtered only if the last check said so.
@@ -530,7 +534,7 @@ func (o *Orchestrator) rotate(ctx context.Context, r *jobs.Run) error {
 	s.Status = models.ServerActive
 	s.LastError = ""
 	o.save(r, s, "status", "last_error")
-	o.startWatch(s)
+	o.startWatch(s, onlineBefore(r))
 	if s.Role == models.RoleNode {
 		// The certificate and the master's registration are for the old IP.
 		id := s.ID
@@ -707,6 +711,13 @@ func (o *Orchestrator) install(ctx context.Context, r *jobs.Run) error {
 			return err
 		})
 	}
+	if p.ReplaceServerID != 0 && r.GetString("online_before") == "" {
+		// Users on the replaced server: the low-online watch compares against them.
+		var old models.Server
+		if o.DB.Select("online_count").First(&old, p.ReplaceServerID).Error == nil {
+			r.Set("online_before", strconv.Itoa(old.OnlineCount))
+		}
+	}
 	if !handed {
 		o.handOver(ctx, r, s, p, g)
 		r.Mark("finish")
@@ -714,7 +725,7 @@ func (o *Orchestrator) install(ctx context.Context, r *jobs.Run) error {
 	s.Status = models.ServerActive
 	s.LastError = ""
 	o.save(r, s, "status", "last_error")
-	o.startWatch(s)
+	o.startWatch(s, onlineBefore(r))
 	if p.ReplaceServerID == 0 && p.Upload != nil {
 		o.notify("✅ سرور %s آماده شد\nIP: %s\n%s", s.Name, s.PublicIP(), s.LastCheckNote)
 	}
