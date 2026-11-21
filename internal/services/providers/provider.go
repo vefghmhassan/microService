@@ -123,6 +123,33 @@ type Provider interface {
 	ReleaseIP(ctx context.Context, ipRef string) error
 }
 
+// Billing is what an account has cost this calendar month, read-only and for
+// display. Credit is the prepaid or promotional credit still left (nil when
+// the account has none or the provider does not say).
+type Billing struct {
+	Currency  string   `json:"currency"`
+	Spent     float64  `json:"spent"`
+	Credit    *float64 `json:"credit,omitempty"`
+	Estimated bool     `json:"estimated"`
+	Note      string   `json:"note,omitempty"`
+}
+
+// BillingReader is implemented by providers that can report spend. It only
+// reads: no call behind it changes anything on the account.
+type BillingReader interface {
+	Billing(ctx context.Context) (*Billing, error)
+}
+
+// creditFromBalance turns a provider balance, where negative means money owed
+// to the customer, into remaining credit (nil when there is none).
+func creditFromBalance(balance float64) *float64 {
+	if balance >= 0 {
+		return nil
+	}
+	c := -balance
+	return &c
+}
+
 // ErrNotFound is returned by Get and Delete when the server no longer exists.
 var ErrNotFound = errors.New("not found at provider")
 

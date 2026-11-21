@@ -17,6 +17,18 @@ export interface ProviderAccount {
   created_at: string
 }
 
+/** ProviderBilling is this month's spend read from the provider, for display only. */
+export interface ProviderBilling {
+  supported: boolean
+  error?: string
+  currency?: string
+  spent?: number
+  credit?: number
+  estimated?: boolean
+  note?: string
+  fetched_at: string
+}
+
 export interface Capabilities {
   rotate_method: 'primary_ip_swap' | 'reserved_ip' | 'recreate'
   can_keep_old_ip: boolean

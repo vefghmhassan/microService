@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/
 import { App } from 'antd'
 import { del, get, post, put } from './client'
 import type {
-  BalancerModes, CDNAddon, Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, NodesOverview, Option, ProviderAccount,
+  BalancerModes, CDNAddon, Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, NodesOverview, Option, ProviderAccount, ProviderBilling,
   ProviderType, Server, ServerEvent, ServerInbounds, Settings, SmartProfile, SmartRule, SmartUpload, TemplateResponse,
   UpdateBackup, UpdateBranch, UpdateCommit, UpdateOp, UpdateStatus, UpdateVersion,
 } from './types'
@@ -57,6 +57,12 @@ export const useServerLive = (id: number, enabled: boolean) =>
 export const useProviders = () => useQuery({ queryKey: keys.providers, queryFn: () => get<ProviderAccount[]>('/providers') })
 export const useProviderTypes = () =>
   useQuery({ queryKey: keys.providerTypes, queryFn: () => get<ProviderType[]>('/providers/types'), staleTime: Infinity })
+export const useProviderBilling = (accountId: number) =>
+  useQuery({
+    queryKey: ['providers', accountId, 'billing'],
+    queryFn: () => get<ProviderBilling>(`/providers/${accountId}/billing`),
+    staleTime: 600_000, retry: false,
+  })
 export const useRegions = (accountId?: number) =>
   useQuery({ queryKey: ['providers', accountId, 'regions'], queryFn: () => get<Option[]>(`/providers/${accountId}/regions`), enabled: !!accountId, staleTime: 600_000 })
 export const usePlans = (accountId?: number, region?: string) =>

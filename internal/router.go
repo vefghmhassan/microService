@@ -48,6 +48,7 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Post("/providers/:id/test", a.TestProvider)
 	p.Get("/providers/:id/regions", a.ProviderRegions)
 	p.Get("/providers/:id/plans", a.ProviderPlans)
+	p.Get("/providers/:id/billing", a.ProviderBilling)
 
 	p.Get("/servers", a.ListServers)
 	p.Post("/servers", a.CreateServer)

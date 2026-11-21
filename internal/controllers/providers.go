@@ -3,7 +3,9 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -220,6 +222,74 @@ func (a *App) ProviderRegions(c *fiber.Ctx) error {
 		return errJSON(c, fiber.StatusBadGateway, err.Error())
 	}
 	return c.JSON(opts)
+}
+
+// billingView is what a provider card shows about cost. It is always sent with
+// 200 so one account's failure never breaks the page.
+type billingView struct {
+	Supported bool `json:"supported"`
+	*providers.Billing
+	Error     string    `json:"error,omitempty"`
+	FetchedAt time.Time `json:"fetched_at"`
+}
+
+const billingTTL = 10 * time.Minute
+
+var (
+	billingMu    sync.Mutex
+	billingCache = map[uint]billingView{}
+)
+
+// billingScopeHint names the permission a refused billing read needs.
+var billingScopeHint = map[string]string{
+	"digitalocean": "توکن به دسترسی billing:read نیاز دارد",
+	"linode":       "توکن به دسترسی account:read_only نیاز دارد",
+	"ovh":          "consumer key به GET /cloud/project/*/usage/* و GET /me نیاز دارد",
+	"xzone":        "کلید API به scope read نیاز دارد",
+}
+
+// ProviderBilling reports this month's spend and remaining credit, read-only.
+// Results are cached for ten minutes; ?refresh=1 reads the provider again.
+func (a *App) ProviderBilling(c *fiber.Ctx) error {
+	acc, err := a.account(c)
+	if err != nil {
+		return err
+	}
+	if c.Query("refresh") != "1" {
+		billingMu.Lock()
+		v, ok := billingCache[acc.ID]
+		billingMu.Unlock()
+		if ok && time.Since(v.FetchedAt) < billingTTL {
+			return c.JSON(v)
+		}
+	}
+	v := billingView{FetchedAt: time.Now()}
+	p, err := providers.New(acc.Type, json.RawMessage(acc.Credentials))
+	if err != nil {
+		v.Error = err.Error()
+		return c.JSON(v)
+	}
+	br, ok := p.(providers.BillingReader)
+	if !ok {
+		return c.JSON(v)
+	}
+	v.Supported = true
+	ctx, cancel := context.WithTimeout(c.UserContext(), 30*time.Second)
+	defer cancel()
+	b, err := br.Billing(ctx)
+	if err != nil {
+		v.Error = err.Error()
+		var apiErr *providers.APIError
+		if errors.As(err, &apiErr) && (apiErr.Status == 401 || apiErr.Status == 403) && billingScopeHint[acc.Type] != "" {
+			v.Error = billingScopeHint[acc.Type] + " — " + v.Error
+		}
+	} else {
+		v.Billing = b
+	}
+	billingMu.Lock()
+	billingCache[acc.ID] = v
+	billingMu.Unlock()
+	return c.JSON(v)
 }
 
 func (a *App) ProviderPlans(c *fiber.Ctx) error {
