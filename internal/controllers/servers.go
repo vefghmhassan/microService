@@ -284,10 +284,27 @@ func (a *App) createServerAuto(c *fiber.Ctx) error {
 	if p.Count < 1 || p.Count > 20 {
 		return errJSON(c, fiber.StatusBadRequest, "count must be 1-20")
 	}
-	var n int64
-	a.DB.Model(&models.Location{}).Where("enabled = ?", true).Count(&n)
-	if n == 0 {
-		return errJSON(c, fiber.StatusBadRequest, "ابتدا در صفحه لوکیشن‌ها حداقل یک لوکیشن فعال اضافه کنید")
+	if p.TargetAccountID != 0 {
+		// Nearest region of another provider: the source location may be
+		// disabled, it only says where.
+		var src models.Location
+		if err := a.DB.First(&src, p.SourceLocationID).Error; err != nil {
+			return errJSON(c, fiber.StatusBadRequest, "لوکیشن مبدا پیدا نشد")
+		}
+		var acc models.ProviderAccount
+		if err := a.DB.First(&acc, p.TargetAccountID).Error; err != nil {
+			return errJSON(c, fiber.StatusBadRequest, "provider account not found")
+		}
+		if err := orchestrator.CheckTarget(&acc); err != nil {
+			return errJSON(c, fiber.StatusBadRequest, err.Error())
+		}
+	} else {
+		p.SourceLocationID = 0
+		var n int64
+		a.DB.Model(&models.Location{}).Where("enabled = ?", true).Count(&n)
+		if n == 0 {
+			return errJSON(c, fiber.StatusBadRequest, "ابتدا در صفحه لوکیشن‌ها حداقل یک لوکیشن فعال اضافه کنید")
+		}
 	}
 	j, err := a.Engine.Enqueue(orchestrator.KindProvisionAuto, nil, p, source(c))
 	if err != nil {

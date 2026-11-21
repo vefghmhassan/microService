@@ -213,3 +213,30 @@ func (a *App) ReorderLocations(c *fiber.Ctx) error {
 	}
 	return a.ListLocations(c)
 }
+
+// NearestRegions ranks the regions of provider account ?account_id= by their
+// distance from this location: a preview of a "nearest" build.
+func (a *App) NearestRegions(c *fiber.Ctx) error {
+	id, err := c.ParamsInt("id")
+	if err != nil {
+		return errJSON(c, fiber.StatusBadRequest, "invalid id")
+	}
+	var src models.Location
+	if err := a.DB.Preload("ProviderAccount").First(&src, id).Error; err != nil {
+		return errJSON(c, fiber.StatusNotFound, "location not found")
+	}
+	var acc models.ProviderAccount
+	if err := a.DB.First(&acc, c.QueryInt("account_id")).Error; err != nil {
+		return errJSON(c, fiber.StatusBadRequest, "provider account not found")
+	}
+	ctx, cancel := context.WithTimeout(c.UserContext(), 30*time.Second)
+	defer cancel()
+	ranked, err := a.Orch.NearestRegions(ctx, &src, &acc)
+	if err != nil {
+		return errJSON(c, fiber.StatusBadGateway, err.Error())
+	}
+	if len(ranked) > 5 {
+		ranked = ranked[:5]
+	}
+	return c.JSON(ranked)
+}

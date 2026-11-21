@@ -39,6 +39,11 @@ type AutoParams struct {
 	// Attempt counts the servers already built and deleted for this request
 	// because none of their configs worked.
 	Attempt int `json:"attempt,omitempty"`
+	// TargetAccountID builds on this provider account instead of walking the
+	// list: in the region nearest to SourceLocationID, with the account's
+	// default plan.
+	TargetAccountID  uint `json:"target_account_id,omitempty"`
+	SourceLocationID uint `json:"source_location_id,omitempty"`
 }
 
 // InstallParams are the install job's parameters.
@@ -110,6 +115,9 @@ func (o *Orchestrator) provisionAuto(ctx context.Context, r *jobs.Run) error {
 	if p.Reason != "" {
 		r.Info("reason: %s", p.Reason)
 	}
+	if p.TargetAccountID != 0 {
+		return o.provisionNearest(ctx, r, p)
+	}
 	var locs []models.Location
 	if err := o.DB.Preload("ProviderAccount").Where("enabled = ?", true).Order("priority, id").Find(&locs).Error; err != nil {
 		return err
@@ -155,27 +163,36 @@ func (o *Orchestrator) provisionAuto(ctx context.Context, r *jobs.Run) error {
 		if err != nil {
 			r.Logf("warn", "%s/%s: %v", loc.ProviderAccount.Name, loc.Region, err)
 		}
-		for _, s := range kept {
-			ip := InstallParams{Upload: p.Upload, BaseName: p.BaseName, ReplaceServerID: p.ReplaceServerID, Fresh: true, Attempt: p.Attempt}
-			if ip.Upload == nil {
-				up := o.Settings.Bool(settings.VPNPanelAuto)
-				ip.Upload = &up
-			}
-			id := s.ID
-			if _, err := o.Engine.Enqueue(KindInstall, &id, ip, r.Job.Source); err != nil {
-				return err
-			}
-			r.Info("keeping %s (%s); installing 3x-ui in job of its own", s.Name, s.PublicIP())
-			// Only the first kept server takes over a replaced one.
-			p.ReplaceServerID = 0
+		if err := o.installKept(r, &p, kept); err != nil {
+			return err
 		}
-		r.Set("kept", strconv.Itoa(o.keptSoFar(r)+len(kept)))
 		r.Mark(key)
 		need -= len(kept)
 	}
 	if need > 0 {
 		return fmt.Errorf("found %d of %d healthy servers after trying every location", p.Count-need, p.Count)
 	}
+	return nil
+}
+
+// installKept queues the 3x-ui install of each server a location kept and
+// counts them in the job.
+func (o *Orchestrator) installKept(r *jobs.Run, p *AutoParams, kept []*models.Server) error {
+	for _, s := range kept {
+		ip := InstallParams{Upload: p.Upload, BaseName: p.BaseName, ReplaceServerID: p.ReplaceServerID, Fresh: true, Attempt: p.Attempt}
+		if ip.Upload == nil {
+			up := o.Settings.Bool(settings.VPNPanelAuto)
+			ip.Upload = &up
+		}
+		id := s.ID
+		if _, err := o.Engine.Enqueue(KindInstall, &id, ip, r.Job.Source); err != nil {
+			return err
+		}
+		r.Info("keeping %s (%s); installing 3x-ui in job of its own", s.Name, s.PublicIP())
+		// Only the first kept server takes over a replaced one.
+		p.ReplaceServerID = 0
+	}
+	r.Set("kept", strconv.Itoa(o.keptSoFar(r)+len(kept)))
 	return nil
 }
 

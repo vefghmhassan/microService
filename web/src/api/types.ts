@@ -192,6 +192,13 @@ export interface Option {
   price_monthly?: number
 }
 
+/** A region of another provider ranked by its distance from a location. */
+export interface NearRegion extends Option {
+  km: number
+  /** How it was placed: 'region' | 'city' | 'country'; '' = not placed. */
+  match: string
+}
+
 export interface Server extends DNSFields {
   id: number
   location_id: number

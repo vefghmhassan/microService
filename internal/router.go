@@ -93,6 +93,7 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Post("/locations", a.CreateLocation)
 	p.Post("/locations/reorder", a.ReorderLocations)
 	p.Put("/locations/:id", a.UpdateLocation)
+	p.Get("/locations/:id/nearest", a.NearestRegions)
 	p.Delete("/locations/:id", a.DeleteLocation)
 
 	p.Get("/cloudflare", a.ListCloudflare)

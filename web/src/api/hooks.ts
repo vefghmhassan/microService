@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/
 import { App } from 'antd'
 import { del, get, post, put } from './client'
 import type {
-  BalancerModes, CDNAddon, Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, NodesOverview, Option, ProviderAccount, ProviderBilling,
+  BalancerModes, CDNAddon, Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, NearRegion, NodesOverview, Option, ProviderAccount, ProviderBilling,
   ProviderType, Server, ServerEvent, ServerInbounds, Settings, SmartProfile, SmartRule, SmartUpload, TemplateResponse,
   UpdateBackup, UpdateBranch, UpdateCommit, UpdateOp, UpdateStatus, UpdateVersion,
 } from './types'
@@ -74,6 +74,12 @@ export const usePlans = (accountId?: number, region?: string) =>
 export const useJobs = (q = '') => useQuery({ queryKey: keys.jobs(q), queryFn: () => get<Job[]>(`/jobs${q ? '?' + q : ''}`) })
 export const useJob = (id: number | null) =>
   useQuery({ queryKey: keys.job(id ?? 0), queryFn: () => get<Job>(`/jobs/${id}`), enabled: !!id })
+export const useNearestRegions = (locationId?: number, accountId?: number) =>
+  useQuery({
+    queryKey: ['locations', locationId, 'nearest', accountId],
+    queryFn: () => get<NearRegion[]>(`/locations/${locationId}/nearest?account_id=${accountId}`),
+    enabled: !!locationId && !!accountId, staleTime: 600_000, retry: false,
+  })
 export const useLocations = () => useQuery({ queryKey: keys.locations, queryFn: () => get<Location[]>('/locations') })
 export const useNodes = () =>
   useQuery({ queryKey: keys.nodes, queryFn: () => get<NodesOverview>('/nodes'), refetchInterval: 30_000 })
