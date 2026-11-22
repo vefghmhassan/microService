@@ -18,6 +18,7 @@ A service that buys pay-as-you-go servers through provider APIs, checks whether 
 | Vultr | Recreate (the old IP is converted to a Reserved IP) | ✔ |
 | Linode | Recreate | ✘ |
 | OVHcloud | Recreate | ✘ |
+| Cherry Servers | Recreate (credentials: API token + numeric project ID) | ✘ |
 
 When a server is recreated, 3x-ui and the template are installed again automatically.
 

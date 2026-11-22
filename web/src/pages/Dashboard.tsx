@@ -51,7 +51,7 @@ export function Dashboard() {
       {data.providers === 0 && (
         <Card style={{ marginTop: 16 }}>
           <Flex justify="space-between" align="center" wrap gap={12}>
-            <Typography.Text>برای شروع، یک حساب ارائه‌دهنده (Hetzner، Vultr، DigitalOcean، Linode یا OVH) با API key اضافه کنید.</Typography.Text>
+            <Typography.Text>برای شروع، یک حساب ارائه‌دهنده (Hetzner، Vultr، DigitalOcean، Linode، OVH یا Cherry Servers) با API key اضافه کنید.</Typography.Text>
             <Button type="primary" icon={<ApiOutlined />} onClick={() => nav('/providers')}>افزودن ارائه‌دهنده</Button>
           </Flex>
         </Card>

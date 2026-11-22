@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -221,4 +222,52 @@ func sumTotalPrice(v any) float64 {
 		}
 	}
 	return sum
+}
+
+// Cherry Servers: GET /teams gives the team's account and promo credit. There
+// is no month-to-date spend, so it is estimated like Hetzner's: hours each
+// current server has run this month times its hourly price (before VAT).
+func (ch *Cherry) Billing(ctx context.Context) (*Billing, error) {
+	team, err := ch.teamID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	teams, err := ch.teams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	b := &Billing{Currency: "EUR", Estimated: true,
+		Note: "Cherry Servers reports no monthly spend; estimated from current servers, before VAT"}
+	for _, t := range teams {
+		if t.ID != team {
+			continue
+		}
+		b.Currency = firstNonEmpty(t.Credit.Account.Currency, t.Billing.Currency, b.Currency)
+		if c := t.Credit.Account.Remaining + t.Credit.Promo.Remaining; c > 0 {
+			b.Credit = &c
+		}
+	}
+	var servers []cherryServer
+	if err := ch.c.do(ctx, http.MethodGet, fmt.Sprintf("/projects/%d/servers", ch.project), nil, &servers); err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	total := 0.0
+	for _, s := range servers {
+		if !strings.EqualFold(s.Pricing.Unit, "hourly") {
+			continue
+		}
+		from := monthStart
+		if t, err := time.Parse(time.RFC3339, s.Created); err == nil && t.After(monthStart) {
+			from = t
+		}
+		hours := math.Ceil(now.Sub(from).Hours())
+		if hours < 1 {
+			hours = 1
+		}
+		total += hours * s.Pricing.Price
+	}
+	b.Spent = math.Round(total*100) / 100
+	return b, nil
 }
