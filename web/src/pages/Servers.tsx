@@ -17,6 +17,7 @@ import { useOpenJob } from '../components/JobViewer'
 import { serverStatus, syncStatus } from '../lib/labels'
 import { flagEmoji, trafficLimit } from '../lib/format'
 import { ServerIP } from '../components/ServerIP'
+import { QualityTag, serverQuality, useQuality } from '../components/QualityTag'
 
 const filters = [
   { label: 'همه', value: '' },
@@ -66,6 +67,7 @@ function countryName(cc: string): string {
 export function Servers() {
   const { data, isLoading } = useServers()
   const { data: settings } = useSettings()
+  const quality = useQuality()
   const { data: locations } = useLocations()
   const limitOf = (s: Server) => trafficLimit(s.traffic_limit_gb, locations?.find((l) => l.id === s.location_id)?.traffic_limit_gb, settings?.['traffic.limit_gb'])
   const [params, setParams] = useSearchParams()
@@ -183,6 +185,11 @@ export function Servers() {
             { title: 'وضعیت', dataIndex: 'status', render: (st: string, s) => <><StatusTag map={serverStatus} value={st} /><ServerMarks server={s} /></> },
             { title: 'ایران', render: (_, s) => <CheckBadge server={s} /> },
             { title: 'آنلاین', dataIndex: 'online_count', width: 70, sorter: (a, b) => a.online_count - b.online_count },
+            ...(quality.enabled ? [{
+              title: 'کیفیت', key: 'quality', width: 100,
+              sorter: (a: Server, b: Server) => (a.quality_kbps ?? 0) - (b.quality_kbps ?? 0),
+              render: (_: unknown, s: Server) => <QualityTag q={serverQuality(s)} />,
+            }] : []),
             {
               title: 'مصرف', sorter: (a, b) => a.traffic_up + a.traffic_down - b.traffic_up - b.traffic_down,
               render: (_, s) => <TrafficBar used={s.traffic_up + s.traffic_down} limit={limitOf(s)} compact />,

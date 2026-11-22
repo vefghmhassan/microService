@@ -23,6 +23,7 @@ import { jobKind, jobStatus, rotateMethod, serverStatus, syncStatus, verdict } f
 import { bytes, flagEmoji, fmtDate, timeAgo } from '../lib/format'
 import { linkRemark } from '../lib/outbound'
 import { ServerIP } from '../components/ServerIP'
+import { QualityTag, formatKbps, serverQuality, useQuality } from '../components/QualityTag'
 
 export function ServerDetail() {
   const id = Number(useParams().id)
@@ -169,11 +170,14 @@ function Usage({ id, installed }: { id: number; installed: boolean }) {
   const [limit, setLimit] = useState<number | null>(null)
   const inv = [['servers', id, 'inbounds'], keys.server(id), keys.servers]
   const refresh = useAction(() => post(`/servers/${id}/stats`), { success: 'آمار به‌روز شد', invalidate: inv })
+  const quality = useQuality()
   const saveLimit = useAction((gb: number) => put(`/servers/${id}`, { traffic_limit_gb: gb }), { success: 'سقف ذخیره شد', invalidate: inv })
   if (!installed) return <Typography.Text type="secondary">3x-ui هنوز نصب نشده است.</Typography.Text>
   if (isLoading || !data) return <Skeleton active />
   const s = data.server
   const used = s.traffic_up + s.traffic_down
+  const qv = quality.judge(serverQuality(s))
+  const qTone = qv === 'bad' ? 'bad' : qv === 'warn' ? 'warn' : qv === 'good' ? 'ok' : 'info'
   return (
     <Flex vertical gap={16}>
       <Row gutter={[12, 12]}>
@@ -182,6 +186,14 @@ function Usage({ id, installed }: { id: number; installed: boolean }) {
         <Col xs={12} md={6}><StatCard title="دانلود" value={<span dir="ltr">{bytes(s.traffic_down)}</span>} /></Col>
         <Col xs={12} md={6}><StatCard title="کل مصرف" value={<span dir="ltr">{bytes(used)}</span>} tone={data.limit_bytes && used >= data.limit_bytes ? 'bad' : 'info'} /></Col>
       </Row>
+      {quality.enabled && (
+        <Row gutter={[12, 12]}>
+          <Col xs={12} md={6}><StatCard title="سرعت کاربران (صدک ۷۵)" value={<span dir="ltr">{qv === 'none' || qv === 'thin' ? '—' : formatKbps(s.quality_kbps)}</span>} tone={qTone} /></Col>
+          <Col xs={12} md={6}><StatCard title="پینگ کاربران (میانه)" value={<span dir="ltr">{s.quality_at && s.quality_conns ? `${Math.round(s.quality_rtt_ms ?? 0)} ms` : '—'}</span>} /></Col>
+          <Col xs={12} md={6}><StatCard title="retransmit" value={<span dir="ltr">{s.quality_at && s.quality_conns ? `${(s.quality_retrans_pct ?? 0).toFixed(1)}%` : '—'}</span>} tone={qTone === 'bad' && (s.quality_retrans_pct ?? 0) > 0 ? 'warn' : 'info'} /></Col>
+          <Col xs={12} md={6}><StatCard title="اتصال‌های بررسی‌شده" value={<Flex gap={8} align="center">{s.quality_conns ?? 0}<QualityTag q={serverQuality(s)} /></Flex>} /></Col>
+        </Row>
+      )}
       <Card size="small">
         <Flex gap={16} wrap align="center" justify="space-between">
           <Flex vertical gap={4} style={{ flex: 1, minWidth: 220 }}>
@@ -207,6 +219,10 @@ function Usage({ id, installed }: { id: number; installed: boolean }) {
           { title: 'پورت', dataIndex: 'port' },
           { title: 'کاربران', dataIndex: 'clients' },
           { title: 'آنلاین', dataIndex: 'online', render: (n: number) => <Tag color={n ? 'success' : 'default'}>{n}</Tag> },
+          ...(quality.enabled ? [{
+            title: 'کیفیت', key: 'quality',
+            render: (_: unknown, r: InboundStat) => <QualityTag q={{ conns: r.q_conns, rtt: r.q_rtt_ms, kbps: r.q_kbps, retrans: r.q_retrans_pct, at: s.quality_at }} />,
+          }] : []),
           { title: 'آپلود', dataIndex: 'up', render: (b: number) => <span dir="ltr">{bytes(b)}</span> },
           { title: 'دانلود', dataIndex: 'down', render: (b: number) => <span dir="ltr">{bytes(b)}</span> },
           { title: 'جمع', render: (_, r) => <span dir="ltr">{bytes(r.up + r.down)}</span> },

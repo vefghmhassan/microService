@@ -109,6 +109,14 @@ func (o *Orchestrator) CollectStats(ctx context.Context, s *models.Server) (err 
 		}
 	}
 
+	var ports []int
+	for _, in := range inbounds {
+		if in.Enable && in.Port > 0 {
+			ports = append(ports, in.Port)
+		}
+	}
+	qAll, qPort, qNote, qOK := o.collectQuality(ctx, remote, ports)
+
 	var up, down int64
 	onlineTotal := 0
 	now := time.Now()
@@ -129,9 +137,15 @@ func (o *Orchestrator) CollectStats(ctx context.Context, s *models.Server) (err 
 			Protocol: in.Protocol, Enabled: in.Enable, Up: in.Up, Down: in.Down,
 			Clients: len(in.ClientStats), Online: n, UpdatedAt: now,
 		}
+		cols := []string{"remark", "protocol", "enabled", "up", "down", "clients", "online", "updated_at"}
+		if qOK {
+			q := qPort[in.Port]
+			row.QConns, row.QRTTMs, row.QKbps, row.QRetransPct = q.Conns, q.RTTMs, q.Kbps, q.RetransPct
+			cols = append(cols, "q_conns", "q_rtt_ms", "q_kbps", "q_retrans_pct")
+		}
 		o.DB.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "server_id"}, {Name: "port"}},
-			DoUpdates: clause.AssignmentColumns([]string{"remark", "protocol", "enabled", "up", "down", "clients", "online", "updated_at"}),
+			DoUpdates: clause.AssignmentColumns(cols),
 		}).Create(&row)
 	}
 	// Inbounds removed from the panel no longer count.
@@ -143,6 +157,13 @@ func (o *Orchestrator) CollectStats(ctx context.Context, s *models.Server) (err 
 
 	s.TrafficUp, s.TrafficDown, s.OnlineCount, s.StatsAt, s.StatsError = up, down, onlineTotal, &now, ""
 	o.DB.Model(s).Select("traffic_up", "traffic_down", "online_count", "stats_at", "stats_error").Updates(s)
+	switch {
+	case qOK:
+		o.applyQuality(s, qAll, "")
+	case qNote != "":
+		s.QualityNote = qNote
+		o.DB.Model(s).Update("quality_note", qNote)
+	}
 	o.Engine.Broker.Publish(serverEvent(s))
 	return nil
 }

@@ -316,6 +316,16 @@ type Server struct {
 	OnlineCount int        `json:"online_count"`
 	StatsAt     *time.Time `json:"stats_at"`
 	StatsError  string     `gorm:"size:255" json:"stats_error"`
+	// Connection quality of real user connections from the kernel (ss -ti),
+	// read with the stats: qualifying connections, median RTT, p75 delivery
+	// rate and retransmit percent. QualityBad counts bad rounds in a row.
+	QualityAt         *time.Time `gorm:"column:quality_at" json:"quality_at"`
+	QualityConns      int        `gorm:"column:quality_conns" json:"quality_conns"`
+	QualityRTTMs      float64    `gorm:"column:quality_rtt_ms" json:"quality_rtt_ms"`
+	QualityKbps       float64    `gorm:"column:quality_kbps" json:"quality_kbps"`
+	QualityRetransPct float64    `gorm:"column:quality_retrans_pct" json:"quality_retrans_pct"`
+	QualityBad        int        `gorm:"column:quality_bad" json:"quality_bad"`
+	QualityNote       string     `gorm:"column:quality_note;size:255" json:"quality_note"`
 	// How the last client-address collection for the GeoIP report went.
 	IPCollectAt   *time.Time `json:"ip_collect_at"`
 	IPCollectNote string     `gorm:"size:255" json:"ip_collect_note"`
@@ -447,7 +457,12 @@ type InboundStat struct {
 	Down      int64     `json:"down"`
 	Clients   int       `json:"clients"`
 	Online    int       `json:"online"`
-	UpdatedAt time.Time `json:"updated_at"`
+	// Connection quality of this inbound's users (see Server.Quality*).
+	QConns      int       `gorm:"column:q_conns" json:"q_conns"`
+	QRTTMs      float64   `gorm:"column:q_rtt_ms" json:"q_rtt_ms"`
+	QKbps       float64   `gorm:"column:q_kbps" json:"q_kbps"`
+	QRetransPct float64   `gorm:"column:q_retrans_pct" json:"q_retrans_pct"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Destination is one vpn-pannel admin that generated configs are pushed to.

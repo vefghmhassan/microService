@@ -261,6 +261,13 @@ export interface Server extends DNSFields {
   online_count: number
   stats_at: string | null
   stats_error: string
+  quality_at?: string | null
+  quality_conns?: number
+  quality_rtt_ms?: number
+  quality_kbps?: number
+  quality_retrans_pct?: number
+  quality_bad?: number
+  quality_note?: string
   traffic_limit_gb: number
   replacing_at: string | null
   panel_removed_at?: string | null
@@ -281,6 +288,10 @@ export interface InboundStat {
   down: number
   clients: number
   online: number
+  q_conns?: number
+  q_rtt_ms?: number
+  q_kbps?: number
+  q_retrans_pct?: number
   updated_at: string
 }
 

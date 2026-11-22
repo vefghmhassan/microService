@@ -56,7 +56,15 @@ const (
 	// WatchMinOnline: warn when a server with no "before" has fewer online (0 = off).
 	WatchMinOnline = "watch.min_online"
 	StatsIntervalMin     = "stats.interval_min"
-	VPNPanelURL          = "vpnpannel.url"
+	// Connection quality read from the kernel (ss -ti) of real user
+	// connections during stats collection; no test traffic.
+	QualityEnabled    = "quality.enabled"
+	QualityAlert      = "quality.alert"
+	QualityMinKbps    = "quality.min_kbps"
+	QualityMaxRetrans = "quality.max_retrans_pct"
+	QualityMinConns   = "quality.min_conns"
+	QualityBadRounds  = "quality.bad_rounds"
+	VPNPanelURL         = "vpnpannel.url"
 	VPNPanelEmail        = "vpnpannel.email"
 	VPNPanelPassword     = "vpnpannel.password"
 	VPNPanelAds          = "vpnpannel.ads"
@@ -130,6 +138,12 @@ var Defaults = map[string]string{
 	WatchOnlinePct:       "50",
 	WatchMinOnline:       "0",
 	StatsIntervalMin:     "5",
+	QualityEnabled:       "true",
+	QualityAlert:         "false",
+	QualityMinKbps:       "500",
+	QualityMaxRetrans:    "10",
+	QualityMinConns:      "3",
+	QualityBadRounds:     "3",
 	VPNPanelURL:          "",
 	VPNPanelEmail:        "",
 	VPNPanelPassword:     "",
