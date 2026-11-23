@@ -18,6 +18,24 @@ export function timeAgo(s?: string | null): string {
   return fmtDate(s)
 }
 
+/** age is how long ago s was, as a span: «۴۵ دقیقه», «۳ ساعت و ۱۰ دقیقه», «۲ روز و ۵ ساعت». */
+export function age(s?: string | null): string {
+  if (!s) return '—'
+  const m = Math.max(0, Math.floor((Date.now() - new Date(s).getTime()) / 60000))
+  const n = (x: number) => numFmt.format(x)
+  if (m < 1) return 'کمتر از ۱ دقیقه'
+  if (m < 60) return `${n(m)} دقیقه`
+  const h = Math.floor(m / 60)
+  if (h < 24) return m % 60 ? `${n(h)} ساعت و ${n(m % 60)} دقیقه` : `${n(h)} ساعت`
+  const d = Math.floor(h / 24)
+  return h % 24 ? `${n(d)} روز و ${n(h % 24)} ساعت` : `${n(d)} روز`
+}
+
+/** ipSince is when the server's current IP came: ip_since, else when it was built. */
+export function ipSince(s: { ip_since?: string | null; created_at: string }): string {
+  return s.ip_since || s.created_at
+}
+
 export function duration(from?: string | null, to?: string | null): string {
   if (!from) return '—'
   const secs = Math.max(0, ((to ? new Date(to) : new Date()).getTime() - new Date(from).getTime()) / 1000)

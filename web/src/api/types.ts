@@ -270,6 +270,8 @@ export interface Server extends DNSFields {
   last_check_ok: boolean | null
   last_check_note: string
   rotate_count: number
+  /** When the server got its current IP (built or rotated). */
+  ip_since?: string | null
   traffic_up: number
   traffic_down: number
   online_count: number

@@ -468,6 +468,13 @@ func TestProvisionRotatesAwayFromFilteredIPThenInstallsAndUploads(t *testing.T) 
 		t.Fatalf("ip pool %+v", ips)
 	}
 
+	// The IP clock starts when the server is built.
+	if s.IPSince == nil || time.Since(*s.IPSince) > time.Minute {
+		t.Fatalf("ip_since after build: %v", s.IPSince)
+	}
+	built := *s.IPSince
+	time.Sleep(10 * time.Millisecond)
+
 	// Rotate on demand: vpn-pannel must be moved from the uploaded IP to the new one.
 	j2, _ := o.Engine.Enqueue(KindRotate, &s.ID, RotateParams{Reason: "test"}, "test")
 	if got := waitJob(t, o, j2.ID); got.Status != models.JobDone {
@@ -476,6 +483,10 @@ func TestProvisionRotatesAwayFromFilteredIPThenInstallsAndUploads(t *testing.T) 
 	o.DB.First(&s, s.ID)
 	if s.IPv4 != "10.0.0.3" || len(dest.replaced) != 1 || dest.replaced[0] != [2]string{"10.0.0.2", "10.0.0.3"} || s.UploadedIP != "10.0.0.3" {
 		t.Fatalf("after rotate: ip=%s replaced=%v uploaded=%s", s.IPv4, dest.replaced, s.UploadedIP)
+	}
+	// A new IP starts the clock again.
+	if s.IPSince == nil || !s.IPSince.After(built) {
+		t.Fatalf("ip_since after rotate %v, built %v", s.IPSince, built)
 	}
 }
 

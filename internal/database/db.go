@@ -52,7 +52,14 @@ func Migrate(db *gorm.DB) error {
 			return err
 		}
 	}
-	return db.AutoMigrate(models.All()...)
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		return err
+	}
+	// Servers from before ip_since: their IP dates from their last finished
+	// IP rotation still in the history, else from when they were built.
+	return db.Exec(`UPDATE servers SET ip_since = COALESCE(
+		(SELECT MAX(j.finished_at) FROM jobs j WHERE j.server_id = servers.id AND j.kind = 'rotate' AND j.status = 'done'),
+		created_at) WHERE ip_since IS NULL`).Error
 }
 
 // SeedAdmin creates the first admin when the table is empty.

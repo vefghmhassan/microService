@@ -397,8 +397,9 @@ func (o *Orchestrator) probeCandidate(ctx context.Context, r *jobs.Run, prov pro
 		return "", fmt.Errorf("wait running: %w", err)
 	}
 	s.IPv4, s.IPRef, s.IPv6 = inst.IPv4, inst.IPRef, inst.IPv6
+	s.IPSince = timeNow()
 	s.Status = models.ServerChecking
-	o.save(r, s, "ipv4", "ip_ref", "ipv6", "status")
+	o.save(r, s, "ipv4", "ip_ref", "ipv6", "ip_since", "status")
 	o.poolUse(s)
 	if s.PublicIP() == "" {
 		return "", fmt.Errorf("the provider gave the server no public IP%s", s.Family())

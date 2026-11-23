@@ -310,6 +310,9 @@ type Server struct {
 	LastCheckOK      *bool      `json:"last_check_ok"`
 	LastCheckNote    string     `gorm:"size:255" json:"last_check_note"`
 	RotateCount      int        `json:"rotate_count"`
+	// IPSince is when the server got its current IP: built, or IP rotated.
+	// Users find a new IP over time, so low traffic on a young one is normal.
+	IPSince *time.Time `json:"ip_since"`
 	// Traffic and online users as last read from 3x-ui (all inbounds).
 	TrafficUp   int64      `json:"traffic_up"`
 	TrafficDown int64      `json:"traffic_down"`

@@ -9,14 +9,14 @@ import { PageHeader } from '../components/PageHeader'
 import { StatusTag } from '../components/StatusTag'
 import { ServerMarks } from '../components/ServerMarks'
 import { HostBadge } from '../components/HostBadge'
-import { CheckBadge, ServerCard } from '../components/ServerCard'
+import { CheckBadge, IPAge, ServerCard } from '../components/ServerCard'
 import { ServerActions } from '../components/ServerActions'
 import { BulkServerActions } from '../components/BulkServerActions'
 import { NewServerModal } from '../components/NewServerModal'
 import { EmptyState } from '../components/EmptyState'
 import { useOpenJob } from '../components/JobViewer'
 import { serverStatus, syncStatus } from '../lib/labels'
-import { flagEmoji, trafficLimit } from '../lib/format'
+import { flagEmoji, ipSince, trafficLimit } from '../lib/format'
 import { ServerIP } from '../components/ServerIP'
 import { QualityTag, serverQuality, useQuality } from '../components/QualityTag'
 
@@ -212,6 +212,11 @@ export function Servers() {
             { title: 'وضعیت', dataIndex: 'status', render: (st: string, s) => <><StatusTag map={serverStatus} value={st} /><ServerMarks server={s} /></> },
             { title: 'ایران', render: (_, s) => <CheckBadge server={s} /> },
             { title: 'آنلاین', dataIndex: 'online_count', width: 70, sorter: (a, b) => a.online_count - b.online_count },
+            {
+              title: 'عمر IP', key: 'ip_age', width: 130,
+              sorter: (a: Server, b: Server) => new Date(ipSince(a)).getTime() - new Date(ipSince(b)).getTime(),
+              render: (_: unknown, s: Server) => <IPAge server={s} />,
+            },
             ...(quality.enabled ? [{
               title: 'کیفیت', key: 'quality', width: 100,
               sorter: (a: Server, b: Server) => (a.quality_kbps ?? 0) - (b.quality_kbps ?? 0),

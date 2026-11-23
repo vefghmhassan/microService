@@ -10,6 +10,12 @@ import (
 	"microserver/internal/services/settings"
 )
 
+// timeNow is now as a pointer, for the *time.Time fields.
+func timeNow() *time.Time {
+	t := time.Now()
+	return &t
+}
+
 // DefaultIdleMinutes is how long an inbound may have no user before a smart
 // config or mode with DropIdle leaves it out, when it does not say.
 const DefaultIdleMinutes = 30

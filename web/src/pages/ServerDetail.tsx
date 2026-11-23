@@ -17,10 +17,10 @@ import { CopyText } from '../components/CopyText'
 import { HostBadge } from '../components/HostBadge'
 import { ServerActions } from '../components/ServerActions'
 import { ProbeTable } from '../components/ProbeTable'
-import { CheckBadge } from '../components/ServerCard'
+import { CheckBadge, IPAge } from '../components/ServerCard'
 import { useOpenJob } from '../components/JobViewer'
 import { jobKind, jobStatus, rotateMethod, serverStatus, syncStatus, verdict } from '../lib/labels'
-import { bytes, flagEmoji, fmtDate, timeAgo } from '../lib/format'
+import { bytes, flagEmoji, fmtDate, ipSince, timeAgo } from '../lib/format'
 import { linkRemark } from '../lib/outbound'
 import { ServerIP } from '../components/ServerIP'
 import { QualityTag, formatKbps, serverQuality, useQuality } from '../components/QualityTag'
@@ -39,7 +39,7 @@ export function ServerDetail() {
     <>
       <PageHeader
         title={<Space><Button type="text" icon={<ArrowRightOutlined />} onClick={() => nav('/servers')} />{flagEmoji(s.country)} {s.name}</Space>}
-        subtitle={<Space wrap><StatusTag map={serverStatus} value={s.status} /><ServerMarks server={s} /><ServerIP server={s} showV4 /><CheckBadge server={s} /></Space>}
+        subtitle={<Space wrap><StatusTag map={serverStatus} value={s.status} /><ServerMarks server={s} /><ServerIP server={s} showV4 /><IPAge server={s} /><CheckBadge server={s} /></Space>}
         extra={<ServerActions server={s} onJob={(j) => openJob(j.id)} />}
       />
       {s.last_error && s.status === 'error' && <Alert type="error" showIcon title="خطای آخرین عملیات" description={s.last_error} style={{ marginBottom: 16 }} />}
@@ -86,6 +86,7 @@ function Overview({ id, installed }: { id: number; installed: boolean }) {
             { label: 'شناسه در ارائه‌دهنده', children: <CopyText text={s.provider_ref} /> },
             { label: 'روش تعویض IP', children: rotateMethod[s.provider_account?.capabilities?.rotate_method ?? ''] ?? '—' },
             { label: 'تعداد تعویض IP', children: s.rotate_count },
+            { label: 'IP فعلی از', children: fmtDate(ipSince(s)) },
             { label: 'آخرین چک', children: `${timeAgo(s.last_check_at)} — ${s.last_check_note || '—'}` },
             { label: 'تمپلیت', children: <StatusTag map={syncStatus} value={s.sync_status} /> },
             ...(s.hostname ? [

@@ -3,6 +3,7 @@ package database
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"microserver/internal/models"
 )
@@ -41,5 +42,39 @@ func TestMigrateMakesPortUniquePerFamily(t *testing.T) {
 	}
 	if err := Migrate(db); err != nil {
 		t.Fatalf("second migrate: %v", err)
+	}
+}
+
+// Servers from before ip_since get it from their last IP rotation, else from
+// when they were built.
+func TestMigrateBackfillsIPSince(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	// Servers without a provider account: only the backfill is under test.
+	db.Exec("PRAGMA foreign_keys = OFF")
+	built := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	rotated := time.Date(2026, 11, 20, 8, 0, 0, 0, time.UTC)
+	a := models.Server{Name: "a", CreatedAt: built}
+	b := models.Server{Name: "b", CreatedAt: built}
+	db.Create(&a)
+	db.Create(&b)
+	db.Exec("UPDATE servers SET ip_since = NULL")
+	db.Create(&models.Job{Kind: "rotate", Status: models.JobDone, ServerID: &b.ID, FinishedAt: &rotated})
+	db.Create(&models.Job{Kind: "rotate", Status: models.JobFailed, ServerID: &a.ID, FinishedAt: &rotated})
+	if err := Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	db.First(&a, a.ID)
+	db.First(&b, b.ID)
+	if a.IPSince == nil || !a.IPSince.Equal(built) {
+		t.Fatalf("never rotated: %v", a.IPSince)
+	}
+	if b.IPSince == nil || !b.IPSince.Equal(rotated) {
+		t.Fatalf("rotated: %v", b.IPSince)
 	}
 }

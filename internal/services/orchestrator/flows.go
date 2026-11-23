@@ -125,11 +125,12 @@ func (o *Orchestrator) provision(ctx context.Context, r *jobs.Run) error {
 			return o.fail(r, &s, fmt.Errorf("wait running: %w", err))
 		}
 		s.IPv4, s.IPRef, s.IPv6 = inst.IPv4, inst.IPRef, inst.IPv6
+		s.IPSince = timeNow()
 		if inst.Region != "" {
 			s.Region = inst.Region
 		}
 		s.Status = models.ServerChecking
-		o.save(r, &s, "ipv4", "ip_ref", "ipv6", "region", "status")
+		o.save(r, &s, "ipv4", "ip_ref", "ipv6", "ip_since", "region", "status")
 		o.poolUse(&s)
 		if s.PublicIP() == "" {
 			return o.fail(r, &s, fmt.Errorf("the provider gave the server no public IP%s", s.Family()))
@@ -418,6 +419,7 @@ func (o *Orchestrator) rotateOnce(ctx context.Context, r *jobs.Run, prov provide
 		o.banIP(r, s.ProviderAccountID, s.Region, oldPublic, banReason)
 	}
 	s.IPv4, s.IPRef, s.IPv6 = res.Instance.IPv4, res.Instance.IPRef, res.Instance.IPv6
+	s.IPSince = timeNow()
 	if res.Recreated {
 		s.ProviderRef = res.Instance.Ref
 		s.SSHHostKey = ""

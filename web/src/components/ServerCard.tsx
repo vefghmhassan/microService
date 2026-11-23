@@ -3,7 +3,7 @@ import { CheckCircleFilled, CloseCircleFilled, QuestionCircleFilled } from '@ant
 import { useNavigate } from 'react-router-dom'
 import type { Job, Server } from '../api/types'
 import { serverStatus, syncStatus } from '../lib/labels'
-import { flagEmoji, timeAgo } from '../lib/format'
+import { age, flagEmoji, fmtDate, ipSince, timeAgo } from '../lib/format'
 import { StatusTag } from './StatusTag'
 import { ServerMarks } from './ServerMarks'
 import { HostBadge } from './HostBadge'
@@ -55,6 +55,7 @@ export function ServerCard({ server, limit = 0, onJob, selected, onSelect }: {
         <Flex justify="space-between" align="center" gap={8}>
           <Flex gap={6} align="center">
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>آنلاین: {server.online_count}</Typography.Text>
+            <IPAge server={server} />
             {quality.enabled && <QualityTag q={serverQuality(server)} />}
           </Flex>
           <TrafficBar used={server.traffic_up + server.traffic_down} limit={limit} compact />
@@ -68,5 +69,19 @@ export function ServerCard({ server, limit = 0, onJob, selected, onSelect }: {
         <ServerActions server={server} onJob={onJob} />
       </Flex>
     </Card>
+  )
+}
+
+/** IPAge is how long the server has had its current IP. Users find a new IP
+ * over time, so low traffic on a young one is expected; the first hour is
+ * marked. */
+export function IPAge({ server }: { server: Server }) {
+  const since = ipSince(server)
+  const young = Date.now() - new Date(since).getTime() < 3600_000
+  const from = server.ip_since && server.rotate_count > 0 ? 'از آخرین تعویض IP' : 'از ساخت سرور'
+  return (
+    <Tooltip title={`IP فعلی ${from}: ${fmtDate(since)}`}>
+      <Tag color={young ? 'blue' : undefined} style={{ marginInlineEnd: 0 }}>⏱ {age(since)}</Tag>
+    </Tooltip>
   )
 }
