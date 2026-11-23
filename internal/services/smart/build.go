@@ -35,6 +35,10 @@ type Item struct {
 	URL string
 	// Label says where it came from (server name · inbound), for messages.
 	Label string
+	// Score ranks the item for the balancer's fallback: the outbound used
+	// while the observatory has no result yet, or none passes. Higher is
+	// better (measured speed of its users); 0 = unknown.
+	Score float64
 }
 
 // Result is a built config.
@@ -108,6 +112,9 @@ func Validate(p *models.SmartProfile) error {
 	if p.Name == "" {
 		return errors.New("نام پروفایل لازم است")
 	}
+	if p.IdleMinutes < 0 || p.IdleMinutes > 1440 {
+		return errors.New("مدت بی‌استفاده باید بین ۰ و ۱۴۴۰ دقیقه باشد")
+	}
 	if !strings.HasPrefix(p.ProbeURL, "http://") && !strings.HasPrefix(p.ProbeURL, "https://") {
 		return errors.New("آدرس تست باید با http:// یا https:// شروع شود")
 	}
@@ -145,6 +152,7 @@ func Build(p models.SmartProfile, rules []models.SmartRule, items []Item, name s
 	var proxies []any
 	fragment := false
 	seen := map[string]bool{}
+	fallback, best := 1, 0.0
 	for _, it := range items {
 		if p.MaxOutbounds > 0 && len(proxies) >= p.MaxOutbounds {
 			res.Skipped = append(res.Skipped, it.Label+": over the outbound cap")
@@ -163,6 +171,9 @@ func Build(p models.SmartProfile, rules []models.SmartRule, items []Item, name s
 		}
 		fragment = fragment || frag
 		proxies = append(proxies, o)
+		if it.Score > best {
+			fallback, best = len(proxies), it.Score
+		}
 	}
 	if len(proxies) == 0 {
 		return res, errors.New("no usable link for this smart config")
@@ -184,7 +195,7 @@ func Build(p models.SmartProfile, rules []models.SmartRule, items []Item, name s
 		"dns":       dnsBlock(p),
 		"inbounds":  inbounds(),
 		"outbounds": outbounds,
-		"routing":   routing(p, rules),
+		"routing":   routing(p, rules, fmt.Sprintf("%s%d", ProxyPrefix, fallback)),
 		"policy": obj{
 			"levels": obj{"8": obj{"connIdle": 300, "downlinkOnly": 1, "handshake": 4, "uplinkOnly": 1}},
 			"system": obj{"statsOutboundDownlink": true, "statsOutboundUplink": true},
@@ -244,7 +255,7 @@ func dnsBlock(p models.SmartProfile) obj {
 	}
 }
 
-func routing(p models.SmartProfile, rules []models.SmartRule) obj {
+func routing(p models.SmartProfile, rules []models.SmartRule, fallback string) obj {
 	viaBalancer := func(r obj) obj {
 		r["type"], r["balancerTag"] = "field", BalancerTag
 		return r
@@ -286,7 +297,7 @@ func routing(p models.SmartProfile, rules []models.SmartRule) obj {
 		"domainStrategy": "IPIfNonMatch",
 		"balancers": []any{obj{
 			"tag": BalancerTag, "selector": []string{ProxyPrefix}, "strategy": strategy,
-			"fallbackTag": ProxyPrefix + "1",
+			"fallbackTag": fallback,
 		}},
 		"rules": rs,
 	}

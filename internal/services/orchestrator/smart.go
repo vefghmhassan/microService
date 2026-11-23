@@ -153,8 +153,10 @@ func smartName(p *models.SmartProfile, s *models.Server) string {
 }
 
 // smartItems are a server's working links: the inbounds that passed the
-// config test and went to vpn-pannel (UploadedInbounds), narrowed to want.
-func (o *Orchestrator) smartItems(snap *Snapshot, s *models.Server, want map[uint]bool) ([]smart.Item, error) {
+// config test and went to vpn-pannel (UploadedInbounds), narrowed to want,
+// less those idle under idle. Each carries its users' measured speed as its
+// score.
+func (o *Orchestrator) smartItems(snap *Snapshot, s *models.Server, want map[uint]bool, idle idleRule) ([]smart.Item, error) {
 	us := o.forUpload(snap, s)
 	working := splitIDs(s.UploadedInbounds)
 	if len(working) == 0 && s.UploadedAt != nil {
@@ -163,10 +165,21 @@ func (o *Orchestrator) smartItems(snap *Snapshot, s *models.Server, want map[uin
 		working = uploadIDs(us)
 	}
 	host := LinkHost(s)
-	var items []smart.Item
-	var errs []error
+	var picked []models.InboundTemplate
+	var ports []int
 	for _, t := range us.Inbounds {
 		if !t.Enabled || !t.Upload || !working[t.ID] || (len(want) > 0 && !want[t.ID]) {
+			continue
+		}
+		picked = append(picked, t)
+		ports = append(ports, t.Port)
+	}
+	out := o.idleOut(s, idle, ports, time.Now())
+	scores := o.inboundScores(s)
+	var items []smart.Item
+	var errs []error
+	for _, t := range picked {
+		if out[t.Port] {
 			continue
 		}
 		addr, sni := us.target(t, host)
@@ -180,7 +193,7 @@ func (o *Orchestrator) smartItems(snap *Snapshot, s *models.Server, want map[uin
 			errs = append(errs, err)
 		}
 		for _, l := range append(ls, cl...) {
-			items = append(items, smart.Item{URL: l.URL, Label: s.Name + " · " + t.Remark})
+			items = append(items, smart.Item{URL: l.URL, Label: s.Name + " · " + t.Remark, Score: scores[t.Port]})
 		}
 	}
 	return items, errors.Join(errs...)
@@ -208,6 +221,7 @@ func (o *Orchestrator) SmartTargets(snap *Snapshot, p *models.SmartProfile) ([]S
 	for id := range splitIDs(p.InboundIDs) {
 		want[id] = true
 	}
+	idle := o.idleRuleFor(p.DropIdle, p.IdleMinutes)
 	usable := func(s *models.Server) string {
 		switch {
 		case s.Status != models.ServerActive:
@@ -230,7 +244,7 @@ func (o *Orchestrator) SmartTargets(snap *Snapshot, p *models.SmartProfile) ([]S
 			if usable(s) != "" {
 				continue
 			}
-			items, _ := o.smartItems(snap, s, want)
+			items, _ := o.smartItems(snap, s, want, idle)
 			t.Items = append(t.Items, items...)
 		}
 		if len(t.Items) == 0 {
@@ -246,7 +260,7 @@ func (o *Orchestrator) SmartTargets(snap *Snapshot, p *models.SmartProfile) ([]S
 		}
 		t := SmartTarget{ServerID: s.ID, Name: smartName(p, s), Country: s.Country, Off: usable(s)}
 		if t.Off == "" {
-			t.Items, _ = o.smartItems(snap, s, want)
+			t.Items, _ = o.smartItems(snap, s, want, idle)
 			if len(t.Items) == 0 {
 				t.Off = "no working config on this server"
 			}

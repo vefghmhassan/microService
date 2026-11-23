@@ -143,22 +143,40 @@ func (r *ssRemote) Run(ctx context.Context, cmd string, l func(string)) (string,
 	return r.fakeRemote.Run(ctx, cmd, l)
 }
 
-func TestCollectQualityFiltersPeersAndHonorsSwitch(t *testing.T) {
+func TestReadConnsFiltersPeersAndCountsIPs(t *testing.T) {
 	o, _, _, _, _, _ := setup(t)
 	o.Geo = fakeGeo{"2.144.10.20": {Country: "IR"}, "5.120.3.4": {Country: "DE"}}
 	r := &ssRemote{out: ssSample + "0 0 5.9.1.2:443 10.0.0.5:1\n\t rtt:1/1 bytes_acked:900000 segs_out:9 delivery_rate 1Mbps\n"}
 
-	all, per, _, ok := o.collectQuality(context.Background(), r, []int{443, 8443})
+	lc, _, ok := o.readConns(context.Background(), r, []int{443, 8443})
 	if !ok || len(r.cmds) != 1 {
 		t.Fatalf("ok %v cmds %v", ok, r.cmds)
 	}
 	// The German peer and the private one are dropped; unknown peers stay.
-	if all.Conns != 2 || per[443].Conns != 1 || per[8443].Conns != 1 {
-		t.Fatalf("all %+v per %+v", all, per)
+	if lc.All.Conns != 2 || lc.PerPort[443].Conns != 1 || lc.PerPort[8443].Conns != 1 {
+		t.Fatalf("quality %+v", lc)
+	}
+	// Online counts every user connection, also the ones that moved little:
+	// 2.144.10.20, .21, .22 on 443 and the v6 peer on 8443.
+	if lc.IPs != 4 || lc.PortIPs[443] != 3 || lc.PortIPs[8443] != 1 {
+		t.Fatalf("ips %d per %v", lc.IPs, lc.PortIPs)
 	}
 
+	// Quality off still reads ss: the online count needs it.
 	o.Settings.Set(map[string]string{settings.QualityEnabled: "false"})
-	if _, _, _, ok := o.collectQuality(context.Background(), r, []int{443}); ok || len(r.cmds) != 1 {
-		t.Fatalf("ran ss while off: %v", r.cmds)
+	if _, _, ok := o.readConns(context.Background(), r, []int{443}); !ok || len(r.cmds) != 2 {
+		t.Fatalf("ss not read with quality off: %v", r.cmds)
+	}
+}
+
+func TestDistinctPeers(t *testing.T) {
+	conns := []ssConn{
+		{LocalPort: 443, Peer: "1.1.1.1"}, {LocalPort: 443, Peer: "1.1.1.1"},
+		{LocalPort: 443, Peer: "2.2.2.2"}, {LocalPort: 8080, Peer: "1.1.1.1"},
+		{LocalPort: 8080, Peer: "3.3.3.3"},
+	}
+	all, per := distinctPeers(conns)
+	if all != 3 || per[443] != 2 || per[8080] != 2 {
+		t.Fatalf("all %d per %v", all, per)
 	}
 }

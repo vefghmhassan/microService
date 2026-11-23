@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -122,6 +123,10 @@ type fakeRemote struct {
 
 func (r *fakeRemote) Run(_ context.Context, cmd string, _ func(string)) (string, error) {
 	r.cmds = append(r.cmds, cmd)
+	if strings.HasPrefix(cmd, "ss ") {
+		// No ss here: the online count falls back to 3x-ui's online emails.
+		return "bash: ss: command not found", errors.New("exit status 127")
+	}
 	if n := configTestTargets(cmd); n > 0 {
 		var b strings.Builder
 		for i := 0; i < n; i++ {

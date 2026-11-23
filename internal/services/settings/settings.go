@@ -54,8 +54,8 @@ const (
 	// percent of those before the change (0 = off).
 	WatchOnlinePct = "watch.online_pct"
 	// WatchMinOnline: warn when a server with no "before" has fewer online (0 = off).
-	WatchMinOnline = "watch.min_online"
-	StatsIntervalMin     = "stats.interval_min"
+	WatchMinOnline   = "watch.min_online"
+	StatsIntervalMin = "stats.interval_min"
 	// Connection quality read from the kernel (ss -ti) of real user
 	// connections during stats collection; no test traffic.
 	QualityEnabled    = "quality.enabled"
@@ -64,23 +64,26 @@ const (
 	QualityMaxRetrans = "quality.max_retrans_pct"
 	QualityMinConns   = "quality.min_conns"
 	QualityBadRounds  = "quality.bad_rounds"
-	VPNPanelURL         = "vpnpannel.url"
-	VPNPanelEmail        = "vpnpannel.email"
-	VPNPanelPassword     = "vpnpannel.password"
-	VPNPanelAds          = "vpnpannel.ads"
-	VPNPanelAuto         = "vpnpannel.auto_upload"
-	TelegramToken        = "telegram.token"
-	TelegramChatIDs      = "telegram.chat_ids"
-	TelegramProxy        = "telegram.proxy"
-	TelegramNotify       = "telegram.notify"
-	GeoIPCityURL         = "geoip.city_url"
-	GeoIPASNURL          = "geoip.asn_url"
-	AcmeStaging          = "acme.staging"
-	CleanIPOperators     = "cleanip.operators"
-	CleanIPInterval      = "cleanip.interval_hours"
-	CleanIPPerLink       = "cleanip.per_link"
-	SubEnabled           = "sub.enabled"
-	SubToken             = "sub.token"
+	// IdleRetryHours: an inbound that smart configs and modes left out for
+	// being idle is put back for one try after this long (0 = never).
+	IdleRetryHours   = "idle.retry_hours"
+	VPNPanelURL      = "vpnpannel.url"
+	VPNPanelEmail    = "vpnpannel.email"
+	VPNPanelPassword = "vpnpannel.password"
+	VPNPanelAds      = "vpnpannel.ads"
+	VPNPanelAuto     = "vpnpannel.auto_upload"
+	TelegramToken    = "telegram.token"
+	TelegramChatIDs  = "telegram.chat_ids"
+	TelegramProxy    = "telegram.proxy"
+	TelegramNotify   = "telegram.notify"
+	GeoIPCityURL     = "geoip.city_url"
+	GeoIPASNURL      = "geoip.asn_url"
+	AcmeStaging      = "acme.staging"
+	CleanIPOperators = "cleanip.operators"
+	CleanIPInterval  = "cleanip.interval_hours"
+	CleanIPPerLink   = "cleanip.per_link"
+	SubEnabled       = "sub.enabled"
+	SubToken         = "sub.token"
 	// Scheduled backup sent to the Telegram chats.
 	BackupTelegram = "backup.telegram"
 	BackupInterval = "backup.interval_hours"
@@ -144,6 +147,7 @@ var Defaults = map[string]string{
 	QualityMaxRetrans:    "10",
 	QualityMinConns:      "3",
 	QualityBadRounds:     "3",
+	IdleRetryHours:       "6",
 	VPNPanelURL:          "",
 	VPNPanelEmail:        "",
 	VPNPanelPassword:     "",

@@ -80,6 +80,9 @@ func (a *App) saveMode(c *fiber.Ctx, m *models.BalancerMode) error {
 			return errJSON(c, fiber.StatusBadRequest, "فاصله تست باید مثل 30s یا 1m و دست‌کم ۱۰ ثانیه باشد")
 		}
 	}
+	if m.IdleMinutes < 0 || m.IdleMinutes > 1440 {
+		return errJSON(c, fiber.StatusBadRequest, "مدت بی‌استفاده باید بین ۰ و ۱۴۴۰ دقیقه باشد")
+	}
 	m.Country = strings.ToUpper(strings.TrimSpace(m.Country))
 	if len(m.Country) != 0 && len(m.Country) != 2 {
 		return errJSON(c, fiber.StatusBadRequest, "کشور باید کد دوحرفی باشد")

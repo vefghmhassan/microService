@@ -15,7 +15,7 @@ import { ConfirmButton } from '../components/ConfirmButton'
 const enc = (k: string) => k.replace(/\./g, '__')
 const dec = (k: string) => k.replace(/__/g, '.')
 const bools = ['xui.public_panel', 'rotate.keep_filtered_ip', 'rotate.v6_in_prefix', 'rotate.auto', 'rotate.fallback_location', 'traffic.auto_replace', 'watch.low_usage', 'quality.enabled', 'quality.alert', 'vpnpannel.ads', 'vpnpannel.auto_upload', 'telegram.notify', 'acme.staging', 'sub.enabled']
-const nums = ['xui.cf_panel_port', 'xui.cf_sub_port', 'check.min_ok', 'check.min_asn', 'check.pre_install_port', 'check.interval_min', 'check.globalping_limit', 'check.atlas_limit', 'rotate.max_attempts', 'rotate.retry_kept_after_hours', 'auto.max_per_location', 'traffic.limit_gb', 'stats.interval_min', 'watch.minutes', 'watch.min_mb', 'history.keep_days', 'ip.ban_hours', 'server.delete_delay_min', 'watch.online_pct', 'watch.min_online', 'quality.min_kbps', 'quality.max_retrans_pct', 'quality.min_conns', 'quality.bad_rounds']
+const nums = ['xui.cf_panel_port', 'xui.cf_sub_port', 'check.min_ok', 'check.min_asn', 'check.pre_install_port', 'check.interval_min', 'check.globalping_limit', 'check.atlas_limit', 'rotate.max_attempts', 'rotate.retry_kept_after_hours', 'auto.max_per_location', 'traffic.limit_gb', 'stats.interval_min', 'watch.minutes', 'watch.min_mb', 'history.keep_days', 'ip.ban_hours', 'server.delete_delay_min', 'watch.online_pct', 'watch.min_online', 'quality.min_kbps', 'quality.max_retrans_pct', 'quality.min_conns', 'quality.bad_rounds', 'idle.retry_hours']
 
 function toForm(s: S) {
   const out: Record<string, unknown> = {}
@@ -126,11 +126,12 @@ export function Settings() {
           <Col xs={24} xl={12}>
             <Card size="small" title="کیفیت اتصال کاربران">
               <Row gutter={12}>
-                <Col span={24}><F k="quality.enabled" label="پایش کیفیت اتصال (ss -ti)" tip="همراه خواندن آمار، سرعت، پینگ و retransmit اتصال‌های واقعی کاربران از کرنل سرور خوانده می‌شود. هیچ ترافیک تستی ساخته نمی‌شود. خاموش = دستور ss اصلاً اجرا نمی‌شود و ستون کیفیت پنهان می‌شود" bool><Switch /></F></Col>
+                <Col span={24}><F k="quality.enabled" label="پایش کیفیت اتصال (ss -ti)" tip="همراه خواندن آمار، سرعت، پینگ و retransmit اتصال‌های واقعی کاربران از کرنل سرور خوانده می‌شود. هیچ ترافیک تستی ساخته نمی‌شود. خاموش = ستون کیفیت پنهان می‌شود و هشداری داده نمی‌شود (شمارش کاربران آنلاین با IP همچنان انجام می‌شود)" bool><Switch /></F></Col>
                 <Col span={12}><F k="quality.min_kbps" label="حداقل سرعت قابل قبول (Kbps)" tip="صدک ۷۵ سرعت اتصال‌هایی که حداقل 256KB داده رد کرده‌اند. کمتر از این = بد. 1000 = 1 Mbps. 0 = خاموش"><InputNumber min={0} style={{ width: '100%' }} /></F></Col>
                 <Col span={12}><F k="quality.max_retrans_pct" label="حداکثر retransmit (٪)" tip="درصد بسته‌های دوباره‌فرستاده. بیشتر از این = بد (نشانه دور ریختن بسته در مسیر). 0 = خاموش"><InputNumber min={0} max={100} style={{ width: '100%' }} /></F></Col>
                 <Col span={12}><F k="quality.min_conns" label="حداقل اتصال برای قضاوت" tip="اگر تعداد اتصال‌های پرمصرف کمتر از این بود، نتیجه «داده کافی نیست» است و بد حساب نمی‌شود"><InputNumber min={1} style={{ width: '100%' }} /></F></Col>
                 <Col span={12}><F k="quality.bad_rounds" label="تعداد دور بد پشت سر هم" tip="هشدار بعد از این تعداد خواندن آمار بد پشت سر هم (یک بار)"><InputNumber min={1} max={100} style={{ width: '100%' }} /></F></Col>
+                <Col span={12}><F k="idle.retry_hours" label="امتحان دوباره کانفیگ بی‌استفاده (ساعت)" tip="کانفیگی که در هوشمند یا حالت‌ها به خاطر بی‌استفاده ماندن کنار گذاشته شده، بعد از این مدت یک بار دوباره گذاشته می‌شود تا اگر درست شده کاربر بگیرد. 0 = هرگز"><InputNumber min={0} max={720} style={{ width: '100%' }} /></F></Col>
                 <Col span={24}><F k="quality.alert" label="هشدار تلگرام وقتی کیفیت پایین ماند" tip="با دکمه‌های تعویض IP، جایگزینی و حذف. کاری خودکار انجام نمی‌شود" bool><Switch /></F></Col>
               </Row>
             </Card>

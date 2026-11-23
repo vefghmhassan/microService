@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Alert, Button, Card, Flex, Form, Input, Modal, Radio, Select, Switch, Table, Tag, Tooltip, Typography } from 'antd'
+import { Alert, Button, Card, Flex, Form, Input, InputNumber, Modal, Radio, Select, Switch, Table, Tag, Tooltip, Typography } from 'antd'
 import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, PlusOutlined, SyncOutlined } from '@ant-design/icons'
 import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable'
@@ -127,6 +127,7 @@ export function Modes() {
             },
             { title: 'استراتژی', dataIndex: 'strategy', render: (s: string) => <span dir="ltr">{s || 'leastPing'}</span> },
             { title: 'فاصله تست', dataIndex: 'probe_interval', render: (p: string) => <span dir="ltr">{p || '30s'}</span> },
+            { title: 'حذف بی‌استفاده', key: 'idle', render: (_: unknown, m: BalancerMode) => (m.drop_idle ? <Tag color="blue">{m.idle_minutes || 30} دقیقه</Tag> : '—') },
             { title: 'نوع', dataIndex: 'ads_mode', render: (a: string) => (a ? <Tag color={a === 'normal' ? undefined : 'gold'}>{adsLabel[a]}</Tag> : <Typography.Text type="secondary">{adsLabel['']}</Typography.Text>) },
             {
               title: 'در پنل مقصد', render: (_, m) => {
@@ -168,13 +169,13 @@ function UploadTag({ u, dest }: { u: NodeUpload; dest?: string }) {
   )
 }
 
-type ModeForm = { name: string; locations: number[]; strategy: string; probe_interval: string; ads_mode: string }
+type ModeForm = { name: string; locations: number[]; strategy: string; probe_interval: string; ads_mode: string; drop_idle: boolean; idle_minutes: number }
 
 function ModeModal({ value, locations, onClose }: { value: BalancerMode | 'new' | null; locations: Location[]; onClose: () => void }) {
   const [form] = Form.useForm<ModeForm>()
   const existing = value && value !== 'new' ? value : null
   const save = useAction((v: ModeForm) => {
-    const body = { name: v.name, location_ids: (v.locations ?? []).join(','), strategy: v.strategy, probe_interval: v.probe_interval ?? '', ads_mode: v.ads_mode }
+    const body = { name: v.name, location_ids: (v.locations ?? []).join(','), strategy: v.strategy, probe_interval: v.probe_interval ?? '', ads_mode: v.ads_mode, drop_idle: !!v.drop_idle, idle_minutes: v.idle_minutes ?? 0 }
     return existing ? put(`/balancer-modes/${existing.id}`, body) : post('/balancer-modes', body)
   }, { success: 'ذخیره شد', invalidate: [keys.balancerModes, keys.nodes], onSuccess: onClose })
 
@@ -185,6 +186,7 @@ function ModeModal({ value, locations, onClose }: { value: BalancerMode | 'new' 
       form.setFieldsValue({
         name: existing.name, locations: locIDs(existing.location_ids), strategy: existing.strategy || 'leastPing',
         probe_interval: existing.probe_interval, ads_mode: existing.ads_mode,
+        drop_idle: existing.drop_idle, idle_minutes: existing.idle_minutes || 30,
       })
     }
   }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -200,7 +202,7 @@ function ModeModal({ value, locations, onClose }: { value: BalancerMode | 'new' 
       okText="ذخیره" cancelText="انصراف" onCancel={onClose} confirmLoading={save.isPending}
       onOk={() => form.validateFields().then((v) => save.mutate(v))} destroyOnHidden
     >
-      <Form form={form} layout="vertical" requiredMark={false} initialValues={{ locations: [], strategy: 'leastPing', probe_interval: '30s', ads_mode: '' }}>
+      <Form form={form} layout="vertical" requiredMark={false} initialValues={{ locations: [], strategy: 'leastPing', probe_interval: '30s', ads_mode: '', drop_idle: false, idle_minutes: 30 }}>
         <Form.Item name="name" label="نام" extra="نام کانفیگ در پنل مقصد و برنامه؛ نسخه تبلیغاتی پسوند ‎-ads می‌گیرد."
           rules={[{ required: true, pattern: /^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$/, message: 'فقط حروف انگلیسی، عدد، خط تیره، نقطه و زیرخط' }]}>
           <Input dir="ltr" placeholder="all-auto" />
@@ -216,6 +218,15 @@ function ModeModal({ value, locations, onClose }: { value: BalancerMode | 'new' 
             tooltip="هر چند وقت یک‌بار کلاینت سرورها را تست می‌کند؛ کلاینت حدوداً در همین مدت از سرور قطع‌شده جدا می‌شود."
             rules={[{ pattern: /^\d+(s|m)$/, message: 'مثل 30s یا 1m' }]}>
             <Input dir="ltr" placeholder="30s" />
+          </Form.Item>
+        </Flex>
+        <Flex gap={12} wrap>
+          <Form.Item name="drop_idle" valuePropName="checked" label="حذف کانفیگ بی‌استفاده" style={{ flex: 1, minWidth: 160 }}
+            tooltip="کانفیگی (اینباندی) که این مدت هیچ کاربری رویش نبوده، در حالی که بقیه اینباندهای همان نود کاربر دارند، از این حالت کنار گذاشته می‌شود. وقتی دوباره کاربر گرفت، یا بعد از زمان «امتحان دوباره» در تنظیمات، برمی‌گردد. هیچ‌وقت همه کانفیگ‌های یک نود حذف نمی‌شوند.">
+            <Switch />
+          </Form.Item>
+          <Form.Item name="idle_minutes" label="بعد از چند دقیقه بی‌استفاده" style={{ flex: 1, minWidth: 160 }}>
+            <InputNumber min={1} max={1440} addonAfter="دقیقه" style={{ width: '100%' }} />
           </Form.Item>
         </Flex>
         <Form.Item name="ads_mode" label="عادی / تبلیغاتی" extra="«پیرو پنل مقصد» همان تنظیم هر پنل مقصد را به کار می‌برد.">

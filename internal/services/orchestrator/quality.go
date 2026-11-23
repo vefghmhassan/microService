@@ -208,16 +208,45 @@ func (o *Orchestrator) userPeer(peer string) bool {
 	return true
 }
 
-// collectQuality reads the users' connections on the inbound ports and
-// returns the server summary and one per port. ok is false when quality is
-// off or nothing could be read.
-func (o *Orchestrator) collectQuality(ctx context.Context, remote Remote, ports []int) (all qualitySum, perPort map[int]qualitySum, note string, ok bool) {
-	if !o.Settings.Bool(settings.QualityEnabled) || len(ports) == 0 {
-		return all, nil, "", false
+// liveConns is what one read of the users' connections gives: who is
+// connected (distinct source IPs) and how well their connections move data.
+type liveConns struct {
+	// IPs is the number of distinct user IPs on any inbound port; one IP on
+	// two inbounds counts once.
+	IPs     int
+	PortIPs map[int]int
+	All     qualitySum
+	PerPort map[int]qualitySum
+}
+
+// distinctPeers counts the distinct peers overall and per local port.
+func distinctPeers(conns []ssConn) (int, map[int]int) {
+	all := map[string]bool{}
+	byPort := map[int]map[string]bool{}
+	for _, c := range conns {
+		all[c.Peer] = true
+		if byPort[c.LocalPort] == nil {
+			byPort[c.LocalPort] = map[string]bool{}
+		}
+		byPort[c.LocalPort][c.Peer] = true
+	}
+	per := map[int]int{}
+	for p, set := range byPort {
+		per[p] = len(set)
+	}
+	return len(all), per
+}
+
+// readConns reads the users' connections on the inbound ports: the distinct
+// IPs (the online count) and the quality summaries. ok is false when ss
+// could not be read; note then says why.
+func (o *Orchestrator) readConns(ctx context.Context, remote Remote, ports []int) (lc liveConns, note string, ok bool) {
+	if len(ports) == 0 {
+		return lc, "", false
 	}
 	out, err := remote.Run(ctx, qualityCmd(ports), nil)
 	if err != nil {
-		return all, nil, truncate(fmt.Sprintf("ss: %v %s", err, strings.TrimSpace(out)), 255), false
+		return lc, truncate(fmt.Sprintf("ss: %v %s", err, strings.TrimSpace(out)), 255), false
 	}
 	var users []ssConn
 	byPort := map[int][]ssConn{}
@@ -228,11 +257,13 @@ func (o *Orchestrator) collectQuality(ctx context.Context, remote Remote, ports 
 		users = append(users, c)
 		byPort[c.LocalPort] = append(byPort[c.LocalPort], c)
 	}
-	perPort = map[int]qualitySum{}
+	lc.IPs, lc.PortIPs = distinctPeers(users)
+	lc.PerPort = map[int]qualitySum{}
 	for p, cs := range byPort {
-		perPort[p] = summarize(cs)
+		lc.PerPort[p] = summarize(cs)
 	}
-	return summarize(users), perPort, "", true
+	lc.All = summarize(users)
+	return lc, "", true
 }
 
 // QualityBad says whether a summary is bad under the settings; enough is

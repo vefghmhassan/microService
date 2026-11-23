@@ -126,7 +126,7 @@ const defaults: Partial<ProfileForm> = {
   enabled: true, scope: 'server', family: 'both', name_template: '{base}-smart', obs_kind: 'observatory',
   probe_url: 'https://www.gstatic.com/generate_204', probe_interval: '1m', timeout: '5s', sampling: 3, http_method: 'HEAD',
   strategy: 'leastPing', expected: 1, max_rtt: '1500ms', dns_preset: 'smart', block_udp443: true, block_ads: false,
-  iran_direct: false, fragment: false, max_outbounds: 0, countries: [], inbound_ids: [], rule_ids: [], destination_ids: [],
+  iran_direct: false, fragment: false, max_outbounds: 0, drop_idle: false, idle_minutes: 30, countries: [], inbound_ids: [], rule_ids: [], destination_ids: [],
 }
 
 function toForm(p: SmartProfile): ProfileForm {
@@ -272,6 +272,15 @@ function ProfileModal({ profile, onClose }: { profile: SmartProfile | 'new' | nu
                 )}
                 <Col xs={12} md={6}>
                   <Form.Item name="max_outbounds" label="سقف تعداد سرور" tooltip="۰ = بدون سقف"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Form.Item name="drop_idle" valuePropName="checked" label="حذف کانفیگ بی‌استفاده"
+                    tooltip="کانفیگی (اینباندی) که این مدت هیچ کاربری رویش نبوده، در حالی که بقیه اینباندهای همان سرور کاربر دارند، از این JSON کنار گذاشته می‌شود. وقتی دوباره کاربر گرفت، یا بعد از زمان «امتحان دوباره» در تنظیمات، برمی‌گردد. هیچ‌وقت همه کانفیگ‌های یک سرور حذف نمی‌شوند.">
+                    <Switch />
+                  </Form.Item>
+                </Col>
+                <Col xs={12} md={6}>
+                  <Form.Item name="idle_minutes" label="بعد از چند دقیقه بی‌استفاده" tooltip="۰ = ۳۰ دقیقه"><InputNumber min={0} max={1440} addonAfter="دقیقه" style={{ width: '100%' }} /></Form.Item>
                 </Col>
               </Row>
             ),

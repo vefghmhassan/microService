@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  Alert, Button, Card, Col, Descriptions, Flex, InputNumber, Modal, Progress, QRCode, Row, Select, Skeleton, Space, Switch, Table, Tabs, Tag, Typography,
+  Alert, Button, Card, Col, Descriptions, Flex, InputNumber, Modal, Progress, QRCode, Row, Select, Skeleton, Space, Switch, Table, Tabs, Tag, Tooltip, Typography,
 } from 'antd'
 import { ArrowRightOutlined, CloudUploadOutlined, ExportOutlined, EyeOutlined, LeftOutlined, QrcodeOutlined, ReloadOutlined, RightOutlined, ExperimentOutlined } from '@ant-design/icons'
 import {
@@ -181,7 +181,7 @@ function Usage({ id, installed }: { id: number; installed: boolean }) {
   return (
     <Flex vertical gap={16}>
       <Row gutter={[12, 12]}>
-        <Col xs={12} md={6}><StatCard title="کاربران آنلاین" value={s.online_count} tone="ok" /></Col>
+        <Col xs={12} md={6}><StatCard title="کاربران آنلاین (IP یکتا)" value={s.online_count} tone="ok" /></Col>
         <Col xs={12} md={6}><StatCard title="آپلود" value={<span dir="ltr">{bytes(s.traffic_up)}</span>} /></Col>
         <Col xs={12} md={6}><StatCard title="دانلود" value={<span dir="ltr">{bytes(s.traffic_down)}</span>} /></Col>
         <Col xs={12} md={6}><StatCard title="کل مصرف" value={<span dir="ltr">{bytes(used)}</span>} tone={data.limit_bytes && used >= data.limit_bytes ? 'bad' : 'info'} /></Col>
@@ -218,7 +218,19 @@ function Usage({ id, installed }: { id: number; installed: boolean }) {
           { title: 'پروتکل', dataIndex: 'protocol' },
           { title: 'پورت', dataIndex: 'port' },
           { title: 'کاربران', dataIndex: 'clients' },
-          { title: 'آنلاین', dataIndex: 'online', render: (n: number) => <Tag color={n ? 'success' : 'default'}>{n}</Tag> },
+          {
+            title: 'آنلاین (IP)', dataIndex: 'online',
+            render: (n: number, r: InboundStat) => (
+              <Space size={4}>
+                <Tag color={n ? 'success' : 'default'}>{n}</Tag>
+                {r.enabled && r.idle_since && (
+                  <Tooltip title="از این زمان هیچ کاربری روی این اینباند نبوده. کانفیگ‌های هوشمند و حالت‌هایی که «حذف کانفیگ بی‌استفاده» دارند، بعد از مدت تعیین‌شده آن را کنار می‌گذارند (اگر بقیه اینباندهای سرور کاربر داشته باشند).">
+                    <Tag color="warning">بی‌استفاده از {timeAgo(r.idle_since)}</Tag>
+                  </Tooltip>
+                )}
+              </Space>
+            ),
+          },
           ...(quality.enabled ? [{
             title: 'کیفیت', key: 'quality',
             render: (_: unknown, r: InboundStat) => <QualityTag q={{ conns: r.q_conns, rtt: r.q_rtt_ms, kbps: r.q_kbps, retrans: r.q_retrans_pct, at: s.quality_at }} />,

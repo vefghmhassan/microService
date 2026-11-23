@@ -377,9 +377,13 @@ type BalancerMode struct {
 	// own ads mode.
 	AdsMode string `gorm:"size:10" json:"ads_mode"`
 	// Country is the vpn-pannel country (empty = that of the first node).
-	Country   string    `gorm:"size:2" json:"country"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Country string `gorm:"size:2" json:"country"`
+	// DropIdle leaves out inbounds without users for IdleMinutes (0 = 30)
+	// while other inbounds of the same server have users.
+	DropIdle    bool      `json:"drop_idle"`
+	IdleMinutes int       `json:"idle_minutes"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // LocationGroup is a bundle of locations in priority order. Building N
@@ -464,22 +468,27 @@ func (s *Server) PublicIP() string {
 
 // InboundStat is the latest traffic/online reading of one inbound on a server.
 type InboundStat struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	ServerID  uint      `gorm:"uniqueIndex:idx_inbound_stat" json:"server_id"`
-	Port      int       `gorm:"uniqueIndex:idx_inbound_stat" json:"port"`
-	Remark    string    `gorm:"size:100" json:"remark"`
-	Protocol  string    `gorm:"size:16" json:"protocol"`
-	Enabled   bool      `json:"enabled"`
-	Up        int64     `json:"up"`
-	Down      int64     `json:"down"`
-	Clients   int       `json:"clients"`
-	Online    int       `json:"online"`
+	ID       uint   `gorm:"primaryKey" json:"id"`
+	ServerID uint   `gorm:"uniqueIndex:idx_inbound_stat" json:"server_id"`
+	Port     int    `gorm:"uniqueIndex:idx_inbound_stat" json:"port"`
+	Remark   string `gorm:"size:100" json:"remark"`
+	Protocol string `gorm:"size:16" json:"protocol"`
+	Enabled  bool   `json:"enabled"`
+	Up       int64  `json:"up"`
+	Down     int64  `json:"down"`
+	Clients  int    `json:"clients"`
+	Online   int    `json:"online"`
 	// Connection quality of this inbound's users (see Server.Quality*).
-	QConns      int       `gorm:"column:q_conns" json:"q_conns"`
-	QRTTMs      float64   `gorm:"column:q_rtt_ms" json:"q_rtt_ms"`
-	QKbps       float64   `gorm:"column:q_kbps" json:"q_kbps"`
-	QRetransPct float64   `gorm:"column:q_retrans_pct" json:"q_retrans_pct"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	QConns      int     `gorm:"column:q_conns" json:"q_conns"`
+	QRTTMs      float64 `gorm:"column:q_rtt_ms" json:"q_rtt_ms"`
+	QKbps       float64 `gorm:"column:q_kbps" json:"q_kbps"`
+	QRetransPct float64 `gorm:"column:q_retrans_pct" json:"q_retrans_pct"`
+	// IdleSince is when the inbound last had no user connected (nil = it
+	// has users now, or was never read). Smart configs and modes with
+	// DropIdle leave out inbounds idle for long while others on the server
+	// are in use.
+	IdleSince *time.Time `json:"idle_since"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 // Destination is one vpn-pannel admin that generated configs are pushed to.
@@ -838,9 +847,13 @@ type SmartProfile struct {
 	// DestinationIDs limits the vpn-pannels; empty = every enabled one.
 	DestinationIDs string `gorm:"column:destination_ids;size:255" json:"destination_ids"`
 	// MaxOutbounds caps the proxies in one config (0 = no cap).
-	MaxOutbounds int       `json:"max_outbounds"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	MaxOutbounds int `json:"max_outbounds"`
+	// DropIdle leaves out inbounds without users for IdleMinutes (0 = 30)
+	// while other inbounds of the same server have users.
+	DropIdle    bool      `json:"drop_idle"`
+	IdleMinutes int       `json:"idle_minutes"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // SmartRule is a routing rule smart profiles can send through their

@@ -540,6 +540,9 @@ type nodeGroup struct {
 	Locations []uint
 	// Ads are the ads flags the mode sets itself; nil follows the vpn-pannel.
 	Ads []bool
+	// DropIdle and IdleMinutes are the mode's: leave idle inbounds out.
+	DropIdle    bool
+	IdleMinutes int
 }
 
 // nodeGroups lists the balancer configs wanted now: the enabled balancer
@@ -559,7 +562,7 @@ func (o *Orchestrator) nodeGroups() []nodeGroup {
 	var out []nodeGroup
 	for _, m := range modes {
 		g := nodeGroup{ModeID: m.ID, Name: m.Name, Country: m.Country, Strategy: m.Strategy, Probe: m.ProbeInterval,
-			Locations: ModeLocationIDs(m.LocationIDs), Ads: m.AdsValues()}
+			Locations: ModeLocationIDs(m.LocationIDs), Ads: m.AdsValues(), DropIdle: m.DropIdle, IdleMinutes: m.IdleMinutes}
 		if len(g.Locations) == 0 {
 			if !anyNode {
 				continue
@@ -640,6 +643,7 @@ func (o *Orchestrator) nodeBalancer(snap *Snapshot, g nodeGroup) (items []smart.
 	}
 	var servers []models.Server
 	q.Order("id").Find(&servers)
+	idle := o.idleRuleFor(g.DropIdle, g.IdleMinutes)
 	for i := range servers {
 		s := &servers[i]
 		if s.PanelRemovedAt != nil || s.UploadedAt == nil {
@@ -648,7 +652,7 @@ func (o *Orchestrator) nodeBalancer(snap *Snapshot, g nodeGroup) (items []smart.
 		if s.LastCheckOK != nil && !*s.LastCheckOK {
 			continue
 		}
-		it, _ := o.smartItems(snap, s, nil)
+		it, _ := o.smartItems(snap, s, nil, idle)
 		items = append(items, it...)
 	}
 	if len(items) == 0 {

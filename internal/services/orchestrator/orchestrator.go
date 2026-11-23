@@ -85,6 +85,9 @@ type Orchestrator struct {
 	nameMu sync.Mutex // serialises panelBaseName number picks
 	smart  smartState
 	nodes  nodeState
+	// idleSig is what the idle inbounds looked like at the last stats
+	// round; a change rebuilds the configs that drop them.
+	idleSig string
 
 	// Seams, replaced in tests.
 	Provider func(acc *models.ProviderAccount) (providers.Provider, error)

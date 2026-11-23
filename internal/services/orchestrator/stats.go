@@ -62,6 +62,7 @@ func (o *Orchestrator) CollectAll(ctx context.Context) {
 		}(&servers[i])
 	}
 	wg.Wait()
+	o.QueueIdleSync()
 	PruneClientIPs(o.DB)
 	if j, c := PruneHistory(o.DB, o.Settings.Int(settings.HistoryKeepDays)); j+c > 0 {
 		log.Printf("history: removed %d old jobs and %d old checks", j, c)
@@ -115,7 +116,20 @@ func (o *Orchestrator) CollectStats(ctx context.Context, s *models.Server) (err 
 			ports = append(ports, in.Port)
 		}
 	}
-	qAll, qPort, qNote, qOK := o.collectQuality(ctx, remote, ports)
+	// Online is the users' distinct IPs from ss: a 3x-ui client is shared
+	// by many people, so online emails stop at the number of clients. When
+	// ss cannot be read, the email count stands in.
+	live, qNote, connsOK := o.readConns(ctx, remote, ports)
+	qOK := connsOK && o.Settings.Bool(settings.QualityEnabled)
+	if !o.Settings.Bool(settings.QualityEnabled) {
+		qNote = ""
+	}
+	prevIdle := map[int]*time.Time{}
+	var prev []models.InboundStat
+	o.DB.Select("port", "idle_since").Where("server_id = ?", s.ID).Find(&prev)
+	for _, p := range prev {
+		prevIdle[p.Port] = p.IdleSince
+	}
 
 	var up, down int64
 	onlineTotal := 0
@@ -128,6 +142,9 @@ func (o *Orchestrator) CollectStats(ctx context.Context, s *models.Server) (err 
 				n++
 			}
 		}
+		if connsOK {
+			n = live.PortIPs[in.Port]
+		}
 		up += in.Up
 		down += in.Down
 		onlineTotal += n
@@ -139,14 +156,23 @@ func (o *Orchestrator) CollectStats(ctx context.Context, s *models.Server) (err 
 		}
 		cols := []string{"remark", "protocol", "enabled", "up", "down", "clients", "online", "updated_at"}
 		if qOK {
-			q := qPort[in.Port]
+			q := live.PerPort[in.Port]
 			row.QConns, row.QRTTMs, row.QKbps, row.QRetransPct = q.Conns, q.RTTMs, q.Kbps, q.RetransPct
 			cols = append(cols, "q_conns", "q_rtt_ms", "q_kbps", "q_retrans_pct")
+		}
+		if connsOK {
+			// Only a good read moves the idle clock: an ssh or ss error is
+			// not "nobody connected".
+			row.IdleSince = nextIdleSince(prevIdle[in.Port], in.Enable && n == 0, now)
+			cols = append(cols, "idle_since")
 		}
 		o.DB.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "server_id"}, {Name: "port"}},
 			DoUpdates: clause.AssignmentColumns(cols),
 		}).Create(&row)
+	}
+	if connsOK {
+		onlineTotal = live.IPs
 	}
 	// Inbounds removed from the panel no longer count.
 	q := o.DB.Where("server_id = ?", s.ID)
@@ -159,7 +185,7 @@ func (o *Orchestrator) CollectStats(ctx context.Context, s *models.Server) (err 
 	o.DB.Model(s).Select("traffic_up", "traffic_down", "online_count", "stats_at", "stats_error").Updates(s)
 	switch {
 	case qOK:
-		o.applyQuality(s, qAll, "")
+		o.applyQuality(s, live.All, "")
 	case qNote != "":
 		s.QualityNote = qNote
 		o.DB.Model(s).Update("quality_note", qNote)

@@ -141,3 +141,18 @@ func TestValidate(t *testing.T) {
 		t.Error("built without any usable link")
 	}
 }
+
+// The fallback is the outbound whose users move data fastest; the order of
+// the proxies does not change.
+func TestBuildFallbackIsBestScore(t *testing.T) {
+	items := append([]Item{}, testItems...)
+	items[0].Score, items[1].Score, items[2].Score = 500, 0, 4000
+	res, err := Build(models.SmartProfile{Name: "all", Scope: models.SmartScopeAll}, nil, items, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bal := decode(t, res.JSON)["routing"].(map[string]any)["balancers"].([]any)[0].(map[string]any)
+	if bal["fallbackTag"] != "proxy-3" {
+		t.Fatalf("fallback = %v", bal["fallbackTag"])
+	}
+}

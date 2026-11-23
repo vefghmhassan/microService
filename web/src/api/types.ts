@@ -159,6 +159,9 @@ export interface BalancerMode {
   /** '' follows each destination panel's own ads mode. */
   ads_mode: '' | 'normal' | 'ads' | 'both'
   country: string
+  /** Leave out inbounds with no user for idle_minutes (0 = 30) while others on the server have users. */
+  drop_idle: boolean
+  idle_minutes: number
 }
 
 export interface BalancerModes {
@@ -303,6 +306,8 @@ export interface InboundStat {
   q_rtt_ms?: number
   q_kbps?: number
   q_retrans_pct?: number
+  /** When the inbound last had no user connected; null = it has users now. */
+  idle_since?: string | null
   updated_at: string
 }
 
@@ -745,6 +750,9 @@ export interface SmartProfile {
   rule_ids: string
   destination_ids: string
   max_outbounds: number
+  /** Leave out inbounds with no user for idle_minutes (0 = 30) while others on the server have users. */
+  drop_idle: boolean
+  idle_minutes: number
   created_at: string
   updated_at: string
 }
