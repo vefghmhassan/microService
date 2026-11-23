@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"microserver/internal/models"
+	"microserver/internal/services/settings"
 )
 
 // AccessLogPath is where every managed xray writes its access log; client
@@ -341,6 +342,30 @@ func withAccessLog(setting map[string]any) bool {
 	lg["maskAddress"] = ""
 	setting["log"] = lg
 	return true
+}
+
+// RunIPPrune keeps client_ips within ip.retention_days until ctx ends: while
+// old rows are left (the first start after a shorter retention, with
+// millions of them) it deletes batch after batch, then it looks once an
+// hour. Reads have their own connections, so pages stay quick meanwhile.
+func (o *Orchestrator) RunIPPrune(ctx context.Context) {
+	var total int64
+	for {
+		n, more := PruneClientIPs(o.DB, ClientIPKeep(o.Settings.Int(settings.ClientIPDays)))
+		total += n
+		wait := time.Hour
+		if more {
+			wait = time.Second
+		} else if total > 0 {
+			log.Printf("client ips: removed %d old rows", total)
+			total = 0
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+	}
 }
 
 // PruneClientIPs drops addresses not seen within keep, and GeoIP lookups

@@ -125,6 +125,7 @@ func main() {
 	go scheduleCerts(ctx, orch)
 	go scheduleCleanIPs(ctx, db, st)
 	go scheduleDeletes(ctx, orch)
+	go orch.RunIPPrune(ctx)
 
 	app := fiber.New(fiber.Config{
 		AppName:      "microServer",

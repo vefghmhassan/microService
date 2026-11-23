@@ -16,6 +16,7 @@ require (
 	golang.org/x/crypto v0.58.0
 	golang.org/x/text v0.43.0
 	gorm.io/gorm v1.25.12
+	gorm.io/plugin/dbresolver v1.5.3
 )
 
 require (

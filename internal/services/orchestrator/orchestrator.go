@@ -88,8 +88,6 @@ type Orchestrator struct {
 	// idleSig is what the idle inbounds looked like at the last stats
 	// round; a change rebuilds the configs that drop them.
 	idleSig string
-	// prunedAt is when CollectAll last pruned client_ips.
-	prunedAt time.Time
 
 	// Seams, replaced in tests.
 	Provider func(acc *models.ProviderAccount) (providers.Provider, error)

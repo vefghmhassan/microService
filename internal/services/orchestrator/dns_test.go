@@ -111,8 +111,18 @@ func TestDNSNumbersServersAndUsesHostnameInLinks(t *testing.T) {
 	if certs.calls == 0 {
 		t.Fatal("certificate never requested")
 	}
-	if len(dest.uploads) != 2 || !strings.Contains(dest.uploads[0][0], "@"+ss[0].IPv4+":443") {
+	// The two installs run side by side, so the uploads come in either order.
+	if len(dest.uploads) != 2 {
 		t.Fatalf("uploads %v", dest.uploads)
+	}
+	for _, s := range ss {
+		found := false
+		for _, u := range dest.uploads {
+			found = found || strings.Contains(u[0], "@"+s.IPv4+":443")
+		}
+		if !found {
+			t.Fatalf("no upload for %s: %v", s.IPv4, dest.uploads)
+		}
 	}
 }
 

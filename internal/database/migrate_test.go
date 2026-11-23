@@ -78,3 +78,67 @@ func TestMigrateBackfillsIPSince(t *testing.T) {
 		t.Fatalf("rotated: %v", b.IPSince)
 	}
 }
+
+// A long read (a report over a big table) no longer holds up other reads
+// or writes: reads have their own connections and WAL lets them run beside
+// the writer.
+func TestLongReadDoesNotBlock(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	slow := make(chan error, 1)
+	go func() {
+		var n int64
+		// Seconds of work on one read connection.
+		slow <- db.Raw(`SELECT count(*) FROM (WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i < 30000000) SELECT i FROM c)`).Scan(&n).Error
+	}()
+	time.Sleep(200 * time.Millisecond)
+
+	start := time.Now()
+	var n int64
+	if err := db.Model(&models.AdminUser{}).Count(&n).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.Setting{Key: "k", Value: "v"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.Setting{}).Where("key = ?", "k").Count(&n).Error; err != nil || n != 1 {
+		t.Fatalf("read after write: %d %v", n, err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("other queries waited %v behind the long read", d)
+	}
+	select {
+	case err := <-slow:
+		if err == nil {
+			t.Log("long read finished before the others; the machine is fast")
+		}
+	default:
+	}
+	if err := <-slow; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A write sent through Raw is still a write: it goes to the writer, not to
+// the read-only pool.
+func TestRawWriteGoesToWriter(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("INSERT INTO settings (key, value) VALUES ('a', 'b')").Error; err != nil {
+		t.Fatalf("exec insert: %v", err)
+	}
+	var v string
+	if err := db.Raw("SELECT value FROM settings WHERE key = 'a'").Scan(&v).Error; err != nil || v != "b" {
+		t.Fatalf("raw select: %q %v", v, err)
+	}
+}

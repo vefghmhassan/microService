@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -9,32 +10,56 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"gorm.io/plugin/dbresolver"
 
 	"microserver/internal/models"
 )
 
 var DB *gorm.DB
 
-// Open connects to SQLite in WAL mode. busy_timeout lets the job workers and
-// HTTP handlers write concurrently without "database is locked" errors.
+// ReadConns is how many connections serve reads at the same time.
+const ReadConns = 4
+
+// Open connects to SQLite in WAL mode with two pools: one connection for
+// writes and transactions, and ReadConns read-only ones for queries.
+//
+// With a single connection for everything, one slow query (a report over a
+// large table) made every page and job wait behind it. WAL lets readers run
+// beside the writer, so plain reads (Find, Count, Raw SELECT) go to the read
+// pool, and writes keep one connection: they queue in Go instead of failing
+// with "database is locked".
 func Open(path string) (*gorm.DB, error) {
-	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)", path)
+	base := fmt.Sprintf("file:%s?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)", path)
 	lg := logger.New(log.Default(), logger.Config{
 		SlowThreshold:             500 * time.Millisecond,
 		LogLevel:                  logger.Warn,
 		IgnoreRecordNotFoundError: true,
 	})
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: lg})
+	db, err := gorm.Open(sqlite.Open(base), &gorm.Config{Logger: lg})
 	if err != nil {
 		return nil, err
 	}
-	sqlDB, err := db.DB()
+	writer, err := db.DB()
 	if err != nil {
 		return nil, err
 	}
-	// SQLite allows a single writer; one connection avoids lock contention
-	// entirely at the cost of serialising queries, which is fine at this scale.
-	sqlDB.SetMaxOpenConns(1)
+	writer.SetMaxOpenConns(1)
+
+	// query_only makes a write that reached the read pool by mistake fail
+	// at once instead of racing the writer.
+	reader, err := sql.Open(sqlite.DriverName, base+"&_pragma=query_only(1)")
+	if err != nil {
+		return nil, err
+	}
+	reader.SetMaxOpenConns(ReadConns)
+	reader.SetMaxIdleConns(ReadConns)
+	if err := db.Use(dbresolver.Register(dbresolver.Config{
+		Replicas: []gorm.Dialector{&sqlite.Dialector{Conn: reader}},
+		Policy:   dbresolver.RandomPolicy{},
+	})); err != nil {
+		reader.Close()
+		return nil, err
+	}
 	DB = db
 	return db, nil
 }
