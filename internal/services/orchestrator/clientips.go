@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"microserver/internal/database"
 	"microserver/internal/models"
 	"microserver/internal/services/settings"
 )
@@ -348,23 +349,44 @@ func withAccessLog(setting map[string]any) bool {
 // old rows are left (the first start after a shorter retention, with
 // millions of them) it deletes batch after batch, then it looks once an
 // hour. Reads have their own connections, so pages stay quick meanwhile.
+//
+// Once a backlog is gone (and once after start) the database file is
+// compacted when enough of it is free space, so the disk gets it back.
 func (o *Orchestrator) RunIPPrune(ctx context.Context) {
 	var total int64
+	first := true
 	for {
 		n, more := PruneClientIPs(o.DB, ClientIPKeep(o.Settings.Int(settings.ClientIPDays)))
 		total += n
 		wait := time.Hour
 		if more {
 			wait = time.Second
-		} else if total > 0 {
-			log.Printf("client ips: removed %d old rows", total)
-			total = 0
+		} else if total > 0 || first {
+			if total > 0 {
+				log.Printf("client ips: removed %d old rows", total)
+			}
+			total, first = 0, false
+			o.compact()
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(wait):
 		}
+	}
+}
+
+// compact gives freed space back to the disk (see database.Compact).
+func (o *Orchestrator) compact() {
+	start := time.Now()
+	res, err := database.Compact(o.DB)
+	switch {
+	case err != nil:
+		log.Printf("database compact: %v", err)
+	case res.Skipped != "":
+		log.Printf("database compact skipped: %s", res.Skipped)
+	default:
+		log.Printf("database compacted in %s: %d MB -> %d MB", time.Since(start).Round(time.Second), res.Before>>20, res.After>>20)
 	}
 }
 
