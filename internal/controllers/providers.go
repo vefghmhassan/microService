@@ -3,12 +3,15 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 
 	"microserver/internal/models"
+	"microserver/internal/services/orchestrator"
 	"microserver/internal/services/providers"
 	"microserver/internal/services/secret"
 	"microserver/internal/services/settings"
@@ -116,16 +119,24 @@ func (a *App) saveProvider(c *fiber.Ctx, acc *models.ProviderAccount) error {
 		creds[k] = strings.TrimSpace(v)
 	}
 	b, _ := json.Marshal(creds)
+	// Only new or changed credentials are checked against the API: an account
+	// whose token died must still be disabled, renamed or edited.
+	var old map[string]string
+	_ = json.Unmarshal([]byte(acc.Credentials), &old)
+	oldB, _ := json.Marshal(old)
+	changed := acc.ID == 0 || string(oldB) != string(b)
 	acc.Credentials = secret.String(b)
 
 	p, err := providers.New(acc.Type, json.RawMessage(b))
 	if err != nil {
 		return errJSON(c, fiber.StatusBadRequest, err.Error())
 	}
-	ctx, cancel := context.WithTimeout(c.UserContext(), 20*time.Second)
-	defer cancel()
-	if err := p.Validate(ctx); err != nil {
-		return errJSON(c, fiber.StatusBadRequest, "اعتبارسنجی API ناموفق بود: "+err.Error())
+	if changed {
+		ctx, cancel := context.WithTimeout(c.UserContext(), 20*time.Second)
+		defer cancel()
+		if err := p.Validate(ctx); err != nil {
+			return errJSON(c, fiber.StatusBadRequest, "اعتبارسنجی API ناموفق بود: "+err.Error())
+		}
 	}
 	if err := a.DB.Save(acc).Error; err != nil {
 		return err
@@ -150,12 +161,16 @@ func (a *App) DeleteProvider(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	var n int64
-	a.DB.Model(&models.Server{}).Where("provider_account_id = ? AND status <> ?", acc.ID, models.ServerDeleted).Count(&n)
-	if n > 0 {
-		return errJSON(c, fiber.StatusConflict, "ابتدا سرورهای این حساب را حذف کنید")
+	// Disabled at once so placement stops using it; the job then removes
+	// every server it built (provider, DNS, vpn-pannel) and the account.
+	if err := a.DB.Model(acc).Update("enabled", false).Error; err != nil {
+		return err
 	}
-	return a.DB.Delete(acc).Error
+	j, err := a.Engine.Enqueue(orchestrator.KindPurgeProvider, nil, orchestrator.PurgeParams{AccountID: acc.ID}, source(c))
+	if err != nil {
+		return err
+	}
+	return c.Status(fiber.StatusAccepted).JSON([]*models.Job{j})
 }
 
 func (a *App) account(c *fiber.Ctx) (*models.ProviderAccount, error) {
@@ -207,6 +222,74 @@ func (a *App) ProviderRegions(c *fiber.Ctx) error {
 		return errJSON(c, fiber.StatusBadGateway, err.Error())
 	}
 	return c.JSON(opts)
+}
+
+// billingView is what a provider card shows about cost. It is always sent with
+// 200 so one account's failure never breaks the page.
+type billingView struct {
+	Supported bool `json:"supported"`
+	*providers.Billing
+	Error     string    `json:"error,omitempty"`
+	FetchedAt time.Time `json:"fetched_at"`
+}
+
+const billingTTL = 10 * time.Minute
+
+var (
+	billingMu    sync.Mutex
+	billingCache = map[uint]billingView{}
+)
+
+// billingScopeHint names the permission a refused billing read needs.
+var billingScopeHint = map[string]string{
+	"digitalocean": "توکن به دسترسی billing:read نیاز دارد",
+	"linode":       "توکن به دسترسی account:read_only نیاز دارد",
+	"ovh":          "consumer key به GET /cloud/project/*/usage/* و GET /me نیاز دارد",
+	"xzone":        "کلید API به scope read نیاز دارد",
+}
+
+// ProviderBilling reports this month's spend and remaining credit, read-only.
+// Results are cached for ten minutes; ?refresh=1 reads the provider again.
+func (a *App) ProviderBilling(c *fiber.Ctx) error {
+	acc, err := a.account(c)
+	if err != nil {
+		return err
+	}
+	if c.Query("refresh") != "1" {
+		billingMu.Lock()
+		v, ok := billingCache[acc.ID]
+		billingMu.Unlock()
+		if ok && time.Since(v.FetchedAt) < billingTTL {
+			return c.JSON(v)
+		}
+	}
+	v := billingView{FetchedAt: time.Now()}
+	p, err := providers.New(acc.Type, json.RawMessage(acc.Credentials))
+	if err != nil {
+		v.Error = err.Error()
+		return c.JSON(v)
+	}
+	br, ok := p.(providers.BillingReader)
+	if !ok {
+		return c.JSON(v)
+	}
+	v.Supported = true
+	ctx, cancel := context.WithTimeout(c.UserContext(), 30*time.Second)
+	defer cancel()
+	b, err := br.Billing(ctx)
+	if err != nil {
+		v.Error = err.Error()
+		var apiErr *providers.APIError
+		if errors.As(err, &apiErr) && (apiErr.Status == 401 || apiErr.Status == 403) && billingScopeHint[acc.Type] != "" {
+			v.Error = billingScopeHint[acc.Type] + " — " + v.Error
+		}
+	} else {
+		v.Billing = b
+	}
+	billingMu.Lock()
+	billingCache[acc.ID] = v
+	billingMu.Unlock()
+	return c.JSON(v)
 }
 
 func (a *App) ProviderPlans(c *fiber.Ctx) error {

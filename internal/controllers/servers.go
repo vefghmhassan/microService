@@ -2,6 +2,8 @@ package controllers
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -9,6 +11,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"microserver/internal/models"
+	"microserver/internal/services/settings"
+	"microserver/internal/services/cleanip"
 	"microserver/internal/services/orchestrator"
 )
 
@@ -55,6 +59,9 @@ func (a *App) CreateServer(c *fiber.Ctx) error {
 	if err := c.BodyParser(&p); err != nil {
 		return errJSON(c, fiber.StatusBadRequest, "invalid body")
 	}
+	if err := checkFamily(c, p.IPFamily); err != nil {
+		return err
+	}
 	var acc models.ProviderAccount
 	if err := a.DB.First(&acc, p.AccountID).Error; err != nil {
 		return errJSON(c, fiber.StatusBadRequest, "provider account not found")
@@ -90,6 +97,13 @@ func (a *App) ServerAction(kind string) fiber.Handler {
 		}
 		if s.Status == models.ServerDeleted {
 			return errJSON(c, fiber.StatusConflict, "server is deleted")
+		}
+		if kind == orchestrator.KindDelete {
+			j, err := a.Orch.DeleteServer(s.ID, source(c))
+			if err != nil {
+				return err
+			}
+			return c.Status(fiber.StatusAccepted).JSON(j)
 		}
 		var params map[string]any
 		if len(c.Body()) > 0 {
@@ -142,6 +156,8 @@ func (a *App) UpdateServer(c *fiber.Ctx) error {
 	if err := a.DB.Model(s).Select("name", "country", "want_panel_ver", "want_xray_ver", "traffic_limit_gb").Updates(s).Error; err != nil {
 		return err
 	}
+	// Smart config names and countries come from the server's.
+	a.Orch.QueueSmartSync(false)
 	return c.JSON(s)
 }
 
@@ -154,12 +170,46 @@ func (a *App) ServerLinks(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	links, lerr := orchestrator.Links(snap, s.IPv4)
-	resp := fiber.Map{"links": links}
-	if lerr != nil {
-		resp["warning"] = lerr.Error()
+	links, lerr := orchestrator.Links(snap.For(s), orchestrator.LinkHost(s))
+	clean, cerr := a.Orch.ServerCleanLinks(snap, s)
+	resp := fiber.Map{"links": links, "clean_links": clean}
+	if err := errors.Join(lerr, cerr); err != nil {
+		resp["warning"] = err.Error()
 	}
 	return c.JSON(resp)
+}
+
+// TestServerConfigs runs every client config of a server from the server
+// itself (direct ones on 127.0.0.1, CDN ones really through Cloudflare by
+// the orange name and two clean IPs) and reports OK/FAIL per config.
+func (a *App) TestServerConfigs(c *fiber.Ctx) error {
+	s, err := a.server(c)
+	if err != nil {
+		return err
+	}
+	if s.XUIPort == 0 {
+		return errJSON(c, fiber.StatusBadRequest, "3x-ui روی این سرور نصب نیست")
+	}
+	snap, err := orchestrator.LoadSnapshot(a.DB)
+	if err != nil {
+		return err
+	}
+	ns := snap.For(s)
+	if ns.CDNHost != "" {
+		ns.Clean, _ = cleanip.Pick(a.DB, 2)
+	}
+	ctx, cancel := context.WithTimeout(c.UserContext(), 90*time.Second)
+	defer cancel()
+	remote, _, err := a.Orch.RemoteFor(ctx, s)
+	if err != nil {
+		return errJSON(c, fiber.StatusBadGateway, err.Error())
+	}
+	defer remote.Close()
+	res, err := orchestrator.TestConfigs(ctx, remote, ns, s)
+	if err != nil {
+		return errJSON(c, fiber.StatusBadGateway, err.Error())
+	}
+	return c.JSON(res)
 }
 
 func (a *App) ServerChecks(c *fiber.Ctx) error {
@@ -229,13 +279,52 @@ func (a *App) createServerAuto(c *fiber.Ctx) error {
 	if err := c.BodyParser(&p); err != nil {
 		return errJSON(c, fiber.StatusBadRequest, "invalid body")
 	}
+	if err := checkFamily(c, p.IPFamily); err != nil {
+		return err
+	}
 	if p.Count < 1 || p.Count > 20 {
 		return errJSON(c, fiber.StatusBadRequest, "count must be 1-20")
 	}
-	var n int64
-	a.DB.Model(&models.Location{}).Where("enabled = ?", true).Count(&n)
-	if n == 0 {
-		return errJSON(c, fiber.StatusBadRequest, "ابتدا در صفحه لوکیشن‌ها حداقل یک لوکیشن فعال اضافه کنید")
+	if p.TargetAccountID != 0 {
+		// Nearest region of another provider: the source location may be
+		// disabled, it only says where.
+		var src models.Location
+		if err := a.DB.First(&src, p.SourceLocationID).Error; err != nil {
+			return errJSON(c, fiber.StatusBadRequest, "لوکیشن مبدا پیدا نشد")
+		}
+		var acc models.ProviderAccount
+		if err := a.DB.First(&acc, p.TargetAccountID).Error; err != nil {
+			return errJSON(c, fiber.StatusBadRequest, "provider account not found")
+		}
+		if err := orchestrator.CheckTarget(&acc); err != nil {
+			return errJSON(c, fiber.StatusBadRequest, err.Error())
+		}
+	} else if p.GroupID != 0 {
+		p.SourceLocationID = 0
+		var g models.LocationGroup
+		if err := a.DB.First(&g, p.GroupID).Error; err != nil {
+			return errJSON(c, fiber.StatusBadRequest, "بسته لوکیشن پیدا نشد")
+		}
+		if !g.Enabled {
+			return errJSON(c, fiber.StatusBadRequest, "بسته لوکیشن غیرفعال است")
+		}
+		locs, err := a.Orch.GroupLocations(&g)
+		if err != nil {
+			return err
+		}
+		if len(locs) == 0 {
+			return errJSON(c, fiber.StatusBadRequest, "این بسته هیچ لوکیشن فعالی ندارد")
+		}
+		if p.Count > len(locs) {
+			return errJSON(c, fiber.StatusBadRequest, fmt.Sprintf("این بسته %d لوکیشن فعال دارد؛ تعداد حداکثر %d است", len(locs), len(locs)))
+		}
+	} else {
+		p.SourceLocationID = 0
+		var n int64
+		a.DB.Model(&models.Location{}).Where("enabled = ?", true).Count(&n)
+		if n == 0 {
+			return errJSON(c, fiber.StatusBadRequest, "ابتدا در صفحه لوکیشن‌ها حداقل یک لوکیشن فعال اضافه کنید")
+		}
 	}
 	j, err := a.Engine.Enqueue(orchestrator.KindProvisionAuto, nil, p, source(c))
 	if err != nil {
@@ -287,4 +376,58 @@ func (a *App) ReplaceServer(c *fiber.Ctx) error {
 		return errJSON(c, fiber.StatusConflict, err.Error())
 	}
 	return c.Status(fiber.StatusAccepted).JSON(j)
+}
+
+// scheduledDeleteDelay is how long after "remove from panels and delete"
+// the server itself is deleted (server.delete_delay_min, at least a minute).
+func (a *App) scheduledDeleteDelay() time.Duration {
+	m := a.Settings.Int(settings.ServerDeleteDelayMin)
+	if m < 1 {
+		m = 1
+	}
+	return time.Duration(m) * time.Minute
+}
+
+// ScheduleDelete removes the server's configs from vpn-pannel now and
+// deletes the server after scheduledDeleteDelay.
+func (a *App) ScheduleDelete(c *fiber.Ctx) error {
+	s, err := a.server(c)
+	if err != nil {
+		return err
+	}
+	if s.Status == models.ServerDeleted || s.Status == models.ServerDeleting {
+		return errJSON(c, fiber.StatusConflict, "server is deleted")
+	}
+	if s.DeleteAt != nil {
+		return errJSON(c, fiber.StatusConflict, "a deletion is already scheduled")
+	}
+	j, err := a.Orch.ScheduleDelete(s.ID, a.scheduledDeleteDelay(), source(c))
+	if err != nil {
+		return err
+	}
+	return c.Status(fiber.StatusAccepted).JSON(j)
+}
+
+// CancelScheduledDelete drops a scheduled deletion.
+func (a *App) CancelScheduledDelete(c *fiber.Ctx) error {
+	s, err := a.server(c)
+	if err != nil {
+		return err
+	}
+	if s.DeleteAt == nil {
+		return errJSON(c, fiber.StatusConflict, "no deletion is scheduled")
+	}
+	if err := a.Orch.CancelScheduledDelete(s.ID); err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"ok": true})
+}
+
+// checkFamily accepts "", "v4" or "v6" as a requested IP family.
+func checkFamily(c *fiber.Ctx, f string) error {
+	switch f {
+	case "", models.FamilyV4, models.FamilyV6:
+		return nil
+	}
+	return errJSON(c, fiber.StatusBadRequest, "ip_family must be v4 or v6")
 }

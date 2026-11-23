@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react'
-import { Alert, Button, Card, Col, Flex, Form, Input, Modal, Row, Select, Skeleton, Switch, Tag, Typography } from 'antd'
-import { ApiOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
-import { del, keys, post, put, useAction, useMeta, usePlans, useProviderTypes, useProviders, useRegions } from '../api/hooks'
-import type { ProviderAccount } from '../api/types'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Alert, Button, Card, Col, Flex, Form, Input, Modal, Row, Select, Skeleton, Switch, Tag, Tooltip, Typography } from 'antd'
+import { ApiOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, WarningOutlined } from '@ant-design/icons'
+import { useQueryClient } from '@tanstack/react-query'
+import { del, keys, post, put, useAction, useMeta, usePlans, useProviderBilling, useProviderTypes, useProviders, useRegions } from '../api/hooks'
+import { get } from '../api/client'
+import type { ProviderAccount, ProviderBilling } from '../api/types'
+import { CostBar } from '../components/CostBar'
 import { PageHeader } from '../components/PageHeader'
 import { ConfirmButton } from '../components/ConfirmButton'
 import { EmptyState } from '../components/EmptyState'
@@ -10,12 +13,45 @@ import { CopyText } from '../components/CopyText'
 import { rotateMethod } from '../lib/labels'
 import { money } from '../lib/format'
 
+/** ProviderCost shows the account's spend this month, read from the provider. */
+function ProviderCost({ id }: { id: number }) {
+  const qc = useQueryClient()
+  const { data, isLoading } = useProviderBilling(id)
+  const [refreshing, setRefreshing] = useState(false)
+  const refresh = async () => {
+    setRefreshing(true)
+    try {
+      qc.setQueryData(['providers', id, 'billing'], await get<ProviderBilling>(`/providers/${id}/billing?refresh=1`))
+    } catch { /* the card keeps the last figure */ } finally {
+      setRefreshing(false)
+    }
+  }
+  let body: ReactNode
+  if (isLoading) body = <Skeleton.Input active size="small" />
+  else if (!data?.supported) body = <Typography.Text type="secondary">هزینه: این ارائه‌دهنده پشتیبانی نمی‌شود</Typography.Text>
+  else if (data.error) {
+    body = (
+      <Tooltip title={<span dir="ltr">{data.error}</span>}>
+        <Typography.Text type="warning"><WarningOutlined /> هزینه در دسترس نیست</Typography.Text>
+      </Tooltip>
+    )
+  } else body = <CostBar spent={data.spent ?? 0} credit={data.credit} currency={data.currency} estimated={data.estimated} />
+  return (
+    <Flex gap={6} align="start" style={{ borderTop: '1px dashed rgba(128,128,128,.25)', paddingTop: 6 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>{body}</div>
+      <Tooltip title="خواندن دوباره از ارائه‌دهنده">
+        <Button type="text" size="small" icon={<ReloadOutlined />} loading={refreshing} onClick={refresh} />
+      </Tooltip>
+    </Flex>
+  )
+}
+
 export function Providers() {
   const { data, isLoading } = useProviders()
   const meta = useMeta()
   const [editing, setEditing] = useState<ProviderAccount | 'new' | null>(null)
   const test = useAction((id: number) => post(`/providers/${id}/test`), { success: 'اتصال برقرار است' })
-  const remove = useAction((id: number) => del(`/providers/${id}`), { success: 'حذف شد', invalidate: [keys.providers] })
+  const remove = useAction((id: number) => del(`/providers/${id}`), { success: 'حذف در صف قرار گرفت', invalidate: [keys.providers] })
 
   return (
     <>
@@ -41,7 +77,7 @@ export function Providers() {
                 actions={[
                   <Button key="t" type="text" size="small" loading={test.isPending && test.variables === a.id} onClick={() => test.mutate(a.id)}>تست</Button>,
                   <Button key="e" type="text" size="small" icon={<EditOutlined />} onClick={() => setEditing(a)}>ویرایش</Button>,
-                  <ConfirmButton key="d" type="text" size="small" danger icon={<DeleteOutlined />} confirm="این حساب حذف شود؟" onConfirm={() => remove.mutate(a.id)}>حذف</ConfirmButton>,
+                  <ConfirmButton key="d" type="text" size="small" danger icon={<DeleteOutlined />} confirm={a.server_count ? `این حساب و ${a.server_count} سرورش (از ارائه‌دهنده، DNS و پنل‌های مقصد) حذف شوند؟` : 'این حساب حذف شود؟'} onConfirm={() => remove.mutate(a.id)}>حذف</ConfirmButton>,
                 ]}
               >
                 <Flex vertical gap={6}>
@@ -49,6 +85,7 @@ export function Providers() {
                   <span><Typography.Text type="secondary">پیش‌فرض: </Typography.Text><span dir="ltr">{a.default_region || '—'} / {a.default_plan || '—'}</span></span>
                   <span><Typography.Text type="secondary">تعویض IP: </Typography.Text>{rotateMethod[a.capabilities?.rotate_method] ?? '—'}</span>
                   <span><Typography.Text type="secondary">سرورها: </Typography.Text>{a.server_count}</span>
+                  <ProviderCost id={a.id} />
                 </Flex>
               </Card>
             </Col>

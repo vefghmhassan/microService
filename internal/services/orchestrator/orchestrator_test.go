@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -32,6 +34,7 @@ type fakeProvider struct {
 	released  []string
 	servers   map[string]*providers.Instance
 	deleted   []string
+	deleteErr error
 	// capacity limits how many live servers a region holds (0 = unlimited).
 	capacity map[string]int
 }
@@ -84,6 +87,9 @@ func (f *fakeProvider) Get(_ context.Context, ref string) (*providers.Instance, 
 func (f *fakeProvider) Delete(_ context.Context, ref string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	delete(f.servers, ref)
 	f.deleted = append(f.deleted, ref)
 	return nil
@@ -108,11 +114,45 @@ func (f *fakeProvider) ReleaseIP(_ context.Context, ref string) error {
 	return nil
 }
 
-type fakeRemote struct{ cmds []string }
+type fakeRemote struct {
+	cmds []string
+	// broken says which configs (by their place in the config test) do not
+	// work on this server; nil means all of them work.
+	broken func(i int) bool
+}
 
 func (r *fakeRemote) Run(_ context.Context, cmd string, _ func(string)) (string, error) {
 	r.cmds = append(r.cmds, cmd)
+	if strings.HasPrefix(cmd, "ss ") {
+		// No ss here: the online count falls back to 3x-ui's online emails.
+		return "bash: ss: command not found", errors.New("exit status 127")
+	}
+	if n := configTestTargets(cmd); n > 0 {
+		var b strings.Builder
+		for i := 0; i < n; i++ {
+			if r.broken != nil && r.broken(i) {
+				fmt.Fprintf(&b, "R %d 000 10 \n", i)
+			} else {
+				fmt.Fprintf(&b, "R %d 204 0.05 \n", i)
+			}
+		}
+		return b.String(), nil
+	}
 	return "", nil
+}
+
+// configTestTargets is how many configs cmd tests, when it is the config
+// test's script.
+func configTestTargets(cmd string) int {
+	b64, ok := strings.CutPrefix(cmd, "echo ")
+	if !ok || !strings.HasSuffix(cmd, "| base64 -d | bash") {
+		return 0
+	}
+	dec, err := base64.StdEncoding.DecodeString(strings.Fields(b64)[0])
+	if err != nil {
+		return 0
+	}
+	return strings.Count(string(dec), "-x socks5h://")
 }
 func (r *fakeRemote) ReadFile(_ context.Context, path string) (string, error) {
 	if path != installResultPath {
@@ -135,6 +175,75 @@ type fakePanel struct {
 	inbounds []xui.Inbound
 	setting  map[string]any
 	restarts int
+	// The panel side (ProPanel).
+	settings map[string]any
+	clients  map[string][]int // email → attached inbound ids
+	hosts    []xui.HostGroup
+	nextHost int
+}
+
+func (p *fakePanel) Settings(context.Context) (map[string]any, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := map[string]any{"subPath": "/sub/", "subJsonPath": "/json/", "remarkTemplate": "", "subEnable": false}
+	for k, v := range p.settings {
+		out[k] = v
+	}
+	return out, nil
+}
+func (p *fakePanel) UpdateSettings(_ context.Context, all map[string]any) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.settings = all
+	return nil
+}
+func (p *fakePanel) ListClients(context.Context) ([]xui.PanelClient, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []xui.PanelClient
+	for e, ids := range p.clients {
+		out = append(out, xui.PanelClient{Email: e, InboundIDs: ids})
+	}
+	return out, nil
+}
+func (p *fakePanel) AddClient(_ context.Context, c map[string]any, ids []int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.clients == nil {
+		p.clients = map[string][]int{}
+	}
+	p.clients[c["email"].(string)] = ids
+	return nil
+}
+func (p *fakePanel) AttachClient(_ context.Context, email string, ids []int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.clients[email] = ids
+	return nil
+}
+func (p *fakePanel) ListHosts(context.Context) ([]xui.HostGroup, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]xui.HostGroup{}, p.hosts...), nil
+}
+func (p *fakePanel) AddHost(_ context.Context, h xui.HostGroup) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.nextHost++
+	h.GroupID = fmt.Sprintf("g%d", p.nextHost)
+	p.hosts = append(p.hosts, h)
+	return nil
+}
+func (p *fakePanel) DeleteHost(_ context.Context, id string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, h := range p.hosts {
+		if h.GroupID == id {
+			p.hosts = append(p.hosts[:i], p.hosts[i+1:]...)
+			break
+		}
+	}
+	return nil
 }
 
 func (p *fakePanel) Onlines(context.Context) ([]string, error) { return p.online, nil }
@@ -190,6 +299,7 @@ type fakeDest struct {
 	mu       sync.Mutex
 	uploads  [][]string
 	replaced [][2]string
+	removed  []string
 }
 
 func (d *fakeDest) Upload(_ context.Context, in destination.UploadRequest) error {
@@ -205,6 +315,12 @@ func (d *fakeDest) ReplaceAddress(_ context.Context, oldIP, newIP, _ string) (*d
 	return &destination.ReplaceResult{Updated: 1}, nil
 }
 func (d *fakeDest) SetActive(context.Context, string, bool) error { return nil }
+func (d *fakeDest) DeleteAddress(_ context.Context, addr string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.removed = append(d.removed, addr)
+	return nil
+}
 
 // ---- harness ----
 
@@ -236,6 +352,9 @@ func setup(t *testing.T) (*Orchestrator, *fakeProvider, *fakePanel, *fakeDest, *
 	engine := jobs.NewEngine(db, 2)
 	o := New(db, st, key, engine)
 	o.RetryDelay = time.Millisecond
+	oldGap := autoTestGap
+	autoTestGap = time.Millisecond
+	t.Cleanup(func() { autoTestGap = oldGap })
 	prov, panel, dest := &fakeProvider{}, &fakePanel{}, &fakeDest{}
 	filtered := map[string]bool{}
 	o.Provider = func(*models.ProviderAccount) (providers.Provider, error) { return prov, nil }
@@ -319,8 +438,19 @@ func TestProvisionRotatesAwayFromFilteredIPThenInstallsAndUploads(t *testing.T) 
 	if s.SyncStatus != models.SyncSynced || s.AppliedHash == "" {
 		t.Fatalf("template not applied: %s %s", s.SyncStatus, s.AppliedHash)
 	}
-	if !panel.subOff {
-		t.Fatal("subscription was not turned off")
+	// The panel side, like pdnczone/3x-ui-pro-configs: its subscription on
+	// with {{HOST}} names and JSON, one client on every managed inbound and a
+	// Hosts row per inbound.
+	if panel.settings["subEnable"] != true || panel.settings["subJsonEnable"] != true ||
+		panel.settings["remarkTemplate"] != "{{HOST}}" || panel.settings["subPort"] != 2096 {
+		t.Fatalf("panel settings %v", panel.settings)
+	}
+	if ids := panel.clients[s.PanelClient]; s.PanelClient == "" || len(ids) != 1 || s.SubID == "" ||
+		!strings.HasSuffix(s.PanelSubJSON, ":2096/json/"+s.SubID) {
+		t.Fatalf("panel client %q %v sub %s", s.PanelClient, panel.clients, s.PanelSubJSON)
+	}
+	if len(panel.hosts) == 0 || panel.hosts[0].Tags[0] != HostTag {
+		t.Fatalf("hosts %+v", panel.hosts)
 	}
 	if len(panel.inbounds) != 1 || panel.inbounds[0].Remark != ManagedPrefix+"DE" || panel.restarts == 0 {
 		t.Fatalf("panel %+v", panel.inbounds)
@@ -563,5 +693,39 @@ func TestTrafficCapReplacesServerOnce(t *testing.T) {
 	last := dest.replaced[len(dest.replaced)-1]
 	if last[0] != old.UploadedIP || last[1] != repl.IPv4 {
 		t.Fatalf("replaced %v", dest.replaced)
+	}
+}
+
+func TestGroupPlacementOnePerLocationInBundleOrder(t *testing.T) {
+	o, _, _, _, acc, filtered := setup(t)
+	filtered["10.0.0.1"] = true // the bundle's first location gives a filtered IP
+	// Global priority is the reverse of the bundle's order and has a location
+	// outside the bundle first: neither may matter.
+	outside := models.Location{Priority: 1, ProviderAccountID: acc.ID, Region: "nbg1", Plan: "p", Capacity: 1, Enabled: true}
+	fsn := models.Location{Priority: 2, ProviderAccountID: acc.ID, Region: "fsn1", Plan: "p", Capacity: 1, Enabled: true}
+	hel := models.Location{Priority: 3, ProviderAccountID: acc.ID, Region: "hel1", Plan: "p", Capacity: 1, Enabled: true}
+	sin := models.Location{Priority: 4, ProviderAccountID: acc.ID, Region: "sin", Plan: "p", Capacity: 1, Enabled: true}
+	for _, l := range []*models.Location{&outside, &fsn, &hel, &sin} {
+		o.DB.Create(l)
+	}
+	g := models.LocationGroup{Name: "b", Enabled: true, LocationIDs: fmt.Sprintf("%d,%d,%d", sin.ID, hel.ID, fsn.ID)}
+	o.DB.Create(&g)
+
+	j, _ := o.Engine.Enqueue(KindProvisionAuto, nil, AutoParams{Count: 2, GroupID: g.ID}, "test")
+	if got := waitJob(t, o, j.ID); got.Status != models.JobDone {
+		t.Fatalf("group: %s", got.Error)
+	}
+	var kept []models.Server
+	o.DB.Where("status <> ?", models.ServerDeleted).Order("id").Find(&kept)
+	if len(kept) != 2 || kept[0].Region != "hel1" || kept[1].Region != "fsn1" {
+		t.Fatalf("kept %+v", kept)
+	}
+	if kept[0].LocationID != hel.ID || kept[1].LocationID != fsn.ID {
+		t.Fatalf("location ids %d %d", kept[0].LocationID, kept[1].LocationID)
+	}
+	var n int64
+	o.DB.Model(&models.Server{}).Where("region = ?", "nbg1").Count(&n)
+	if n != 0 {
+		t.Fatal("built outside the bundle")
 	}
 }

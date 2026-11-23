@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -79,7 +80,11 @@ func PanelURL(s *models.Server) string {
 	if bp != "" {
 		bp += "/"
 	}
-	return fmt.Sprintf("%s://%s:%d/%s", scheme, s.IPv4, s.XUIPort, bp)
+	host := s.IPv4
+	if scheme == "https" && s.Hostname != "" && !s.DNSProxied {
+		host = s.Hostname
+	}
+	return fmt.Sprintf("%s://%s/%s", scheme, net.JoinHostPort(host, strconv.Itoa(s.XUIPort)), bp)
 }
 
 // panelAccess switches an installed server's panel between public and local.
@@ -112,7 +117,7 @@ func (o *Orchestrator) waitPanel(ctx context.Context, r *jobs.Run, s *models.Ser
 	for {
 		st, err := panel.Status(ctx)
 		if err == nil {
-			if st.Xray.Version != "" {
+			if knownXray(st.Xray.Version) {
 				s.XrayVersion = st.Xray.Version
 				o.save(r, s, "xray_version")
 			}
@@ -130,6 +135,12 @@ func (o *Orchestrator) waitPanel(ctx context.Context, r *jobs.Run, s *models.Ser
 // installPanel installs (or reinstalls at another version) 3x-ui and stores
 // the credentials and API token it ends up with.
 func (o *Orchestrator) installPanel(ctx context.Context, r *jobs.Run, s *models.Server, remote Remote, version string) error {
+	return o.installPanelOpts(ctx, r, s, remote, version, false)
+}
+
+// installPanelOpts is installPanel; keepLocal leaves the panel on localhost
+// so the caller can put its certificate in place before opening it.
+func (o *Orchestrator) installPanelOpts(ctx context.Context, r *jobs.Run, s *models.Server, remote Remote, version string, keepLocal bool) error {
 	version = firstNonEmpty(version, s.WantPanelVer, o.Settings.Get(settings.XUIVersion))
 	if s.XUIPort == 0 {
 		s.XUIPort = int(randomInt(20000, 60000))
@@ -196,7 +207,11 @@ func (o *Orchestrator) installPanel(ctx context.Context, r *jobs.Run, s *models.
 		s.XUIScheme = "https"
 	}
 
-	if err := o.setPanelListen(ctx, r, s, remote, o.Settings.Bool(settings.XUIPublic)); err != nil {
+	public := o.Settings.Bool(settings.XUIPublic)
+	if keepLocal {
+		public = false
+	}
+	if err := o.setPanelListen(ctx, r, s, remote, public); err != nil {
 		r.Logf("warn", "%v", err)
 	}
 
@@ -209,23 +224,8 @@ func (o *Orchestrator) installPanel(ctx context.Context, r *jobs.Run, s *models.
 	}
 	r.Info("3x-ui %s is up (xray %s)", version, s.XrayVersion)
 
-	// Subscriptions are not used: configs reach users through vpn-pannel.
-	changed, err := panel.DisableSubscription(ctx)
-	switch {
-	case err != nil:
-		r.Logf("warn", "could not turn off the subscription service: %v", err)
-	case changed:
-		r.Info("subscription service turned off; restarting the panel")
-		if err := panel.RestartPanel(ctx); err != nil {
-			r.Logf("warn", "restart panel: %v", err)
-		}
-		// Give the old process time to exit before polling the new one.
-		_ = sleep(ctx, o.RetryDelay/6)
-		if err := o.waitPanel(ctx, r, s, panel); err != nil {
-			return err
-		}
-	}
-
+	// The panel's own subscription is set up after the template is applied
+	// (syncPanelPro), like pdnczone/3x-ui-pro-configs does on a panel.
 	if want := firstNonEmpty(s.WantXrayVer, o.Settings.Get(settings.XrayVersion)); want != "" &&
 		strings.TrimPrefix(want, "v") != strings.TrimPrefix(s.XrayVersion, "v") {
 		r.Info("switching xray core to %s", want)

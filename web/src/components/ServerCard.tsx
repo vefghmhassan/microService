@@ -1,13 +1,16 @@
-import { Card, Flex, Tag, Tooltip, Typography } from 'antd'
+import { Card, Checkbox, Flex, Tag, Tooltip, Typography } from 'antd'
 import { CheckCircleFilled, CloseCircleFilled, QuestionCircleFilled } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import type { Job, Server } from '../api/types'
 import { serverStatus, syncStatus } from '../lib/labels'
 import { flagEmoji, timeAgo } from '../lib/format'
 import { StatusTag } from './StatusTag'
-import { CopyText } from './CopyText'
+import { ServerMarks } from './ServerMarks'
+import { HostBadge } from './HostBadge'
 import { ServerActions } from './ServerActions'
 import { TrafficBar } from './TrafficBar'
+import { ServerIP } from './ServerIP'
+import { QualityTag, serverQuality, useQuality } from './QualityTag'
 
 export function CheckBadge({ server }: { server: Pick<Server, 'last_check_ok' | 'last_check_at' | 'last_check_note'> }) {
   const icon = server.last_check_ok === null
@@ -26,23 +29,34 @@ export function CheckBadge({ server }: { server: Pick<Server, 'last_check_ok' | 
 }
 
 /** ServerCard is the phone-sized view of a server row. */
-export function ServerCard({ server, limit = 0, onJob }: { server: Server; limit?: number; onJob?: (j: Job) => void }) {
+export function ServerCard({ server, limit = 0, onJob, selected, onSelect }: {
+  server: Server; limit?: number; onJob?: (j: Job) => void
+  /** With onSelect, the card has a checkbox for bulk actions. */
+  selected?: boolean; onSelect?: (on: boolean) => void
+}) {
   const nav = useNavigate()
+  const quality = useQuality()
   return (
     <Card size="small" className="server-card">
       <Flex vertical gap={10}>
         <Flex justify="space-between" align="center" gap={8}>
+          {onSelect && <Checkbox checked={selected} onChange={(e) => onSelect(e.target.checked)} aria-label="انتخاب" />}
           <Typography.Link strong onClick={() => nav(`/servers/${server.id}`)} ellipsis>
             {flagEmoji(server.country)} {server.name}
           </Typography.Link>
           <StatusTag map={serverStatus} value={server.status} />
+          <ServerMarks server={server} />
         </Flex>
         <Flex justify="space-between" align="center" wrap gap={8}>
-          <CopyText text={server.ipv4} />
+          <ServerIP server={server} />
           <CheckBadge server={server} />
         </Flex>
+        <HostBadge server={server} />
         <Flex justify="space-between" align="center" gap={8}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>آنلاین: {server.online_count}</Typography.Text>
+          <Flex gap={6} align="center">
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>آنلاین: {server.online_count}</Typography.Text>
+            {quality.enabled && <QualityTag q={serverQuality(server)} />}
+          </Flex>
           <TrafficBar used={server.traffic_up + server.traffic_down} limit={limit} compact />
         </Flex>
         <Flex gap={6} wrap>

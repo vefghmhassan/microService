@@ -18,6 +18,7 @@ import (
 	"microserver/internal/services/destination"
 	"microserver/internal/services/orchestrator"
 	"microserver/internal/services/providers"
+	"microserver/internal/version"
 )
 
 // ---- dashboard ----
@@ -72,6 +73,24 @@ func (a *App) ListIPs(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(ips)
+}
+
+// UnbanIP lifts an IP's ban so it may be bought or reused again.
+func (a *App) UnbanIP(c *fiber.Ctx) error {
+	id, err := idParam(c)
+	if err != nil {
+		return err
+	}
+	var ip models.IPAddress
+	if err := a.DB.First(&ip, id).Error; err != nil {
+		return errJSON(c, fiber.StatusNotFound, "ip not found")
+	}
+	// Lift it on every account's row: the ban matches the address alone.
+	if err := a.DB.Model(&models.IPAddress{}).Where("address = ?", ip.Address).
+		Update("banned_until", nil).Error; err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"ok": true})
 }
 
 // ReleaseIP gives a kept IP back to the provider so it stops costing money.
@@ -294,54 +313,78 @@ func (a *App) TestTelegramHandler(c *fiber.Ctx) error {
 
 // ---- meta ----
 
+type releaseCache struct {
+	tags []string
+	at   time.Time
+}
+
 var (
-	releasesMu    sync.Mutex
-	releasesCache []string
-	releasesAt    time.Time
+	releasesMu sync.Mutex
+	releases   = map[string]releaseCache{}
 )
 
-// XUIReleases lists 3x-ui release tags from GitHub, cached for an hour.
-func (a *App) XUIReleases(c *fiber.Ctx) error {
+// githubReleases lists a repo's release tags (prereleases only when
+// withPre), cached for an hour.
+func githubReleases(ctx context.Context, repo string, withPre bool) ([]string, error) {
 	releasesMu.Lock()
 	defer releasesMu.Unlock()
-	if time.Since(releasesAt) < time.Hour && len(releasesCache) > 0 {
-		return c.JSON(releasesCache)
+	if rc, ok := releases[repo]; ok && time.Since(rc.at) < time.Hour && len(rc.tags) > 0 {
+		return rc.tags, nil
 	}
-	ctx, cancel := context.WithTimeout(c.UserContext(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/MHSanaei/3x-ui/releases?per_page=30", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+repo+"/releases?per_page=30", nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return errJSON(c, fiber.StatusBadGateway, err.Error())
+		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github: %s", resp.Status)
+	}
 	var rel []struct {
 		Tag        string `json:"tag_name"`
 		Prerelease bool   `json:"prerelease"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return errJSON(c, fiber.StatusBadGateway, "github: "+err.Error())
+		return nil, fmt.Errorf("github: %w", err)
 	}
 	tags := make([]string, 0, len(rel))
 	for _, r := range rel {
-		if !r.Prerelease {
+		if withPre || !r.Prerelease {
 			tags = append(tags, r.Tag)
 		}
 	}
-	releasesCache, releasesAt = tags, time.Now()
+	releases[repo] = releaseCache{tags, time.Now()}
+	return tags, nil
+}
+
+func releasesHandler(c *fiber.Ctx, repo string, withPre bool) error {
+	tags, err := githubReleases(c.UserContext(), repo, withPre)
+	if err != nil {
+		return errJSON(c, fiber.StatusBadGateway, err.Error())
+	}
 	return c.JSON(tags)
 }
+
+// XUIReleases lists 3x-ui release tags from GitHub.
+func (a *App) XUIReleases(c *fiber.Ctx) error { return releasesHandler(c, "MHSanaei/3x-ui", false) }
+
+// XrayReleases lists Xray-core release tags from GitHub. Xray marks most
+// releases as prerelease and 3x-ui offers them too, so they are kept.
+func (a *App) XrayReleases(c *fiber.Ctx) error { return releasesHandler(c, "XTLS/Xray-core", true) }
 
 func (a *App) Meta(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"ssh_public_key": a.Orch.Key.PublicKey,
+		"version":        version.Get(),
 		"provider_types": providers.Descriptors(),
 		"job_kinds": []string{
 			orchestrator.KindProvision, orchestrator.KindRotate, orchestrator.KindCheck, orchestrator.KindInstall,
 			orchestrator.KindSync, orchestrator.KindSyncAll, orchestrator.KindUpload, orchestrator.KindDelete,
 			orchestrator.KindXrayVersion, orchestrator.KindPanelVersion, orchestrator.KindCheckAll,
-			orchestrator.KindProvisionAuto,
+			orchestrator.KindProvisionAuto, orchestrator.KindPurgeProvider, orchestrator.KindUnpublish,
 		},
 	})
 }

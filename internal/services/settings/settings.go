@@ -15,9 +15,13 @@ import (
 
 // Keys. Every key the UI may edit is listed in Defaults.
 const (
-	XUIVersion        = "xui.version"
-	XUIInstallURL     = "xui.install_url"
-	XUIPublic         = "xui.public_panel"
+	XUIVersion    = "xui.version"
+	XUIInstallURL = "xui.install_url"
+	XUIPublic     = "xui.public_panel"
+	// On servers with Cloudflare SSL the 3x-ui panel and its subscription
+	// sit on two of Cloudflare's HTTPS ports, kept free of inbounds.
+	XUICFPanelPort    = "xui.cf_panel_port"
+	XUICFSubPort      = "xui.cf_sub_port"
 	XrayVersion       = "xray.version"
 	CheckSources      = "check.sources"
 	CheckMinOK        = "check.min_ok"
@@ -26,68 +30,171 @@ const (
 	CheckIntervalMin  = "check.interval_min"
 	GlobalpingToken   = "check.globalping_token"
 	GlobalpingLimit   = "check.globalping_limit"
+	AtlasKey          = "check.atlas_key"
+	CheckHostCCKey    = "check.checkhostcc_key"
+	AtlasLimit        = "check.atlas_limit"
 	RotateMaxAttempts = "rotate.max_attempts"
 	RotateKeepOld     = "rotate.keep_filtered_ip"
+	RotateV6InPrefix  = "rotate.v6_in_prefix"
 	RotateRetryHours  = "rotate.retry_kept_after_hours"
-	AutoRotate        = "rotate.auto"
-	RotateFallback    = "rotate.fallback_location"
-	AutoMaxPerLoc     = "auto.max_per_location"
-	TrafficLimitGB    = "traffic.limit_gb"
-	TrafficAuto       = "traffic.auto_replace"
-	StatsIntervalMin  = "stats.interval_min"
-	VPNPanelURL       = "vpnpannel.url"
-	VPNPanelEmail     = "vpnpannel.email"
-	VPNPanelPassword  = "vpnpannel.password"
-	VPNPanelAds       = "vpnpannel.ads"
-	VPNPanelAuto      = "vpnpannel.auto_upload"
-	TelegramToken     = "telegram.token"
-	TelegramChatIDs   = "telegram.chat_ids"
-	TelegramProxy     = "telegram.proxy"
-	TelegramNotify    = "telegram.notify"
-	GeoIPCityURL      = "geoip.city_url"
-	GeoIPASNURL       = "geoip.asn_url"
+	// IPBanHours: a filtered or swapped-away IP is not taken again for this
+	// many hours (0 turns bans off).
+	IPBanHours = "ip.ban_hours"
+	// ServerDeleteDelayMin: "remove from panels, delete later" waits this long.
+	ServerDeleteDelayMin = "server.delete_delay_min"
+	AutoRotate           = "rotate.auto"
+	RotateFallback       = "rotate.fallback_location"
+	AutoMaxPerLoc        = "auto.max_per_location"
+	TrafficLimitGB       = "traffic.limit_gb"
+	TrafficAuto          = "traffic.auto_replace"
+	WatchLowUsage        = "watch.low_usage"
+	WatchMinutes         = "watch.minutes"
+	WatchMinMB           = "watch.min_mb"
+	// WatchOnlinePct: warn when online users after the window are below this
+	// percent of those before the change (0 = off).
+	WatchOnlinePct = "watch.online_pct"
+	// WatchMinOnline: warn when a server with no "before" has fewer online (0 = off).
+	WatchMinOnline   = "watch.min_online"
+	StatsIntervalMin = "stats.interval_min"
+	// Connection quality read from the kernel (ss -ti) of real user
+	// connections during stats collection; no test traffic.
+	QualityEnabled    = "quality.enabled"
+	QualityAlert      = "quality.alert"
+	QualityMinKbps    = "quality.min_kbps"
+	QualityMaxRetrans = "quality.max_retrans_pct"
+	QualityMinConns   = "quality.min_conns"
+	QualityBadRounds  = "quality.bad_rounds"
+	// IdleRetryHours: an inbound that smart configs and modes left out for
+	// being idle is put back for one try after this long (0 = never).
+	IdleRetryHours   = "idle.retry_hours"
+	VPNPanelURL      = "vpnpannel.url"
+	VPNPanelEmail    = "vpnpannel.email"
+	VPNPanelPassword = "vpnpannel.password"
+	VPNPanelAds      = "vpnpannel.ads"
+	VPNPanelAuto     = "vpnpannel.auto_upload"
+	TelegramToken    = "telegram.token"
+	TelegramChatIDs  = "telegram.chat_ids"
+	TelegramProxy    = "telegram.proxy"
+	TelegramNotify   = "telegram.notify"
+	GeoIPCityURL     = "geoip.city_url"
+	GeoIPASNURL      = "geoip.asn_url"
+	AcmeStaging      = "acme.staging"
+	CleanIPOperators = "cleanip.operators"
+	CleanIPInterval  = "cleanip.interval_hours"
+	CleanIPPerLink   = "cleanip.per_link"
+	SubEnabled       = "sub.enabled"
+	SubToken         = "sub.token"
+	// Scheduled backup sent to the Telegram chats.
+	BackupTelegram = "backup.telegram"
+	BackupInterval = "backup.interval_hours"
+	BackupHistory  = "backup.history"
+	BackupPassword = "backup.password"
+	BackupLastAt   = "backup.last_at"
+	// Days of jobs and checks kept (0 = forever).
+	HistoryKeepDays = "history.keep_days"
+	// The server that runs the master 3x-ui panel nodes are registered on
+	// (0 = none), and the name of the client every node inbound carries.
+	NodeMasterID = "node.master_server_id"
+	NodeClient   = "node.client"
+	NodeSubID    = "node.sub_id"
+	// NodeOnly keeps only balancer and smart configs in vpn-pannel: the
+	// servers' own configs are not uploaded.
+	NodeOnly = "node.only"
+	// NodeModesSeeded is set once the built-in balancer modes were made.
+	NodeModesSeeded = "node.modes_seeded"
+	// Contact for the Let's Encrypt account of IP certificates (optional).
+	AcmeIPEmail = "acme.ip_email"
 )
 
 var Defaults = map[string]string{
-	XUIVersion:        "v3.7.0",
-	XUIInstallURL:     "https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh",
-	XUIPublic:         "true",
-	XrayVersion:       "",
-	CheckSources:      "checkhost,globalping",
-	CheckMinOK:        "2",
-	CheckMinASN:       "2",
-	CheckPreInstall:   "22",
-	CheckIntervalMin:  "30",
-	GlobalpingToken:   "",
-	GlobalpingLimit:   "8",
-	RotateMaxAttempts: "5",
-	RotateKeepOld:     "false",
-	RotateRetryHours:  "24",
-	AutoRotate:        "false",
-	RotateFallback:    "true",
-	AutoMaxPerLoc:     "5",
-	TrafficLimitGB:    "0",
-	TrafficAuto:       "false",
-	StatsIntervalMin:  "5",
-	VPNPanelURL:       "",
-	VPNPanelEmail:     "",
-	VPNPanelPassword:  "",
-	VPNPanelAds:       "false",
-	VPNPanelAuto:      "true",
-	TelegramToken:     "",
-	TelegramChatIDs:   "",
-	TelegramProxy:     "",
-	TelegramNotify:    "true",
+	XUIVersion:       "v3.7.0",
+	XUIInstallURL:    "https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh",
+	XUIPublic:        "true",
+	XUICFPanelPort:   "8443",
+	XUICFSubPort:     "2096",
+	XrayVersion:      "",
+	CheckSources:     "checkhost,globalping",
+	CheckMinOK:       "2",
+	CheckMinASN:      "2",
+	CheckPreInstall:  "22",
+	CheckIntervalMin: "30",
+	GlobalpingToken:  "",
+	GlobalpingLimit:  "8",
+	// RIPE Atlas has Iranian probes with IPv6; add "atlas" to check.sources.
+	AtlasKey:             "",
+	CheckHostCCKey:       "",
+	AtlasLimit:           "8",
+	RotateMaxAttempts:    "5",
+	RotateKeepOld:        "false",
+	RotateV6InPrefix:     "true",
+	RotateRetryHours:     "24",
+	IPBanHours:           "10",
+	ServerDeleteDelayMin: "10",
+	AutoRotate:           "false",
+	RotateFallback:       "true",
+	AutoMaxPerLoc:        "5",
+	TrafficLimitGB:       "0",
+	TrafficAuto:          "false",
+	WatchLowUsage:        "false",
+	WatchMinutes:         "30",
+	WatchMinMB:           "1024",
+	WatchOnlinePct:       "50",
+	WatchMinOnline:       "0",
+	StatsIntervalMin:     "5",
+	QualityEnabled:       "true",
+	QualityAlert:         "false",
+	QualityMinKbps:       "500",
+	QualityMaxRetrans:    "10",
+	QualityMinConns:      "3",
+	QualityBadRounds:     "3",
+	IdleRetryHours:       "6",
+	VPNPanelURL:          "",
+	VPNPanelEmail:        "",
+	VPNPanelPassword:     "",
+	VPNPanelAds:          "false",
+	VPNPanelAuto:         "true",
+	TelegramToken:        "",
+	TelegramChatIDs:      "",
+	TelegramProxy:        "",
+	TelegramNotify:       "true",
 	// Empty: DB-IP Lite of the current month.
 	GeoIPCityURL: "",
 	GeoIPASNURL:  "",
+	// Let's Encrypt's staging CA: untrusted certificates, no rate limits.
+	AcmeStaging: "false",
+	// Operators taken from the built-in clean-IP list (empty: all).
+	CleanIPOperators: "MCI,MTN",
+	CleanIPInterval:  "6",
+	// How many clean IPs a proxied server's CDN links are built with.
+	CleanIPPerLink: "5",
+	// The all-servers subscription at /sub/<token>.
+	SubEnabled:     "false",
+	SubToken:       "",
+	BackupTelegram: "false",
+	BackupInterval: "24",
+	BackupHistory:  "false",
+	// Empty: the file is sent unencrypted.
+	BackupPassword: "",
+	// RFC 3339 time of the last scheduled backup (written by the panel).
+	BackupLastAt: "",
+	// Older jobs, job logs, checks and probes are deleted.
+	HistoryKeepDays: "14",
+	NodeMasterID:    "0",
+	NodeClient:      "ms-auto",
+	NodeSubID:       "",
+	NodeOnly:        "false",
+	NodeModesSeeded: "false",
+	AcmeIPEmail:     "",
 }
 
 // Secret keys are encrypted in the table and masked when listed.
 var Secret = map[string]bool{
 	GlobalpingToken:  true,
+	AtlasKey:         true,
+	CheckHostCCKey:   true,
 	VPNPanelPassword: true,
 	TelegramToken:    true,
+	BackupPassword:   true,
 }
 
 const Mask = "••••••"

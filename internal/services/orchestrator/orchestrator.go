@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"microserver/internal/jobs"
 	"microserver/internal/models"
 	"microserver/internal/services/checker"
+	"microserver/internal/services/cloudflare"
 	"microserver/internal/services/destination"
 	"microserver/internal/services/providers"
 	"microserver/internal/services/settings"
@@ -42,6 +44,10 @@ const (
 	KindCheckAll      = "check_all"
 	KindProvisionAuto = "provision_auto"
 	KindPanelAccess   = "panel_access"
+	KindCertPush      = "cert_push"
+	KindDNSSync       = "dns_sync"
+	KindPurgeProvider = "purge_provider"
+	KindUnpublish     = "unpublish"
 )
 
 // Remote is the SSH session the orchestrator needs; sshx.Client satisfies it
@@ -76,6 +82,13 @@ type Orchestrator struct {
 	Key      *sshx.Keypair
 	Engine   *jobs.Engine
 
+	nameMu sync.Mutex // serialises panelBaseName number picks
+	smart  smartState
+	nodes  nodeState
+	// idleSig is what the idle inbounds looked like at the last stats
+	// round; a change rebuilds the configs that drop them.
+	idleSig string
+
 	// Seams, replaced in tests.
 	Provider func(acc *models.ProviderAccount) (providers.Provider, error)
 	Connect  func(ctx context.Context, s *models.Server) (Remote, string, error) // returns the host key seen
@@ -83,8 +96,17 @@ type Orchestrator struct {
 	Check    func(ctx context.Context, host string, port int) *checker.Result
 	Dests    func() []NamedDest // every enabled vpn-pannel
 	Notify   func(text string)
+	// Alert is a notification about one server, shown with its action buttons.
+	Alert func(s *models.Server, text string)
 	// Geo resolves client addresses for the GeoIP report (nil = skip).
 	Geo GeoLookup
+	// CF is the Cloudflare record API of an account.
+	CF func(acc *models.CloudflareAccount) DNSAPI
+	// Certs issues zone certificates (nil = SSL is skipped).
+	Certs CertSource
+	// Master is the node API of the master 3x-ui panel; the returned func
+	// releases the connection.
+	Master func(ctx context.Context) (NodeAPI, func(), error)
 
 	accessLogOK sync.Map // server ID → access log verified on
 	xrayKicks   sync.Map // server ID → *int restarts tried for a missing access log
@@ -100,6 +122,14 @@ type Destination interface {
 	Upload(ctx context.Context, in destination.UploadRequest) error
 	ReplaceAddress(ctx context.Context, oldIP, newIP, country string) (*destination.ReplaceResult, error)
 	SetActive(ctx context.Context, address string, active bool) error
+	DeleteAddress(ctx context.Context, address string) error
+}
+
+// HostDestination is the optional by-SNI/Host surface of a destination,
+// used for the CDN add-on's clean-IP configs.
+type HostDestination interface {
+	SetActiveHost(ctx context.Context, host string, active bool) error
+	DeleteHost(ctx context.Context, host string) error
 }
 
 func New(db *gorm.DB, st *settings.Store, key *sshx.Keypair, engine *jobs.Engine) *Orchestrator {
@@ -118,7 +148,9 @@ func New(db *gorm.DB, st *settings.Store, key *sshx.Keypair, engine *jobs.Engine
 		return xui.New(s.XUIScheme, "127.0.0.1", s.XUIPort, s.XUIBasePath, string(s.XUIToken), r.DialContext)
 	}
 	o.Check = o.defaultCheck
+	o.CF = func(acc *models.CloudflareAccount) DNSAPI { return cloudflare.New(string(acc.Token)) }
 	o.Dests = o.defaultDests
+	o.Master = o.defaultMaster
 	return o
 }
 
@@ -131,8 +163,12 @@ func (o *Orchestrator) NewChecker() *checker.Checker {
 		switch s {
 		case "checkhost":
 			c.Sources = append(c.Sources, checker.NewCheckHost())
+		case "checkhostcc":
+			c.Sources = append(c.Sources, checker.NewCheckHostCC(o.Settings.Get(settings.CheckHostCCKey)))
 		case "globalping":
 			c.Sources = append(c.Sources, checker.NewGlobalping(o.Settings.Get(settings.GlobalpingToken), o.Settings.Int(settings.GlobalpingLimit)))
+		case "atlas":
+			c.Sources = append(c.Sources, checker.NewAtlas(o.Settings.Get(settings.AtlasKey), o.Settings.Int(settings.AtlasLimit)))
 		}
 	}
 	return c
@@ -146,6 +182,7 @@ func (o *Orchestrator) defaultCheck(ctx context.Context, host string, port int) 
 
 // NamedDest is one enabled vpn-pannel with its per-panel upload options.
 type NamedDest struct {
+	ID   uint // models.Destination ID
 	Name string
 	// Ads lists one ads flag per upload: [false], [true], or both for a
 	// panel that keeps a normal and an ads set of every server's configs.
@@ -158,7 +195,7 @@ func (o *Orchestrator) defaultDests() []NamedDest {
 	o.DB.Where("enabled = ?", true).Order("id").Find(&rows)
 	out := make([]NamedDest, 0, len(rows))
 	for _, d := range rows {
-		out = append(out, NamedDest{Name: d.Name, Ads: d.AdsValues(), Destination: destination.NewVPNPanel(d.URL, d.Email, string(d.Password))})
+		out = append(out, NamedDest{ID: d.ID, Name: d.Name, Ads: d.AdsValues(), Destination: destination.NewVPNPanel(d.URL, d.Email, string(d.Password))})
 	}
 	return out
 }
@@ -178,6 +215,16 @@ func (o *Orchestrator) Register() {
 	o.Engine.Register(KindCheckAll, o.checkAll)
 	o.Engine.Register(KindProvisionAuto, o.provisionAuto)
 	o.Engine.Register(KindPanelAccess, o.panelAccess)
+	o.Engine.Register(KindCertPush, o.certPush)
+	o.Engine.Register(KindDNSSync, o.dnsSync)
+	o.Engine.Register(KindPurgeProvider, o.purgeProvider)
+	o.Engine.Register(KindUnpublish, o.unpublish)
+	o.Engine.Register(KindSmartSync, o.smartSync)
+	o.Engine.Register(KindIPCert, o.ipCert)
+	o.Engine.Register(KindNodeJoin, o.nodeJoinJob)
+	o.Engine.Register(KindNodeLeave, o.nodeLeaveJob)
+	o.Engine.Register(KindNodeSync, o.nodeSync)
+	o.Engine.Register(KindNodeOnly, o.nodeOnly)
 }
 
 func serverEvent(s *models.Server) jobs.Event {
@@ -231,6 +278,19 @@ func (o *Orchestrator) fail(r *jobs.Run, s *models.Server, err error) error {
 
 // recordCheck stores a check and updates the server's last-check fields.
 func (o *Orchestrator) recordCheck(r *jobs.Run, s *models.Server, res *checker.Result) {
+	o.storeCheck(r, s, res)
+	if s != nil {
+		now := time.Now()
+		ok := res.OK
+		s.LastCheckAt, s.LastCheckOK, s.LastCheckNote = &now, &ok, truncate(res.Summary, 255)
+		o.save(r, s, "last_check_at", "last_check_ok", "last_check_note")
+		o.DB.Model(&models.IPAddress{}).Where("address = ? AND server_id = ?", s.IPv4, s.ID).
+			Updates(map[string]any{"last_check_at": now, "last_check_ok": ok})
+	}
+}
+
+// storeCheck keeps a check in the history and the job log, nothing else.
+func (o *Orchestrator) storeCheck(r *jobs.Run, s *models.Server, res *checker.Result) {
 	run := models.CheckRun{Host: res.Host, Port: res.Port, Verdict: res.Verdict, OK: res.OK, Summary: truncate(res.Summary, 255)}
 	if s != nil {
 		run.ServerID = &s.ID
@@ -248,30 +308,86 @@ func (o *Orchestrator) recordCheck(r *jobs.Run, s *models.Server, res *checker.R
 			r.Logf("warn", "check source error: %s", e)
 		}
 	}
-	if s != nil {
-		now := time.Now()
-		ok := res.OK
-		s.LastCheckAt, s.LastCheckOK, s.LastCheckNote = &now, &ok, truncate(res.Summary, 255)
-		o.save(r, s, "last_check_at", "last_check_ok", "last_check_note")
-		o.DB.Model(&models.IPAddress{}).Where("address = ? AND server_id = ?", s.IPv4, s.ID).
-			Updates(map[string]any{"last_check_at": now, "last_check_ok": ok})
-	}
 }
 
 // checkPort is where reachability is measured: the first enabled inbound once
 // 3x-ui is configured, else sshd (the only thing listening on a fresh server).
 // Iranian filtering is usually per IP, so either port answers the question.
 func (o *Orchestrator) checkPort(s *models.Server) int {
-	if s.AppliedHash != "" {
-		var in models.InboundTemplate
-		if o.DB.Where("enabled = ?", true).Order("id").First(&in).Error == nil {
-			return in.Port
-		}
+	if ports := o.inboundPorts(s); len(ports) > 0 {
+		return ports[0]
 	}
 	if p := o.Settings.Int(settings.CheckPreInstall); p > 0 {
 		return p
 	}
 	return 22
+}
+
+// inboundPorts are the TCP ports of the inbounds a configured server
+// listens on, the one reachability is measured on first.
+func (o *Orchestrator) inboundPorts(s *models.Server) []int {
+	if s.AppliedHash == "" {
+		return nil
+	}
+	var ins []models.InboundTemplate
+	// A CDN inbound may be missing on a server without SSL; prefer the
+	// others. The check is TCP, so Hysteria2 (UDP only) never counts,
+	// and only this server's add-on inbounds do.
+	o.DB.Where("enabled = ? AND family IN ? AND protocol <> ? AND (addon_id = 0 OR addon_id = ?)", true, TemplateFamilies(s.Family()), "hysteria", s.CDNAddonID).
+		Order("cdn, id").Find(&ins)
+	certOK := s.SSL && s.Hostname != ""
+	var ports []int
+	for _, in := range ins {
+		if forProfile(in, s.Profile) && (certOK || !NeedsCert(in)) {
+			ports = append(ports, in.Port)
+		}
+	}
+	return ports
+}
+
+// maxPortChecks bounds the extra checks of portBreakdown; every one spends
+// probes of the check sources.
+const maxPortChecks = 8
+
+// portBreakdown checks the server's other inbound ports after its main one
+// came back filtered, and says which answer from Iran: all closed means the
+// IP is blocked, some open means one inbound was singled out. Each check is
+// stored as a CheckRun; the server's last-check fields stay the main port's.
+func (o *Orchestrator) portBreakdown(ctx context.Context, r *jobs.Run, s *models.Server, mainPort int) string {
+	var open, closed, unknown []string
+	closed = append(closed, strconv.Itoa(mainPort))
+	n := 0
+	for _, port := range o.inboundPorts(s) {
+		if port == mainPort {
+			continue
+		}
+		if n++; n > maxPortChecks {
+			break
+		}
+		res := o.Check(ctx, s.PublicIP(), port)
+		o.storeCheck(r, s, res)
+		switch res.Verdict {
+		case checker.Healthy:
+			open = append(open, strconv.Itoa(port))
+		case checker.Filtered:
+			closed = append(closed, strconv.Itoa(port))
+		default:
+			unknown = append(unknown, strconv.Itoa(port))
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	out := "پورت‌های بسته: " + strings.Join(closed, "، ")
+	if len(open) > 0 {
+		out += " | باز: " + strings.Join(open, "، ")
+	} else if len(unknown) == 0 {
+		out += " (کل IP بسته است)"
+	}
+	if len(unknown) > 0 {
+		out += " | نامشخص: " + strings.Join(unknown, "، ")
+	}
+	return out
 }
 
 func (o *Orchestrator) poolUse(s *models.Server) {
@@ -326,8 +442,8 @@ func (o *Orchestrator) pickReusable(accountID uint, region string) *models.IPAdd
 	hours := o.Settings.Int(settings.RotateRetryHours)
 	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour)
 	var ip models.IPAddress
-	err := o.DB.Where("provider_account_id = ? AND region = ? AND reusable = ? AND status IN ? AND (filtered_at IS NULL OR filtered_at < ?)",
-		accountID, region, true, []string{models.IPFiltered, models.IPKept}, cutoff).
+	err := o.DB.Where("provider_account_id = ? AND region = ? AND reusable = ? AND status IN ? AND (filtered_at IS NULL OR filtered_at < ?) AND (banned_until IS NULL OR banned_until < ?)",
+		accountID, region, true, []string{models.IPFiltered, models.IPKept}, cutoff, time.Now()).
 		Order("filtered_at").First(&ip).Error
 	if err != nil {
 		return nil
@@ -389,8 +505,16 @@ func (o *Orchestrator) createRequest(s *models.Server) providers.CreateRequest {
 	}
 }
 
+// ipLabel is the server's addresses for logs: "1.2.3.4", or "2a01::1 (v4 1.2.3.4)".
+func ipLabel(s *models.Server) string {
+	if s.Family() == models.FamilyV6 {
+		return fmt.Sprintf("%s (v4 %s)", s.IPv6, s.IPv4)
+	}
+	return s.IPv4
+}
+
 func instanceOf(s *models.Server) *providers.Instance {
-	return &providers.Instance{Ref: s.ProviderRef, Name: s.Name, IPv4: s.IPv4, IPRef: s.IPRef, Region: s.Region, Status: "running"}
+	return &providers.Instance{Ref: s.ProviderRef, Name: s.Name, IPv4: s.IPv4, IPRef: s.IPRef, IPv6: s.IPv6, Region: s.Region, Status: "running"}
 }
 
 func sleep(ctx context.Context, d time.Duration) error {

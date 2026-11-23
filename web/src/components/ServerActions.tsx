@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { Button, Checkbox, Dropdown, Flex, Modal, Space, Typography } from 'antd'
-import {
-  CloudUploadOutlined, DeleteOutlined, MoreOutlined, RetweetOutlined, RadarChartOutlined, ReloadOutlined, SwapOutlined, SyncOutlined, ToolOutlined,
-} from '@ant-design/icons'
-import { deleteServer, keys, serverAction, useAction } from '../api/hooks'
+import { MoreOutlined, ReloadOutlined, SwapOutlined } from '@ant-design/icons'
+import { cancelScheduledDelete, deleteServer, keys, scheduleDelete, serverAction, useAction, useSettings } from '../api/hooks'
+import { minutesLabel } from '../lib/format'
 import type { Job, Server } from '../api/types'
+import { publicIP } from './ServerIP'
+import { menuActions } from './serverMenu'
 
 /**
  * ServerActions is the action bar for one server. "Rotate IP" is the main
@@ -14,51 +15,43 @@ export function ServerActions({ server, compact, onJob }: { server: Server; comp
   const [rotateOpen, setRotateOpen] = useState(false)
   const [keepOld, setKeepOld] = useState(false)
   const inv = [keys.servers, keys.server(server.id), ['jobs']]
+  const { data: settings } = useSettings()
+  const delay = minutesLabel(Math.max(1, Number(settings?.['server.delete_delay_min']) || 10))
   const run = useAction(({ action, body }: { action: string; body?: unknown }) => serverAction(server.id, action, body), {
     success: 'در صف قرار گرفت', invalidate: inv, onSuccess: (j) => onJob?.(j as Job),
   })
   const remove = useAction(() => deleteServer(server.id), { success: 'حذف در صف قرار گرفت', invalidate: inv, onSuccess: (j) => onJob?.(j as Job) })
+  const schedule = useAction(() => scheduleDelete(server.id), {
+    success: `کانفیگ‌ها در حال حذف از پنل‌ها؛ سرور ${delay} بعد حذف می‌شود`, invalidate: inv, onSuccess: (j) => onJob?.(j as Job),
+  })
+  const unschedule = useAction(() => cancelScheduledDelete(server.id), { success: 'حذف زمان‌بندی‌شده لغو شد', invalidate: inv })
   const busy = ['creating', 'rotating', 'installing', 'configuring', 'deleting'].includes(server.status)
-  const installed = server.xui_port > 0
   const canKeep = server.provider_account?.capabilities?.can_keep_old_ip
 
-  const more = [
-    { key: 'check', icon: <RadarChartOutlined />, label: 'چک از ایران' },
-    { key: 'sync', icon: <SyncOutlined />, label: 'اعمال تمپلیت', disabled: !installed },
-    { key: 'upload', icon: <CloudUploadOutlined />, label: 'بارگذاری در vpn-pannel', disabled: !installed },
-    { key: 'install', icon: <ToolOutlined />, label: 'نصب مجدد 3x-ui و تمپلیت' },
-    { key: 'replace', icon: <RetweetOutlined />, label: 'جایگزینی با سرور جدید', disabled: !!server.replacing_at },
-    { type: 'divider' as const },
-    { key: 'delete', icon: <DeleteOutlined />, label: 'حذف سرور', danger: true },
-  ]
+  const more = menuActions.filter((a) => a.show(server)).flatMap((a) => [
+    ...(a.divider ? [{ type: 'divider' as const }] : []),
+    { key: a.key, icon: a.icon, label: a.label(server, delay), danger: a.danger, disabled: a.ok ? !a.ok(server) : false },
+  ])
 
   const onMenu = (key: string) => {
-    if (key === 'delete') {
+    const a = menuActions.find((x) => x.key === key)
+    const go = () => {
+      switch (key) {
+        case 'delete': return remove.mutateAsync()
+        case 'schedule-delete': return schedule.mutateAsync()
+        case 'cancel-delete': return unschedule.mutateAsync()
+        default: return run.mutateAsync({ action: key })
+      }
+    }
+    if (a?.confirm) {
       Modal.confirm({
-        title: `سرور ${server.name} حذف شود؟`,
-        content: 'سرور در ارائه‌دهنده حذف و کانفیگ‌های آن در vpn-pannel غیرفعال می‌شوند.',
-        okText: 'حذف', okButtonProps: { danger: true }, cancelText: 'انصراف',
-        onOk: () => remove.mutateAsync(),
+        title: a.confirm.title(`سرور ${server.name}`), content: a.confirm.content(delay),
+        okText: a.confirm.okText, okButtonProps: { danger: a.danger }, cancelText: 'انصراف',
+        onOk: go,
       })
       return
     }
-    if (key === 'replace') {
-      Modal.confirm({
-        title: `سرور ${server.name} با سرور جدید جایگزین شود؟`,
-        content: 'سرور جدید (اول در همین لوکیشن، بعد طبق اولویت لوکیشن‌ها) ساخته و چک می‌شود، کانفیگ‌ها در vpn-pannel به آن منتقل می‌شوند و این سرور حذف می‌شود.',
-        okText: 'جایگزینی', cancelText: 'انصراف',
-        onOk: () => run.mutateAsync({ action: 'replace' }),
-      })
-      return
-    }
-    if (key === 'install') {
-      Modal.confirm({
-        title: '3x-ui دوباره نصب شود؟', content: 'تنظیمات پنل حفظ می‌شود و تمپلیت مشترک دوباره اعمال می‌گردد.',
-        okText: 'نصب', cancelText: 'انصراف', onOk: () => run.mutateAsync({ action: 'install' }),
-      })
-      return
-    }
-    run.mutate({ action: key })
+    go().catch(() => {})
   }
 
   return (
@@ -91,7 +84,7 @@ export function ServerActions({ server, compact, onJob }: { server: Server; comp
       >
         <Flex vertical gap={12}>
           <Typography.Text>
-            IP فعلی <Typography.Text code>{server.ipv4 || '—'}</Typography.Text> کنار گذاشته می‌شود، IP جدید از ایران چک می‌شود
+            IP فعلی <Typography.Text code>{publicIP(server) || '—'}</Typography.Text> کنار گذاشته می‌شود، IP جدید از ایران چک می‌شود
             و کانفیگ‌ها در vpn-pannel به IP جدید منتقل می‌شوند.
           </Typography.Text>
           {canKeep && (

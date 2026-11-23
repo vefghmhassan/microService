@@ -16,8 +16,11 @@ import (
 )
 
 // AccessLogPath is where every managed xray writes its access log; client
-// addresses for the GeoIP report come from it.
-const AccessLogPath = "/usr/local/x-ui/access.log"
+// addresses for the GeoIP report come from it. 3x-ui (v3+) moves any log path
+// into its log folder, /var/log/x-ui, when it builds xray's config, so a path
+// anywhere else is never written; the script still follows whatever path the
+// running xray was given.
+const AccessLogPath = "/var/log/x-ui/access.log"
 
 // ClientIPRetention is how long client addresses are kept.
 const ClientIPRetention = 30 * 24 * time.Hour
@@ -33,16 +36,21 @@ type GeoLookup interface {
 // a summary crosses SSH. It sticks to POSIX awk (Ubuntu ships mawk).
 const accessLogScript = `F=` + AccessLogPath + `
 echo "TZ $(date +%z)"
+# Read the access log path from the config the running xray was started with.
+RUN=xray-not-running
+P=$(pgrep -f 'xray-linux' 2>/dev/null | head -n1)
+if [ -n "$P" ]; then
+  D=$(readlink /proc/$P/cwd)
+  C=$(tr '\0' ' ' < /proc/$P/cmdline | sed -n 's/.* -c \([^ ]*\).*/\1/p')
+  case "$C" in /*) ;; *) C="$D/$C" ;; esac
+  A=$(grep -o '"access": *"[^"]*"' "$C" 2>/dev/null | head -n1 | tr -d ' ')
+  RUN="cwd=$D config=$C $A"
+  A=${A#*:}; A=${A#\"}; A=${A%\"}
+  case "$A" in /*) F="$A" ;; esac
+fi
 if [ -e "$F" ]; then echo "SIZE $(wc -c < "$F" | tr -d ' ')"; else
   echo "SIZE missing"
-  # Why: what the running xray was started with, and its access log setting.
-  P=$(pgrep -f 'xray-linux' | head -n1)
-  if [ -n "$P" ]; then
-    D=$(readlink /proc/$P/cwd)
-    C=$(tr '\0' ' ' < /proc/$P/cmdline | sed -n 's/.* -c \([^ ]*\).*/\1/p')
-    case "$C" in /*) ;; *) C="$D/$C" ;; esac
-    echo "RUN cwd=$D config=$C $(grep -o '"access": *"[^"]*"' "$C" 2>/dev/null | head -n1 | tr -d ' ')"
-  else echo "RUN xray-not-running"; fi
+  echo "RUN $RUN"
 fi
 [ -s "$F" ] || exit 0
 T=$(mktemp) || exit 0
@@ -156,7 +164,7 @@ func (o *Orchestrator) collectIPs(ctx context.Context, remote Remote, panel Pane
 		// The template has the access log but the running xray does not:
 		// 3x-ui did not regenerate its config. Restart xray, then the whole
 		// panel if that was not enough.
-		if !strings.Contains(sum.Run, AccessLogPath) {
+		if !strings.Contains(sum.Run, `"access":"/`) {
 			switch o.kickXray(s.ID) {
 			case 1:
 				if err := panel.RestartXray(ctx); err != nil {
@@ -170,7 +178,7 @@ func (o *Orchestrator) collectIPs(ctx context.Context, remote Remote, panel Pane
 				return "", fmt.Errorf("access log missing (%s); x-ui restarted", sum.Run)
 			}
 		}
-		return "", fmt.Errorf("xray has not written %s (%s)", AccessLogPath, sum.Run)
+		return "", fmt.Errorf("xray has not written its access log yet (%s)", sum.Run)
 	}
 	if len(sum.Rows) == 0 && len(sum.Junk) > 0 {
 		return "", fmt.Errorf("access log not understood: %.200s", strings.Join(sum.Junk, " | "))

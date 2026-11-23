@@ -53,8 +53,49 @@ export function flagEmoji(cc?: string): string {
 
 export const GB = 1024 ** 3
 
-/** trafficLimit is the cap for a server in bytes: its own, else the global setting. */
-export function trafficLimit(serverGB: number | undefined, globalGB: string | undefined): number {
-  const g = serverGB && serverGB > 0 ? serverGB : Number(globalGB || 0)
+/** trafficLimit is the cap for a server in bytes: its own, else its location's, else the global setting. */
+export function trafficLimit(serverGB: number | undefined, locationGB: number | undefined, globalGB: string | undefined): number {
+  const g = serverGB && serverGB > 0 ? serverGB : locationGB && locationGB > 0 ? locationGB : Number(globalGB || 0)
   return g > 0 ? g * GB : 0
+}
+
+/** formatGB shows a cap given in GB, in TB when it is a whole number of them. */
+export function formatGB(g: number): string {
+  return g >= 1024 && g % 1024 === 0 ? `${g / 1024} TB` : `${g} GB`
+}
+
+/**
+ * copyText copies to the clipboard. navigator.clipboard exists only on HTTPS
+ * or localhost, so over plain http://IP:port it falls back to execCommand.
+ */
+export function copyText(t: string): Promise<void> {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(t)
+  return new Promise((resolve, reject) => {
+    const ta = document.createElement('textarea')
+    ta.value = t
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    if (ok) resolve()
+    else reject(new Error('copy failed'))
+  })
+}
+
+// minutesLabel shows a minute count in Persian: 25 → «۲۵ دقیقه», 90 → «۱ ساعت و ۳۰ دقیقه».
+export function minutesLabel(m: number): string {
+  const fa = (n: number) => n.toLocaleString('fa-IR')
+  const h = Math.floor(m / 60), r = m % 60
+  if (h === 0) return `${fa(r)} دقیقه`
+  return r === 0 ? `${fa(h)} ساعت` : `${fa(h)} ساعت و ${fa(r)} دقیقه`
+}
+
+// untilLabel shows how long is left until a time: «۳ ساعت و ۱۰ دقیقه».
+export function untilLabel(s?: string | null): string {
+  if (!s) return '—'
+  const m = Math.ceil((new Date(s).getTime() - Date.now()) / 60000)
+  return m > 0 ? minutesLabel(m) : '—'
 }

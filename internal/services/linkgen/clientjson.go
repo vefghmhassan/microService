@@ -17,6 +17,26 @@ import (
 // the link asks for it) and returns it as one compact line. vpn-pannel stores
 // such a JSON as a custom node.
 func ClientJSON(link string) (string, error) {
+	return ClientJSONWith(link, JSONOptions{})
+}
+
+// JSONOptions are the extras of a client JSON config.
+type JSONOptions struct {
+	// Fragment sends the TLS ClientHello in small pieces (through a freedom
+	// outbound the proxy dials via), against SNI-based DPI. It applies to
+	// TLS over TCP-based transports only.
+	Fragment bool
+}
+
+// fragmentOutbound is the freedom outbound a fragmented proxy dials through.
+var fragmentOutbound = obj{
+	"tag": "fragment", "protocol": "freedom",
+	"settings":       obj{"fragment": obj{"packets": "tlshello", "length": "100-200", "interval": "10-20"}},
+	"streamSettings": obj{"sockopt": obj{"tcpNoDelay": true}},
+}
+
+// ClientJSONWith is ClientJSON with extras.
+func ClientJSONWith(link string, opt JSONOptions) (string, error) {
 	f, err := parseLink(link)
 	if err != nil {
 		return "", err
@@ -25,8 +45,39 @@ func ClientJSON(link string) (string, error) {
 	if remark == "" {
 		remark = strings.ToUpper(f.protocol)
 	}
+	proxy, fragment := outboundFor(f, "proxy", opt)
+	return encodeConfig(clientConfig(remark, proxy, fragment))
+}
 
-	proxy := obj{"tag": "proxy", "protocol": f.protocol}
+// FragmentOutbound returns a copy of the freedom outbound (tag "fragment")
+// that fragmented proxies dial through.
+func FragmentOutbound() map[string]any {
+	var out map[string]any
+	b, _ := json.Marshal(fragmentOutbound)
+	_ = json.Unmarshal(b, &out)
+	return out
+}
+
+// OutboundFromLink turns one share link into the client outbound the JSON
+// configs use, tagged tag. fragment reports whether it dials through the
+// "fragment" outbound (FragmentOutbound), which the caller must then add.
+// remark is the link's own label.
+func OutboundFromLink(link, tag string, opt JSONOptions) (outbound map[string]any, fragment bool, remark string, err error) {
+	f, err := parseLink(link)
+	if err != nil {
+		return nil, false, "", err
+	}
+	o, frag := outboundFor(f, tag, opt)
+	return o, frag, f.remark, nil
+}
+
+func outboundFor(f *linkForm, tag string, opt JSONOptions) (obj, bool) {
+	if f.protocol == "hysteria" {
+		h := hysteriaOutbound(f)
+		h["tag"] = tag
+		return h, false
+	}
+	proxy := obj{"tag": tag, "protocol": f.protocol}
 	switch f.protocol {
 	case "vless":
 		proxy["settings"] = obj{"vnext": []any{obj{"address": f.address, "port": f.port, "users": []any{
@@ -66,7 +117,7 @@ func ClientJSON(link string) (string, error) {
 	case "ws":
 		stream["wsSettings"] = obj{"path": firstNonEmpty(f.path, "/"), "host": f.host}
 	case "grpc":
-		stream["grpcSettings"] = obj{"serviceName": f.serviceName, "authority": f.host, "multiMode": false}
+		stream["grpcSettings"] = obj{"serviceName": f.serviceName, "authority": f.host, "multiMode": f.mode == "multi"}
 	case "httpupgrade":
 		stream["httpupgradeSettings"] = obj{"path": firstNonEmpty(f.path, "/"), "host": f.host}
 	case "xhttp":
@@ -85,10 +136,53 @@ func ClientJSON(link string) (string, error) {
 	if sec == "none" {
 		stream["security"] = ""
 	}
+	if fm := parse(f.fm); len(fm) > 0 {
+		stream["finalmask"] = fm
+	}
+	fragment := opt.Fragment && sec == "tls"
+	if fragment {
+		stream["sockopt"] = obj{"dialerProxy": "fragment"}
+	}
 	proxy["streamSettings"] = stream
 	proxy["mux"] = obj{"concurrency": -1, "enabled": false, "xudpConcurrency": 8, "xudpProxyUDP443": ""}
+	return proxy, fragment
+}
 
-	cfg := obj{
+// hysteriaOutbound is Xray 26's hysteria (v2) outbound for a hysteria2://
+// link, with the Salamander FinalMask when the link has obfs.
+func hysteriaOutbound(f *linkForm) obj {
+	t := obj{"serverName": f.sni, "alpn": listOr(strings.Join(f.alpn, ","), "h3"), "allowInsecure": f.allowInsecure}
+	stream := obj{
+		"network": "hysteria", "security": "tls", "tlsSettings": t,
+		"hysteriaSettings": obj{"version": 2, "auth": f.password},
+	}
+	if f.obfsPassword != "" {
+		stream["finalmask"] = obj{"udp": []any{obj{"type": "salamander", "settings": obj{"password": f.obfsPassword}}}}
+	}
+	return obj{
+		"tag": "proxy", "protocol": "hysteria",
+		"settings":       obj{"version": 2, "address": f.address, "port": f.port},
+		"streamSettings": stream,
+	}
+}
+
+// clientConfig wraps a proxy outbound in the dashboard's client config.
+func clientConfig(remark string, proxy obj, fragment bool) obj {
+	outbounds := []any{
+		proxy,
+		obj{"protocol": "freedom", "settings": obj{}, "tag": "direct"},
+		obj{"protocol": "blackhole", "settings": obj{"response": obj{"type": "http"}}, "tag": "block"},
+	}
+	if fragment {
+		outbounds = append(outbounds, fragmentOutbound)
+	}
+	rules := []any{obj{"ip": []string{"1.1.1.1"}, "outboundTag": "proxy", "port": "53", "type": "field"}}
+	if usesVision(proxy) {
+		// Vision only hides TLS over TCP; QUIC would ride the tunnel as plain
+		// UDP-over-TCP. Refusing UDP 443 makes apps fall back to TCP.
+		rules = append(rules, obj{"network": "udp", "port": "443", "outboundTag": "block", "type": "field"})
+	}
+	return obj{
 		"dns": obj{"hosts": obj{"domain:googleapis.cn": "googleapis.com"}, "servers": []string{"1.1.1.1"}},
 		"inbounds": []any{
 			obj{
@@ -99,12 +193,8 @@ func ClientJSON(link string) (string, error) {
 			},
 			obj{"listen": "127.0.0.1", "port": 10809, "protocol": "http", "settings": obj{"userLevel": 8}, "tag": "http"},
 		},
-		"log": obj{"loglevel": "warning"},
-		"outbounds": []any{
-			proxy,
-			obj{"protocol": "freedom", "settings": obj{}, "tag": "direct"},
-			obj{"protocol": "blackhole", "settings": obj{"response": obj{"type": "http"}}, "tag": "block"},
-		},
+		"log":       obj{"loglevel": "warning"},
+		"outbounds": outbounds,
 		"policy": obj{
 			"levels": obj{"8": obj{"connIdle": 300, "downlinkOnly": 1, "handshake": 4, "uplinkOnly": 1}},
 			"system": obj{"statsOutboundDownlink": true, "statsOutboundUplink": true},
@@ -112,10 +202,29 @@ func ClientJSON(link string) (string, error) {
 		"remarks": remark,
 		"routing": obj{
 			"domainStrategy": "IPIfNonMatch",
-			"rules":          []any{obj{"ip": []string{"1.1.1.1"}, "outboundTag": "proxy", "port": "53", "type": "field"}},
+			"rules":          rules,
 		},
 		"stats": obj{},
 	}
+}
+
+// usesVision reports whether a proxy outbound carries the XTLS Vision flow.
+func usesVision(proxy obj) bool {
+	settings, _ := proxy["settings"].(obj)
+	vnext, _ := settings["vnext"].([]any)
+	for _, v := range vnext {
+		vm, _ := v.(obj)
+		users, _ := vm["users"].([]any)
+		for _, u := range users {
+			if um, _ := u.(obj); um != nil && um["flow"] == "xtls-rprx-vision" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func encodeConfig(cfg obj) (string, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
@@ -154,6 +263,8 @@ type linkForm struct {
 	publicKey, shortID, spiderX              string
 	alpn                                     []string
 	allowInsecure                            bool
+	obfsPassword                             string // hysteria2 salamander
+	fm                                       string // finalmask JSON (fm=)
 }
 
 func b64decode(s string) ([]byte, error) {
@@ -170,6 +281,9 @@ func parseLink(link string) (*linkForm, error) {
 	scheme = strings.ToLower(scheme)
 	if scheme == "vmess" {
 		return parseVmess(rest)
+	}
+	if scheme == "hysteria2" || scheme == "hy2" {
+		return parseHysteria2(rest)
 	}
 	if scheme != "vless" && scheme != "trojan" && scheme != "ss" {
 		return nil, fmt.Errorf("unsupported link scheme %q", scheme)
@@ -188,7 +302,7 @@ func parseLink(link string) (*linkForm, error) {
 		network: firstNonEmpty(q.Get("type"), "tcp"), host: firstNonEmpty(q.Get("host"), q.Get("authority")), path: q.Get("path"),
 		serviceName: q.Get("serviceName"), mode: q.Get("mode"), headerType: q.Get("headerType"),
 		tls: firstNonEmpty(q.Get("security"), "none"), sni: q.Get("sni"), fp: q.Get("fp"),
-		publicKey: q.Get("pbk"), shortID: q.Get("sid"), spiderX: q.Get("spx"), allowInsecure: q.Get("allowInsecure") == "1",
+		publicKey: q.Get("pbk"), shortID: q.Get("sid"), spiderX: q.Get("spx"), allowInsecure: q.Get("allowInsecure") == "1", fm: q.Get("fm"),
 	}
 	if f.network == "raw" {
 		f.network = "tcp"
@@ -220,6 +334,33 @@ func parseLink(link string) (*linkForm, error) {
 	return f, nil
 }
 
+func parseHysteria2(rest string) (*linkForm, error) {
+	u, err := url.Parse("http://" + rest)
+	if err != nil {
+		return nil, err
+	}
+	port, _ := strconv.Atoi(u.Port())
+	if u.Hostname() == "" || port == 0 {
+		return nil, errors.New("link has no valid address or port")
+	}
+	q := u.Query()
+	auth := u.User.Username()
+	if pw, has := u.User.Password(); has {
+		auth += ":" + pw
+	}
+	f := &linkForm{
+		protocol: "hysteria", address: u.Hostname(), port: port, remark: u.Fragment, password: auth,
+		network: "hysteria", tls: "tls", sni: q.Get("sni"), allowInsecure: q.Get("insecure") == "1",
+	}
+	if a := q.Get("alpn"); a != "" {
+		f.alpn = strings.Split(a, ",")
+	}
+	if q.Get("obfs") == "salamander" {
+		f.obfsPassword = q.Get("obfs-password")
+	}
+	return f, nil
+}
+
 func parseVmess(b64 string) (*linkForm, error) {
 	dec, err := b64decode(b64)
 	if err != nil {
@@ -242,7 +383,7 @@ func parseVmess(b64 string) (*linkForm, error) {
 	f := &linkForm{
 		protocol: "vmess", remark: s("ps"), address: s("add"), port: port, id: s("id"), security: s("scy"),
 		network: firstNonEmpty(s("net"), "tcp"), host: s("host"), path: s("path"), headerType: s("type"),
-		tls: "none", sni: s("sni"), fp: s("fp"),
+		tls: "none", sni: s("sni"), fp: s("fp"), fm: s("fm"),
 	}
 	if s("tls") == "tls" {
 		f.tls = "tls"

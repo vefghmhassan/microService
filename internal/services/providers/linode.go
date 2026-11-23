@@ -44,6 +44,7 @@ type linodeInstance struct {
 	Label  string   `json:"label"`
 	Status string   `json:"status"`
 	IPv4   []string `json:"ipv4"`
+	IPv6   string   `json:"ipv6"` // SLAAC address, "addr/128"
 	Region string   `json:"region"`
 }
 
@@ -56,6 +57,7 @@ func (s *linodeInstance) instance() *Instance {
 			break
 		}
 	}
+	inst.IPv6 = hostIPv6(s.IPv6)
 	return inst
 }
 

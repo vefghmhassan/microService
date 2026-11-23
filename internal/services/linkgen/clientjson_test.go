@@ -81,3 +81,23 @@ func TestClientJSONOtherProtocols(t *testing.T) {
 		t.Fatal("expected error for unsupported scheme")
 	}
 }
+
+func TestClientJSONBlocksQUICOnlyForVision(t *testing.T) {
+	hasUDP443 := func(link string) bool {
+		rules := clientCfg(t, link)["routing"].(map[string]any)["rules"].([]any)
+		for _, r := range rules {
+			rm := r.(map[string]any)
+			if rm["network"] == "udp" && rm["port"] == "443" && rm["outboundTag"] == "block" {
+				return true
+			}
+		}
+		return false
+	}
+	base := "vless://11111111-1111-1111-1111-111111111111@203.0.113.7:443?encryption=none&fp=chrome&pbk=k&security=reality&sid=5f&sni=example.com"
+	if !hasUDP443(base + "&flow=xtls-rprx-vision&type=tcp#v") {
+		t.Fatal("a Vision config must refuse UDP 443")
+	}
+	if hasUDP443(base + "&type=xhttp&path=%2Fp#x") {
+		t.Fatal("configs without Vision must keep QUIC")
+	}
+}

@@ -34,6 +34,19 @@ type AutoParams struct {
 	// replacement for traffic, not for filtering, can stay where it was).
 	PreferServerLocation bool   `json:"prefer_server_location"`
 	Reason               string `json:"reason"`
+	// IPFamily ("v4"/"v6") overrides the family each location builds with.
+	IPFamily string `json:"ip_family"`
+	// Attempt counts the servers already built and deleted for this request
+	// because none of their configs worked.
+	Attempt int `json:"attempt,omitempty"`
+	// TargetAccountID builds on this provider account instead of walking the
+	// list: in the region nearest to SourceLocationID, with the account's
+	// default plan.
+	TargetAccountID  uint `json:"target_account_id,omitempty"`
+	SourceLocationID uint `json:"source_location_id,omitempty"`
+	// GroupID builds from a location bundle: one server per location, in the
+	// bundle's order, moving down the list when a location fails.
+	GroupID uint `json:"group_id,omitempty"`
 }
 
 // InstallParams are the install job's parameters.
@@ -42,6 +55,41 @@ type InstallParams struct {
 	Upload          *bool  `json:"upload"`
 	BaseName        string `json:"base_name"`
 	ReplaceServerID uint   `json:"replace_server_id"`
+	// Fresh marks a server built for this job: one on which no config works
+	// is deleted and another is built. A reinstall never deletes its server.
+	Fresh   bool `json:"fresh,omitempty"`
+	Attempt int  `json:"attempt,omitempty"`
+}
+
+// maxConfigRetries is how many more servers are built after one on which no
+// config worked.
+const maxConfigRetries = 2
+
+// rejectNewServer gives up on a new server on which no config works: it is
+// deleted, and requeue builds the next one unless enough have been tried.
+// Nothing of it reached vpn-pannel, and a server it was to replace is left
+// as it is. The returned error fails the job.
+func (o *Orchestrator) rejectNewServer(r *jobs.Run, s *models.Server, attempt int, replaceID uint, requeue func(next int) error) error {
+	s.Status, s.LastError = models.ServerError, "no config worked on this server"
+	o.save(r, s, "status", "last_error")
+	id := s.ID
+	// Queued behind this job, which holds the server until it returns.
+	if _, err := o.Engine.Enqueue(KindDelete, &id, struct{}{}, r.Job.Source); err != nil {
+		r.Logf("warn", "delete %s: %v", s.Name, err)
+	}
+	if attempt < maxConfigRetries {
+		if err := requeue(attempt + 1); err != nil {
+			return fmt.Errorf("no config worked on %s; it is being deleted, but the next server could not be queued: %w", s.Name, err)
+		}
+		o.notify("⚠️ روی سرور %s هیچ کانفیگی کار نکرد؛ حذف شد و سرور بعدی (%d از %d) ساخته می‌شود", s.Name, attempt+1, maxConfigRetries)
+		return fmt.Errorf("no config worked on %s: it is being deleted and replacement %d of %d is queued", s.Name, attempt+1, maxConfigRetries)
+	}
+	if replaceID != 0 {
+		// Let the server that was to be replaced be replaced again later.
+		o.DB.Model(&models.Server{}).Where("id = ?", replaceID).Update("replacing_at", nil)
+	}
+	o.notify("❌ روی %d سرور پشت‌سرهم هیچ کانفیگی کار نکرد؛ ساخت متوقف شد. تمپلیت را بررسی کنید.", maxConfigRetries+1)
+	return fmt.Errorf("no config worked on %d servers in a row; giving up (check the template)", maxConfigRetries+1)
 }
 
 // candidate is one server built while probing a location.
@@ -70,6 +118,12 @@ func (o *Orchestrator) provisionAuto(ctx context.Context, r *jobs.Run) error {
 	if p.Reason != "" {
 		r.Info("reason: %s", p.Reason)
 	}
+	if p.TargetAccountID != 0 {
+		return o.provisionNearest(ctx, r, p)
+	}
+	if p.GroupID != 0 {
+		return o.provisionGroup(ctx, r, &p)
+	}
 	var locs []models.Location
 	if err := o.DB.Preload("ProviderAccount").Where("enabled = ?", true).Order("priority, id").Find(&locs).Error; err != nil {
 		return err
@@ -81,7 +135,7 @@ func (o *Orchestrator) provisionAuto(ctx context.Context, r *jobs.Run) error {
 			own := models.Location{
 				ProviderAccountID: old.ProviderAccountID, ProviderAccount: old.ProviderAccount,
 				Region: old.Region, Plan: old.Plan, Image: old.Image, Country: old.Country,
-				Capacity: 1, Enabled: true,
+				Capacity: 1, Enabled: true, DNS: old.DNS, IPFamily: old.Family(),
 			}
 			locs = append([]models.Location{own}, locs...)
 		}
@@ -108,34 +162,117 @@ func (o *Orchestrator) provisionAuto(ctx context.Context, r *jobs.Run) error {
 			continue
 		}
 		r.Step(fmt.Sprintf("location %d: %s %s/%s", i+1, loc.ProviderAccount.Name, loc.Region, loc.Plan))
-		kept, err := o.tryLocation(ctx, r, loc, need)
+		kept, err := o.tryLocation(ctx, r, loc, need, firstNonEmpty(p.IPFamily, loc.IPFamily))
 		if err != nil && ctx.Err() != nil {
 			return err
 		}
 		if err != nil {
 			r.Logf("warn", "%s/%s: %v", loc.ProviderAccount.Name, loc.Region, err)
 		}
-		for _, s := range kept {
-			ip := InstallParams{Upload: p.Upload, BaseName: p.BaseName, ReplaceServerID: p.ReplaceServerID}
-			if ip.Upload == nil {
-				up := o.Settings.Bool(settings.VPNPanelAuto)
-				ip.Upload = &up
-			}
-			id := s.ID
-			if _, err := o.Engine.Enqueue(KindInstall, &id, ip, r.Job.Source); err != nil {
-				return err
-			}
-			r.Info("keeping %s (%s); installing 3x-ui in job of its own", s.Name, s.IPv4)
-			// Only the first kept server takes over a replaced one.
-			p.ReplaceServerID = 0
+		if err := o.installKept(r, &p, kept); err != nil {
+			return err
 		}
-		r.Set("kept", strconv.Itoa(o.keptSoFar(r)+len(kept)))
 		r.Mark(key)
 		need -= len(kept)
 	}
 	if need > 0 {
 		return fmt.Errorf("found %d of %d healthy servers after trying every location", p.Count-need, p.Count)
 	}
+	return nil
+}
+
+// GroupLocations returns a bundle's enabled locations, in the bundle's
+// order, with their provider accounts.
+func (o *Orchestrator) GroupLocations(g *models.LocationGroup) ([]models.Location, error) {
+	ids := ModeLocationIDs(g.LocationIDs)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var rows []models.Location
+	if err := o.DB.Preload("ProviderAccount").Where("id IN ? AND enabled = ?", ids, true).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	byID := make(map[uint]models.Location, len(rows))
+	for _, l := range rows {
+		byID[l.ID] = l
+	}
+	out := make([]models.Location, 0, len(rows))
+	for _, id := range ids {
+		if l, ok := byID[id]; ok {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+// provisionGroup builds p.Count servers from a location bundle: at most one
+// per location, the first locations first. A location that gives no healthy
+// server is passed over for the next one.
+func (o *Orchestrator) provisionGroup(ctx context.Context, r *jobs.Run, p *AutoParams) error {
+	var g models.LocationGroup
+	if err := o.DB.First(&g, p.GroupID).Error; err != nil {
+		return fmt.Errorf("location bundle %d not found", p.GroupID)
+	}
+	locs, err := o.GroupLocations(&g)
+	if err != nil {
+		return err
+	}
+	if len(locs) == 0 {
+		return fmt.Errorf("bundle %q has no enabled location", g.Name)
+	}
+	r.Info("bundle %q: %d of %d locations, one server each", g.Name, p.Count, len(locs))
+	need := p.Count - o.keptSoFar(r)
+	for i := range locs {
+		if need <= 0 {
+			break
+		}
+		loc := &locs[i]
+		key := "loc:" + strconv.Itoa(int(loc.ID))
+		if r.Done(key) {
+			continue
+		}
+		if loc.ProviderAccount == nil || !loc.ProviderAccount.Enabled {
+			r.Info("skipping location %d: its provider account is disabled", loc.ID)
+			continue
+		}
+		r.Step(fmt.Sprintf("bundle location %d: %s %s/%s", i+1, loc.ProviderAccount.Name, loc.Region, loc.Plan))
+		kept, err := o.tryLocation(ctx, r, loc, 1, firstNonEmpty(p.IPFamily, loc.IPFamily))
+		if err != nil && ctx.Err() != nil {
+			return err
+		}
+		if err != nil {
+			r.Logf("warn", "%s/%s: %v; trying the next location of the bundle", loc.ProviderAccount.Name, loc.Region, err)
+		}
+		if err := o.installKept(r, p, kept); err != nil {
+			return err
+		}
+		r.Mark(key)
+		need -= len(kept)
+	}
+	if need > 0 {
+		return fmt.Errorf("found %d of %d healthy servers after trying every location of bundle %q", p.Count-need, p.Count, g.Name)
+	}
+	return nil
+}
+
+// installKept queues the 3x-ui install of each server a location kept and
+// counts them in the job.
+func (o *Orchestrator) installKept(r *jobs.Run, p *AutoParams, kept []*models.Server) error {
+	for _, s := range kept {
+		ip := InstallParams{Upload: p.Upload, BaseName: p.BaseName, ReplaceServerID: p.ReplaceServerID, Fresh: true, Attempt: p.Attempt}
+		if ip.Upload == nil {
+			up := o.Settings.Bool(settings.VPNPanelAuto)
+			ip.Upload = &up
+		}
+		id := s.ID
+		if _, err := o.Engine.Enqueue(KindInstall, &id, ip, r.Job.Source); err != nil {
+			return err
+		}
+		r.Info("keeping %s (%s); installing 3x-ui in job of its own", s.Name, s.PublicIP())
+		// Only the first kept server takes over a replaced one.
+		p.ReplaceServerID = 0
+	}
+	r.Set("kept", strconv.Itoa(o.keptSoFar(r)+len(kept)))
 	return nil
 }
 
@@ -147,7 +284,7 @@ func (o *Orchestrator) keptSoFar(r *jobs.Run) int {
 // tryLocation builds up to the location's capacity at once, checks them in
 // parallel and returns at most need healthy servers. Every other candidate is
 // deleted afterwards, so a filtered IP is never handed back to us mid-search.
-func (o *Orchestrator) tryLocation(ctx context.Context, r *jobs.Run, loc *models.Location, need int) ([]*models.Server, error) {
+func (o *Orchestrator) tryLocation(ctx context.Context, r *jobs.Run, loc *models.Location, need int, family string) ([]*models.Server, error) {
 	acc := loc.ProviderAccount
 	prov, err := o.Provider(acc)
 	if err != nil {
@@ -172,6 +309,13 @@ func (o *Orchestrator) tryLocation(ctx context.Context, r *jobs.Run, loc *models
 			Image:   firstNonEmpty(loc.Image, acc.DefaultImage, prov.Capabilities().DefaultImage),
 			Country: strings.ToUpper(firstNonEmpty(loc.Country, acc.Country)),
 			Status:  models.ServerCreating, SyncStatus: models.SyncPending, XUIScheme: "http",
+			LocationID: loc.ID, IPFamily: models.NormFamily(family),
+		}
+		newIdentity(s, loc)
+		if a := o.locationAddon(loc); a != nil {
+			ApplyAddon(s, a)
+		} else if loc.DNS.On() {
+			s.DNS = loc.DNS
 		}
 		if err := o.DB.Create(s).Error; err != nil {
 			return nil, err
@@ -216,7 +360,7 @@ func (o *Orchestrator) tryLocation(ctx context.Context, r *jobs.Run, loc *models
 		for _, c := range cands {
 			if len(kept) < need && c.err == nil && c.verdict == want {
 				if want == checker.Unknown {
-					r.Logf("warn", "%s kept without a verdict (no Iranian probe answered)", c.s.IPv4)
+					r.Logf("warn", "%s kept without a verdict (no Iranian probe answered)", c.s.PublicIP())
 				}
 				kept = append(kept, c.s)
 			}
@@ -252,15 +396,22 @@ func (o *Orchestrator) probeCandidate(ctx context.Context, r *jobs.Run, prov pro
 	if err != nil {
 		return "", fmt.Errorf("wait running: %w", err)
 	}
-	s.IPv4, s.IPRef = inst.IPv4, inst.IPRef
+	s.IPv4, s.IPRef, s.IPv6 = inst.IPv4, inst.IPRef, inst.IPv6
 	s.Status = models.ServerChecking
-	o.save(r, s, "ipv4", "ip_ref", "status")
+	o.save(r, s, "ipv4", "ip_ref", "ipv6", "status")
 	o.poolUse(s)
+	if s.PublicIP() == "" {
+		return "", fmt.Errorf("the provider gave the server no public IP%s", s.Family())
+	}
+	if until, banned := o.isBanned(s.PublicIP()); banned {
+		r.Info("%s is banned until %s; discarding the candidate", s.PublicIP(), until.Format("2006-01-02 15:04"))
+		return checker.Filtered, nil
+	}
 	if err := o.waitBooted(ctx, r, s); err != nil {
 		return "", err
 	}
 	for attempt := 0; ; attempt++ {
-		res := o.Check(ctx, s.IPv4, o.checkPort(s))
+		res := o.Check(ctx, s.PublicIP(), o.checkPort(s))
 		o.recordCheck(r, s, res)
 		if res.Verdict != checker.Down || attempt >= 3 {
 			return res.Verdict, nil
@@ -283,44 +434,116 @@ func (o *Orchestrator) discardCandidate(ctx context.Context, r *jobs.Run, prov p
 	if s.IPv4 != "" {
 		o.poolRetire(s, s.IPv4, s.IPRef, false, filtered, false, "auto placement: "+reason)
 	}
+	if filtered {
+		o.banServerIPs(r, s, "auto placement: "+reason)
+	}
 	s.Status = models.ServerDeleted
 	s.LastError = truncate("discarded: "+reason, 500)
 	o.save(r, s, "status", "last_error")
-	r.Info("deleted candidate %s (%s): %s", s.Name, s.IPv4, reason)
+	r.Info("deleted candidate %s (%s): %s", s.Name, s.PublicIP(), reason)
 }
 
-// finishInstall runs after an install job's 3x-ui install: either hand over a
-// replaced server's configs in vpn-pannel, or upload fresh links.
-func (o *Orchestrator) finishInstall(ctx context.Context, r *jobs.Run, s *models.Server, p InstallParams) {
+// handOver runs after an install job's config test: either hand over a
+// replaced server's configs in vpn-pannel, or upload fresh links. Only the
+// inbounds the test passed (g) end up there.
+func (o *Orchestrator) handOver(ctx context.Context, r *jobs.Run, s *models.Server, p InstallParams, g gateResult) {
+	if len(g.Failed) > 0 {
+		o.notify("⚠️ سرور %s: %d از %d کانفیگ در تست کار کرد و فقط همان‌ها روی پنل می‌روند.\nردشده: %s",
+			s.Name, len(g.Passed), g.Total, strings.Join(g.Failed, "، "))
+	}
 	if p.ReplaceServerID != 0 {
 		var old models.Server
 		if err := o.DB.First(&old, p.ReplaceServerID).Error; err != nil {
 			r.Logf("warn", "server to replace (%d): %v", p.ReplaceServerID, err)
 			return
 		}
-		if old.UploadedIP != "" {
+		if old.PanelName != "" && s.PanelName == "" {
+			// The configs keep their names in vpn-pannel; so does the server.
+			s.PanelName = old.PanelName
+			o.save(r, s, "panel_name")
+		}
+		switch {
+		case old.UploadedIP != "" && len(g.Failed) == 0:
 			r.Step("move vpn-pannel configs from " + old.Name)
 			if err := o.moveDestination(ctx, r, s, old.UploadedIP); err != nil {
 				r.Logf("warn", "vpn-pannel: %v", err)
+				o.notify("⚠️ انتقال کانفیگ‌های %s به %s در پنل مقصد ناموفق بود: %s", old.Name, s.Name, truncate(err.Error(), 200))
 			}
-		} else if p.Upload != nil && *p.Upload {
-			if err := o.uploadLinks(ctx, r, s, p.BaseName); err != nil {
+		case old.UploadedIP != "":
+			// vpn-pannel can only move an address as a whole, which would
+			// carry the broken configs along.
+			if err := o.replaceWithWorking(ctx, r, s, &old, p.BaseName, g.only()); err != nil {
+				r.Logf("error", "vpn-pannel: %v; %s is kept", err, old.Name)
+				o.DB.Model(&old).Update("replacing_at", nil)
+				o.notify("❌ کانفیگ‌های سالم %s روی پنل نرفت (%s)؛ سرور قبلی %s حذف نشد.", s.Name, truncate(err.Error(), 200), old.Name)
+				return
+			}
+		case p.Upload != nil && *p.Upload:
+			if err := o.uploadLinks(ctx, r, s, p.BaseName, g.only()); err != nil {
 				r.Logf("warn", "upload to vpn-pannel failed: %v", err)
 			}
 		}
-		// The old server's configs now point here; delete it without
-		// deactivating anything in vpn-pannel.
+		// The old server's configs now point here. Its deletion clears
+		// whatever is still on its own addresses (configs a failed or
+		// partial move left behind); the addresses this server took over
+		// are skipped there.
 		o.DB.Model(&old).Updates(map[string]any{"uploaded_ip": ""})
 		id := old.ID
 		if _, err := o.Engine.Enqueue(KindDelete, &id, struct{}{}, r.Job.Source); err != nil {
 			r.Logf("warn", "delete %s: %v", old.Name, err)
 		}
-		o.notify("🌍 سرور %s فیلتر بود و با %s (%s) جایگزین شد", old.Name, s.Name, s.IPv4)
+		o.notify("🌍 سرور %s فیلتر بود و با %s (%s) جایگزین شد", old.Name, s.Name, LinkHost(s))
 		return
 	}
 	if p.Upload != nil && *p.Upload {
-		if err := o.uploadLinks(ctx, r, s, p.BaseName); err != nil {
+		if err := o.uploadLinks(ctx, r, s, p.BaseName, g.only()); err != nil {
 			r.Logf("warn", "upload to vpn-pannel failed: %v", err)
 		}
 	}
+}
+
+// replaceWithWorking is the hand-over of a replaced server when some of the
+// new server's configs do not work: the old address's configs are removed
+// from vpn-pannel and only the working ones are uploaded for the new server.
+// When both servers share a name the old configs must go first, or the delete
+// would take the new ones with it; otherwise they go only after the upload
+// succeeded.
+func (o *Orchestrator) replaceWithWorking(ctx context.Context, r *jobs.Run, s *models.Server, old *models.Server, baseName string, only map[uint]bool) error {
+	dests := o.Dests()
+	if len(dests) == 0 {
+		r.Info("vpn-pannel is not configured; skipped")
+		return nil
+	}
+	oldAddr := old.UploadedIP
+	r.Step("replace vpn-pannel configs on " + oldAddr + " with the working ones")
+	if old.CDNHostname != "" {
+		// Clean-IP configs are matched by the orange name, which the new
+		// server may share: they go before anything new is uploaded.
+		o.retireCleanConfigs(ctx, r, old.CDNHostname, true)
+	}
+	same := oldAddr == LinkHost(s)
+	drop := func() {
+		for _, d := range dests {
+			if err := d.DeleteAddress(ctx, oldAddr); err != nil {
+				r.Logf("warn", "%s: could not delete configs on %s: %v (retried later)", d.Name, oldAddr, err)
+				if !same {
+					// Once the new configs are up, a late delete
+					// cannot take them along.
+					o.queuePanelCleanup(d.ID, oldAddr, err)
+				}
+			} else {
+				r.Info("%s: configs on %s deleted", d.Name, oldAddr)
+			}
+		}
+	}
+	if same {
+		drop()
+	}
+	if err := o.uploadTo(ctx, r, s, baseName, dests, only); err != nil {
+		return err
+	}
+	if !same {
+		drop()
+	}
+	return nil
 }

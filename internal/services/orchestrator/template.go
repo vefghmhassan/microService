@@ -7,13 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 
 	"gorm.io/gorm"
 
 	"microserver/internal/models"
+	"microserver/internal/services/cleanip"
 	"microserver/internal/services/linkgen"
+	"microserver/internal/services/settings"
 	"microserver/internal/services/xui"
 )
 
@@ -21,35 +24,261 @@ import (
 // without it are left alone, so an operator can still add one by hand.
 const ManagedPrefix = "[ms] "
 
+// Snapshot is the shared template. Loaded whole it holds both IP families:
+// Xray/Hash are the IPv4 ones, XrayV6/HashV6 the IPv6 ones, and Inbounds
+// every inbound. For(s) narrows it to what one server gets.
 type Snapshot struct {
 	Xray     models.XrayTemplate
+	XrayV6   models.XrayTemplate
 	Inbounds []models.InboundTemplate
 	Hash     string
+	HashV6   string
+
+	// AddonInbounds are the CDN add-ons' inbounds by add-on ID, and
+	// AddonHashes their content hashes; they stay out of Inbounds and of the
+	// family hashes, so editing an add-on drifts only its own servers.
+	AddonInbounds map[uint][]models.InboundTemplate
+	AddonHashes   map[uint]string
+
+	// Set by For on a server with the CDN add-on: its two names, which the
+	// add-on inbounds' links point at, and the add-on hash it gets.
+	DirectHost string
+	CDNHost    string
+	AddonHash  string
+	// Hostname is the server's own name (set by For): the SNI of its TLS
+	// inbounds, whose links point at the IP.
+	Hostname string
+	// Clean are the clean Cloudflare addresses the add-on inbounds marked
+	// CleanIPs get extra configs for (filled by the caller, see addonClean).
+	Clean []models.CleanIP
 }
 
-// LoadSnapshot reads the shared template and its content hash. Servers whose
-// AppliedHash differs have drifted.
+// TemplateFamilies are the inbound template families a server of the given
+// IP family receives.
+func TemplateFamilies(family string) []string {
+	return []string{models.FamilyBoth, models.NormFamily(family)}
+}
+
+// InboundFamily is an inbound template's family ("both" when unset).
+func InboundFamily(t models.InboundTemplate) string {
+	switch t.Family {
+	case models.FamilyV4, models.FamilyV6:
+		return t.Family
+	}
+	return models.FamilyBoth
+}
+
+// forFamily reports whether inbound t goes on servers of the given family.
+func forFamily(t models.InboundTemplate, family string) bool {
+	f := InboundFamily(t)
+	return f == models.FamilyBoth || f == models.NormFamily(family)
+}
+
+// HasXray reports whether an xray row carries anything; an empty IPv6 row
+// means IPv6 servers use the IPv4 one.
+func HasXray(x models.XrayTemplate) bool {
+	return strings.TrimSpace(x.Full+x.Outbounds+x.Routing+x.DNS+x.Observatory) != ""
+}
+
+// XrayFor is the xray template servers of the family get.
+func (snap *Snapshot) XrayFor(family string) models.XrayTemplate {
+	if models.NormFamily(family) == models.FamilyV6 && HasXray(snap.XrayV6) {
+		return snap.XrayV6
+	}
+	return snap.Xray
+}
+
+// HashFor is the template hash of one IP family. Servers whose AppliedHash
+// differs from their family's hash have drifted.
+func (snap *Snapshot) HashFor(family string) string {
+	if models.NormFamily(family) == models.FamilyV6 {
+		return snap.HashV6
+	}
+	return snap.Hash
+}
+
+// LoadSnapshot reads the shared template and its per-family content hashes.
 func LoadSnapshot(db *gorm.DB) (*Snapshot, error) {
 	var snap Snapshot
-	if err := db.FirstOrCreate(&snap.Xray, models.XrayTemplate{ID: 1}).Error; err != nil {
+	if err := db.FirstOrCreate(&snap.Xray, models.XrayTemplate{ID: models.XrayV4ID}).Error; err != nil {
 		return nil, err
 	}
-	if err := db.Order("port").Find(&snap.Inbounds).Error; err != nil {
+	if err := db.FirstOrCreate(&snap.XrayV6, models.XrayTemplate{ID: models.XrayV6ID}).Error; err != nil {
 		return nil, err
 	}
+	var all []models.InboundTemplate
+	if err := db.Order("port").Find(&all).Error; err != nil {
+		return nil, err
+	}
+	snap.AddonInbounds = map[uint][]models.InboundTemplate{}
+	snap.Inbounds = []models.InboundTemplate{} // JSON [] rather than null when there are none
+	for _, t := range all {
+		if t.AddonID == 0 {
+			snap.Inbounds = append(snap.Inbounds, t)
+		} else {
+			snap.AddonInbounds[t.AddonID] = append(snap.AddonInbounds[t.AddonID], t)
+		}
+	}
+	snap.Hash = snap.hash(models.FamilyV4)
+	snap.HashV6 = snap.hash(models.FamilyV6)
+	snap.AddonHashes = map[uint]string{}
+	for id, ins := range snap.AddonInbounds {
+		snap.AddonHashes[id] = AddonHash(ins)
+	}
+	return &snap, nil
+}
+
+// AddonHash is the content hash of one add-on's inbounds.
+func AddonHash(ins []models.InboundTemplate) string {
+	ins = append([]models.InboundTemplate(nil), ins...)
+	sort.Slice(ins, func(i, j int) bool { return ins[i].Port < ins[j].Port })
 	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00", canonical(snap.Xray.Outbounds), canonical(snap.Xray.Routing), canonical(snap.Xray.DNS), canonical(snap.Xray.Observatory))
-	if snap.Xray.Full != "" {
-		fmt.Fprintf(h, "full:%s\x00", canonical(snap.Xray.Full))
+	for _, in := range ins {
+		fmt.Fprintf(h, "%d|%s|%s|%s|%t|%s|%s|%s|%s\x00", in.Port, InboundFamily(in), in.Remark, in.Protocol, in.Enabled,
+			canonical(in.Settings), canonical(in.StreamSettings), canonical(in.Sniffing), in.Route)
 	}
-	ins := append([]models.InboundTemplate{}, snap.Inbounds...)
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// hash is the content hash of what a server of the family gets. The IPv4
+// hash is computed as before the families existed, so IPv4 servers stay in
+// sync across the upgrade.
+func (snap *Snapshot) hash(family string) string {
+	x := snap.XrayFor(family)
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00", canonical(x.Outbounds), canonical(x.Routing), canonical(x.DNS), canonical(x.Observatory))
+	if x.Full != "" {
+		fmt.Fprintf(h, "full:%s\x00", canonical(x.Full))
+	}
+	ins := []models.InboundTemplate{}
+	for _, in := range snap.Inbounds {
+		if forFamily(in, family) {
+			ins = append(ins, in)
+		}
+	}
 	sort.Slice(ins, func(i, j int) bool { return ins[i].Port < ins[j].Port })
 	for _, in := range ins {
 		fmt.Fprintf(h, "%d|%s|%s|%t|%s|%s|%s\x00", in.Port, in.Remark, in.Protocol, in.Enabled,
 			canonical(in.Settings), canonical(in.StreamSettings), canonical(in.Sniffing))
+		if in.CDN {
+			fmt.Fprint(h, "cdn\x00")
+		}
+		// Only inbounds limited to profiles add to the hash, so templates
+		// without profiles hash as before.
+		if pl := ProfileList(in.Profiles); len(pl) > 0 {
+			fmt.Fprintf(h, "profiles:%s\x00", strings.Join(pl, ","))
+		}
 	}
-	snap.Hash = hex.EncodeToString(h.Sum(nil))[:16]
-	return &snap, nil
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// NeedsCert reports whether t only works with the zone certificate on the
+// server: a CDN inbound with TLS, or any TLS inbound (TLS Vision, …)
+// pointing at /root/cert/*.
+func NeedsCert(t models.InboundTemplate) bool {
+	if linkgen.Security(t.StreamSettings) != "tls" {
+		return false
+	}
+	return t.CDN || strings.Contains(t.StreamSettings, CertFile) || strings.Contains(t.StreamSettings, KeyFile)
+}
+
+// For is the snapshot as it applies to one server: the inbounds and xray
+// template of its IP family and profile, with Hash its family's hash. The
+// Reality inbounds of a server with an identity seed carry its own keys,
+// IDs and target (see personalize). CDN inbounds that
+// need the zone certificate are left out where the server has none, since
+// xray would not start with a missing certificate file; the hash stays the
+// family's, so such a server is still in sync.
+func (snap *Snapshot) For(s *models.Server) *Snapshot {
+	fam := s.Family()
+	certOK := s.SSL && s.Hostname != ""
+	out := *snap
+	out.Xray = snap.XrayFor(fam)
+	out.XrayV6 = out.Xray
+	out.Hash = snap.HashFor(fam)
+	out.HashV6 = out.Hash
+	out.Inbounds = nil
+	for _, t := range snap.Inbounds {
+		if forFamily(t, fam) && forProfile(t, s.Profile) && (certOK || !NeedsCert(t)) {
+			// Let's Encrypt validates (and renews) an IP certificate on
+			// port 80; an inbound there would end the renewals.
+			if t.Port == AcmePort && wantsIPCert(s) {
+				continue
+			}
+			out.Inbounds = append(out.Inbounds, personalize(t, s))
+		}
+	}
+	out.DirectHost, out.CDNHost, out.AddonHash, out.Clean = "", "", "", nil
+	out.Hostname = s.Hostname
+	if s.CDNAddonID != 0 {
+		out.AddonHash = snap.AddonHashes[s.CDNAddonID]
+		// Every add-on inbound uses the zone certificate and one of the
+		// two names; without them xray would not start or links go nowhere.
+		if certOK && s.CDNHostname != "" {
+			out.DirectHost, out.CDNHost = s.Hostname, s.CDNHostname
+			for _, t := range snap.AddonInbounds[s.CDNAddonID] {
+				if !forFamily(t, fam) {
+					continue
+				}
+				if t.Protocol == "hysteria" && !XrayAtLeast(s.XrayVersion, 26) {
+					continue
+				}
+				out.Inbounds = append(out.Inbounds, t)
+			}
+			sort.SliceStable(out.Inbounds, func(i, j int) bool { return out.Inbounds[i].Port < out.Inbounds[j].Port })
+		}
+	}
+	return &out
+}
+
+// knownXray reports whether a version 3x-ui reports is a real one: while
+// xray is down it says "Unknown", and storing that would drop every
+// xray-26-only inbound (Hysteria2) from the server on the next sync.
+func knownXray(version string) bool {
+	return XrayAtLeast(version, 1)
+}
+
+// XrayAtLeast reports whether an xray version ("26.1.13", "v25.9.11") has
+// at least the given major number; an unknown version does not.
+func XrayAtLeast(version string, major int) bool {
+	v := strings.TrimPrefix(strings.TrimSpace(version), "v")
+	head, _, _ := strings.Cut(v, ".")
+	n := 0
+	for _, r := range head {
+		if r < '0' || r > '9' {
+			return false
+		}
+		n = n*10 + int(r-'0')
+	}
+	return head != "" && n >= major
+}
+
+// sniHost is what a CDN inbound's links send as SNI and Host: the server's
+// hostname, which Cloudflare routes by. Other inbounds keep their own.
+func sniHost(t models.InboundTemplate, host string) string {
+	if t.CDN && host != "" && net.ParseIP(host) == nil {
+		return host
+	}
+	return ""
+}
+
+// target is where t's links point and the SNI/Host they send. CDN inbounds
+// go through the proxied name. Everything else points at host, the raw IP
+// (LinkHost), as 3x-ui-pro-configs does: a filtered domain then takes no
+// direct config down with it. TLS inbounds still send the certificate's name.
+func (snap *Snapshot) target(t models.InboundTemplate, host string) (addr, sni string) {
+	if t.AddonID != 0 && t.Route == models.RouteCDN {
+		return snap.CDNHost, snap.CDNHost
+	}
+	if t.AddonID == 0 && t.CDN {
+		if name := sniHost(t, snap.Hostname); name != "" {
+			return name, name
+		}
+	}
+	if linkgen.Security(t.StreamSettings) == "tls" {
+		sni = firstNonEmpty(snap.DirectHost, snap.Hostname)
+	}
+	return host, sni
 }
 
 // canonical re-encodes JSON so whitespace and key order do not count as drift.
@@ -77,8 +306,17 @@ func BumpTemplate(db *gorm.DB) (*Snapshot, error) {
 	if err := db.Save(&snap.Xray).Error; err != nil {
 		return nil, err
 	}
+	snap.XrayV6.Version = snap.Xray.Version
+	snap.XrayV6.Hash = snap.HashV6
+	if err := db.Save(&snap.XrayV6).Error; err != nil {
+		return nil, err
+	}
+	gone := []string{models.ServerDeleted, models.ServerDeleting}
 	db.Model(&models.Server{}).
-		Where("applied_hash <> '' AND applied_hash <> ? AND status NOT IN ?", snap.Hash, []string{models.ServerDeleted, models.ServerDeleting}).
+		Where("applied_hash <> '' AND applied_hash <> ? AND COALESCE(ip_family, 'v4') <> ? AND status NOT IN ?", snap.Hash, models.FamilyV6, gone).
+		Update("sync_status", models.SyncDrift)
+	db.Model(&models.Server{}).
+		Where("applied_hash <> '' AND applied_hash <> ? AND ip_family = ? AND status NOT IN ?", snap.HashV6, models.FamilyV6, gone).
 		Update("sync_status", models.SyncDrift)
 	return snap, nil
 }
@@ -181,19 +419,11 @@ func orDefault(s, def string) string {
 func UploadEntries(snap *Snapshot, host string) ([]string, error) {
 	var out []string
 	var errs []error
-	for _, t := range snap.Inbounds {
-		if !t.Enabled || !t.Upload {
-			continue
-		}
-		ls, err := linkgen.Links(t.Protocol, t.Settings, t.StreamSettings, host, t.Port, t.Remark)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", t.Remark, err))
-			continue
-		}
+	add := func(t models.InboundTemplate, ls []linkgen.Link) {
 		for _, l := range ls {
 			entry := l.URL
 			if t.UploadJSON {
-				if j, err := linkgen.ClientJSON(l.URL); err != nil {
+				if j, err := linkgen.ClientJSONWith(l.URL, linkgen.JSONOptions{Fragment: t.Fragment}); err != nil {
 					errs = append(errs, fmt.Errorf("%s: json config: %w", t.Remark, err))
 				} else {
 					entry = j
@@ -202,19 +432,85 @@ func UploadEntries(snap *Snapshot, host string) ([]string, error) {
 			out = append(out, entry)
 		}
 	}
+	for _, t := range snap.Inbounds {
+		if !t.Enabled || !t.Upload {
+			continue
+		}
+		addr, sni := snap.target(t, host)
+		ls, err := linkgen.LinksVia(t.Protocol, t.Settings, t.StreamSettings, addr, sni, t.Port, t.Remark)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", t.Remark, err))
+			continue
+		}
+		add(t, ls)
+		if cl, err := snap.cleanLinks(t); err != nil {
+			errs = append(errs, err)
+		} else {
+			add(t, cl)
+		}
+	}
+	return out, errors.Join(errs...)
+}
+
+// cleanLinks are an add-on CDN inbound's extra configs: one per clean
+// Cloudflare address in snap.Clean, with the server's orange name as
+// SNI/Host so Cloudflare still routes them here.
+func (snap *Snapshot) cleanLinks(t models.InboundTemplate) ([]linkgen.Link, error) {
+	if t.AddonID == 0 || !t.CleanIPs || t.Route != models.RouteCDN || snap.CDNHost == "" {
+		return nil, nil
+	}
+	var out []linkgen.Link
+	for _, ip := range snap.Clean {
+		remark := strings.Join(strings.Fields(t.Remark+" "+ip.Operator+" "+ip.Address), " ")
+		ls, err := linkgen.LinksVia(t.Protocol, t.Settings, t.StreamSettings, ip.Address, snap.CDNHost, t.Port, remark)
+		if err != nil {
+			return out, fmt.Errorf("%s: %w", t.Remark, err)
+		}
+		out = append(out, ls...)
+	}
+	return out, nil
+}
+
+// AddonCleanLinks are the clean-IP configs of every add-on inbound of a
+// snapshot narrowed by For (with Clean filled).
+func AddonCleanLinks(snap *Snapshot) ([]linkgen.Link, error) {
+	var out []linkgen.Link
+	var errs []error
+	for _, t := range snap.Inbounds {
+		if !t.Enabled {
+			continue
+		}
+		ls, err := snap.cleanLinks(t)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		out = append(out, ls...)
+	}
 	return out, errors.Join(errs...)
 }
 
 // Links builds the share links of every enabled inbound marked for upload,
 // pointing at host.
 func Links(snap *Snapshot, host string) ([]linkgen.Link, error) {
+	return buildLinks(snap, host, "", true)
+}
+
+// SubLinks builds the share links of every enabled inbound, uploaded or not,
+// for the all-servers subscription; prefix goes in front of each label so
+// the client shows which server a config belongs to.
+func SubLinks(snap *Snapshot, host, prefix string) ([]linkgen.Link, error) {
+	return buildLinks(snap, host, prefix, false)
+}
+
+func buildLinks(snap *Snapshot, host, prefix string, onlyUpload bool) ([]linkgen.Link, error) {
 	var out []linkgen.Link
 	var errs []error
 	for _, t := range snap.Inbounds {
-		if !t.Enabled || !t.Upload {
+		if !t.Enabled || (onlyUpload && !t.Upload) {
 			continue
 		}
-		ls, err := linkgen.Links(t.Protocol, t.Settings, t.StreamSettings, host, t.Port, t.Remark)
+		addr, sni := snap.target(t, host)
+		ls, err := linkgen.LinksVia(t.Protocol, t.Settings, t.StreamSettings, addr, sni, t.Port, prefix+t.Remark)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", t.Remark, err))
 			continue
@@ -222,4 +518,49 @@ func Links(snap *Snapshot, host string) ([]linkgen.Link, error) {
 		out = append(out, ls...)
 	}
 	return out, errors.Join(errs...)
+}
+
+// CleanLinks are the extra links of a proxied server: every CDN inbound
+// once per clean Cloudflare address, with the server's hostname as SNI/Host
+// so Cloudflare still routes them to this server. They are shown in the
+// panel and the bot only; vpn-pannel finds configs by address, which clean
+// IPs shared by every server would make ambiguous.
+func CleanLinks(snap *Snapshot, s *models.Server, ips []models.CleanIP) ([]linkgen.Link, error) {
+	if !s.DNSProxied || s.Hostname == "" || len(ips) == 0 {
+		return nil, nil
+	}
+	var out []linkgen.Link
+	var errs []error
+	for _, t := range snap.For(s).Inbounds {
+		if !t.Enabled || !t.Upload || !t.CDN || t.AddonID != 0 {
+			continue
+		}
+		for _, ip := range ips {
+			remark := strings.Join(strings.Fields(t.Remark+" "+ip.Operator+" "+ip.Address), " ")
+			ls, err := linkgen.LinksVia(t.Protocol, t.Settings, t.StreamSettings, ip.Address, s.Hostname, t.Port, remark)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", t.Remark, err))
+				break
+			}
+			out = append(out, ls...)
+		}
+	}
+	return out, errors.Join(errs...)
+}
+
+// ServerCleanLinks is CleanLinks with the clean IPs picked from the list.
+func (o *Orchestrator) ServerCleanLinks(snap *Snapshot, s *models.Server) ([]linkgen.Link, error) {
+	if s.CDNAddonID != 0 {
+		ns := snap.For(s)
+		ns.Clean = o.addonClean(s)
+		return AddonCleanLinks(ns)
+	}
+	if !s.DNSProxied || s.Hostname == "" {
+		return nil, nil
+	}
+	ips, err := cleanip.Pick(o.DB, o.Settings.Int(settings.CleanIPPerLink))
+	if err != nil {
+		return nil, err
+	}
+	return CleanLinks(snap, s, ips)
 }
