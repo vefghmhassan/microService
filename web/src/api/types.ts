@@ -591,6 +591,8 @@ export interface GeoReport {
   inbounds: string[]
   geoip: GeoIPStatus | null
   online_window_min: number
+  /** How many days of addresses are kept (ip.retention_days). */
+  retention_days?: number
   collect: { id: number; name: string; ipv4: string; ip_collect_at: string | null; ip_collect_note: string }[]
 }
 

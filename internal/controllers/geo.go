@@ -192,7 +192,7 @@ func (a *App) geoReport(c *fiber.Ctx, db *gorm.DB) fiber.Map {
 		Group("c.server_id").Order("ips DESC").Scan(&servers)
 
 	inbounds := []string{}
-	db.Table("client_ips").Distinct("inbound").Where("last_seen >= ?", now.Add(-orchestrator.ClientIPRetention)).Order("inbound").Pluck("inbound", &inbounds)
+	db.Table("client_ips").Distinct("inbound").Where("last_seen >= ?", now.Add(-orchestrator.ClientIPKeep(a.Settings.Int(settings.ClientIPDays)))).Order("inbound").Pluck("inbound", &inbounds)
 
 	type collectRow struct {
 		ID            uint       `json:"id"`
@@ -223,6 +223,7 @@ func (a *App) geoReport(c *fiber.Ctx, db *gorm.DB) fiber.Map {
 		"geoip":             geo,
 		"collect":           collect,
 		"online_window_min": int(OnlineWindow / time.Minute),
+		"retention_days":    a.Settings.Int(settings.ClientIPDays),
 	}
 }
 

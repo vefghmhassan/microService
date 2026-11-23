@@ -63,7 +63,17 @@ func (o *Orchestrator) CollectAll(ctx context.Context) {
 	}
 	wg.Wait()
 	o.QueueIdleSync()
-	PruneClientIPs(o.DB)
+	// Pruning walks client_ips: once an hour, or every round while a
+	// backlog (a shorter retention just set) is being worked off.
+	if time.Since(o.prunedAt) >= time.Hour {
+		n, more := PruneClientIPs(o.DB, ClientIPKeep(o.Settings.Int(settings.ClientIPDays)))
+		if n > 0 {
+			log.Printf("client ips: removed %d old rows (more: %v)", n, more)
+		}
+		if !more {
+			o.prunedAt = time.Now()
+		}
+	}
 	if j, c := PruneHistory(o.DB, o.Settings.Int(settings.HistoryKeepDays)); j+c > 0 {
 		log.Printf("history: removed %d old jobs and %d old checks", j, c)
 	}

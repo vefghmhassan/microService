@@ -22,8 +22,26 @@ import (
 // running xray was given.
 const AccessLogPath = "/var/log/x-ui/access.log"
 
-// ClientIPRetention is how long client addresses are kept.
+// ClientIPRetention is how long a GeoIP lookup of an address is trusted.
+// How long the addresses themselves are kept is ip.retention_days.
 const ClientIPRetention = 30 * 24 * time.Hour
+
+// ClientIPKeep is how long client addresses are kept under the setting.
+func ClientIPKeep(days int) time.Duration {
+	if days <= 0 {
+		days = 7
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
+
+// One delete removes ipPruneBatch rows and one call at most ipPruneBatches
+// of them: SQLite has one connection, so old rows go in small steps with
+// pauses and other requests get in between. A larger backlog goes over the
+// next calls.
+var (
+	ipPruneBatch   int64 = 2000
+	ipPruneBatches       = 100
+)
 
 // GeoLookup resolves a client address (geoip.DB satisfies it).
 type GeoLookup interface {
@@ -325,9 +343,29 @@ func withAccessLog(setting map[string]any) bool {
 	return true
 }
 
-// PruneClientIPs drops addresses not seen within the retention period.
-func PruneClientIPs(db *gorm.DB) {
-	cut := time.Now().Add(-ClientIPRetention)
-	db.Where("last_seen < ?", cut).Delete(&models.ClientIP{})
-	db.Where("updated_at < ? AND ip NOT IN (?)", cut, db.Model(&models.ClientIP{}).Select("ip")).Delete(&models.IPGeo{})
+// PruneClientIPs drops addresses not seen within keep, and GeoIP lookups
+// that are old and of addresses no longer kept. It reports how many
+// addresses went and whether some are left for the next call.
+func PruneClientIPs(db *gorm.DB, keep time.Duration) (removed int64, more bool) {
+	cut := time.Now().Add(-keep)
+	batches := func(sql string, args ...any) (n int64, more bool) {
+		for i := 0; i < ipPruneBatches; i++ {
+			res := db.Exec(sql, args...)
+			if res.Error != nil {
+				return n, false
+			}
+			n += res.RowsAffected
+			if res.RowsAffected < ipPruneBatch {
+				return n, false
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		return n, true
+	}
+	removed, more = batches(`DELETE FROM client_ips WHERE id IN (SELECT id FROM client_ips WHERE last_seen < ? LIMIT ?)`, cut, ipPruneBatch)
+	if !more {
+		batches(`DELETE FROM ip_geos WHERE rowid IN (SELECT g.rowid FROM ip_geos g WHERE g.updated_at < ?
+			AND NOT EXISTS (SELECT 1 FROM client_ips c WHERE c.ip = g.ip) LIMIT ?)`, time.Now().Add(-ClientIPRetention), ipPruneBatch)
+	}
+	return removed, more
 }

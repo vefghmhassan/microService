@@ -124,3 +124,45 @@ func TestWithAccessLog(t *testing.T) {
 		t.Fatal("second call must be a no-op")
 	}
 }
+
+func TestPruneClientIPsInBatches(t *testing.T) {
+	o, _, _, _, _, _ := setup(t)
+	old := time.Now().Add(-10 * 24 * time.Hour)
+	geoOld := time.Now().Add(-40 * 24 * time.Hour)
+	for i := 0; i < 25; i++ {
+		ip := fmt.Sprintf("2.144.0.%d", i)
+		o.DB.Create(&models.ClientIP{ServerID: 1, Day: "2026-11-01", IP: ip, Email: "u", LastSeen: old})
+		o.DB.Create(&models.IPGeo{IP: ip, Country: "IR", UpdatedAt: geoOld})
+	}
+	o.DB.Create(&models.ClientIP{ServerID: 1, Day: "2026-11-23", IP: "5.5.5.5", Email: "u", LastSeen: time.Now()})
+	o.DB.Create(&models.IPGeo{IP: "5.5.5.5", Country: "IR", UpdatedAt: geoOld})
+
+	b, bs := ipPruneBatch, ipPruneBatches
+	ipPruneBatch, ipPruneBatches = 4, 3
+	defer func() { ipPruneBatch, ipPruneBatches = b, bs }()
+
+	// 25 old rows, 12 per call: two calls with more left, then done.
+	for i, want := range []struct {
+		n    int64
+		more bool
+	}{{12, true}, {12, true}, {1, false}} {
+		n, more := PruneClientIPs(o.DB, 7*24*time.Hour)
+		if n != want.n || more != want.more {
+			t.Fatalf("call %d: removed %d more %v, want %+v", i, n, more, want)
+		}
+	}
+	// The old lookups go in batches too, after the addresses: 25 of them.
+	for i := 0; i < 2; i++ {
+		if n, more := PruneClientIPs(o.DB, 7*24*time.Hour); n != 0 || more {
+			t.Fatalf("nothing left to remove, got %d more %v", n, more)
+		}
+	}
+	var left, geos int64
+	o.DB.Model(&models.ClientIP{}).Count(&left)
+	o.DB.Model(&models.IPGeo{}).Count(&geos)
+	// The recent address and its lookup stay (even an old lookup, while the
+	// address is kept).
+	if left != 1 || geos != 1 {
+		t.Fatalf("left %d rows, %d geos", left, geos)
+	}
+}

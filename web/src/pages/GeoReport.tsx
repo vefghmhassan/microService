@@ -11,11 +11,11 @@ import { timeAgo } from '../lib/format'
 import { flag, ispName, provinceName } from '../lib/geo'
 
 const ranges = [
-  { value: 'online', label: 'آنلاین الان' },
-  { value: '1h', label: '۱ ساعت' },
-  { value: '24h', label: '۲۴ ساعت' },
-  { value: '7d', label: '۷ روز' },
-  { value: '30d', label: '۳۰ روز' },
+  { value: 'online', label: 'آنلاین الان', days: 0 },
+  { value: '1h', label: '۱ ساعت', days: 0 },
+  { value: '24h', label: '۲۴ ساعت', days: 1 },
+  { value: '7d', label: '۷ روز', days: 7 },
+  { value: '30d', label: '۳۰ روز', days: 30 },
 ]
 
 const num = (n: number) => n.toLocaleString('fa-IR')
@@ -76,7 +76,11 @@ export function GeoReport() {
       )}
       <Card size="small" style={{ marginBottom: 16 }}>
         <Flex gap={12} wrap align="center">
-          <Segmented value={range} onChange={(v) => setRange(v as string)} options={ranges} />
+          <Segmented value={range} onChange={(v) => setRange(v as string)} options={ranges.map((r) => ({
+            value: r.value, label: r.label,
+            // Longer than what is kept: nothing more to see.
+            disabled: !!data?.retention_days && r.days > data.retention_days,
+          }))} />
           <Select allowClear placeholder="همه سرورها" style={{ minWidth: 180 }} value={serverId} onChange={setServerId}
             options={servers?.map((s) => ({ value: s.id, label: `${s.name} · ${s.ipv4}` }))} />
           <Select allowClear placeholder="همه اینباندها" style={{ minWidth: 160 }} value={inbound} onChange={setInbound}

@@ -40,6 +40,9 @@ const (
 	// IPBanHours: a filtered or swapped-away IP is not taken again for this
 	// many hours (0 turns bans off).
 	IPBanHours = "ip.ban_hours"
+	// ClientIPDays: how many days of client addresses (GeoIP report) are
+	// kept. Each day keeps one row per server, address and user.
+	ClientIPDays = "ip.retention_days"
 	// ServerDeleteDelayMin: "remove from panels, delete later" waits this long.
 	ServerDeleteDelayMin = "server.delete_delay_min"
 	AutoRotate           = "rotate.auto"
@@ -129,6 +132,7 @@ var Defaults = map[string]string{
 	RotateV6InPrefix:     "true",
 	RotateRetryHours:     "24",
 	IPBanHours:           "10",
+	ClientIPDays:         "7",
 	ServerDeleteDelayMin: "10",
 	AutoRotate:           "false",
 	RotateFallback:       "true",

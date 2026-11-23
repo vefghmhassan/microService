@@ -15,7 +15,7 @@ import { ConfirmButton } from '../components/ConfirmButton'
 const enc = (k: string) => k.replace(/\./g, '__')
 const dec = (k: string) => k.replace(/__/g, '.')
 const bools = ['xui.public_panel', 'rotate.keep_filtered_ip', 'rotate.v6_in_prefix', 'rotate.auto', 'rotate.fallback_location', 'traffic.auto_replace', 'watch.low_usage', 'quality.enabled', 'quality.alert', 'vpnpannel.ads', 'vpnpannel.auto_upload', 'telegram.notify', 'acme.staging', 'sub.enabled']
-const nums = ['xui.cf_panel_port', 'xui.cf_sub_port', 'check.min_ok', 'check.min_asn', 'check.pre_install_port', 'check.interval_min', 'check.globalping_limit', 'check.atlas_limit', 'rotate.max_attempts', 'rotate.retry_kept_after_hours', 'auto.max_per_location', 'traffic.limit_gb', 'stats.interval_min', 'watch.minutes', 'watch.min_mb', 'history.keep_days', 'ip.ban_hours', 'server.delete_delay_min', 'watch.online_pct', 'watch.min_online', 'quality.min_kbps', 'quality.max_retrans_pct', 'quality.min_conns', 'quality.bad_rounds', 'idle.retry_hours']
+const nums = ['xui.cf_panel_port', 'xui.cf_sub_port', 'check.min_ok', 'check.min_asn', 'check.pre_install_port', 'check.interval_min', 'check.globalping_limit', 'check.atlas_limit', 'rotate.max_attempts', 'rotate.retry_kept_after_hours', 'auto.max_per_location', 'traffic.limit_gb', 'stats.interval_min', 'watch.minutes', 'watch.min_mb', 'history.keep_days', 'ip.ban_hours', 'ip.retention_days', 'server.delete_delay_min', 'watch.online_pct', 'watch.min_online', 'quality.min_kbps', 'quality.max_retrans_pct', 'quality.min_conns', 'quality.bad_rounds', 'idle.retry_hours']
 
 function toForm(s: S) {
   const out: Record<string, unknown> = {}
@@ -102,6 +102,7 @@ export function Settings() {
                 <Col span={12}><F k="rotate.keep_filtered_ip" label="نگه‌داری IP فیلتر شده" bool><Switch /></F></Col>
                 <Col span={12}><F k="rotate.auto" label="تعویض خودکار هنگام فیلتر" bool><Switch /></F></Col>
                 <Col span={12}><F k="rotate.fallback_location" label="رفتن به لوکیشن بعدی اگر IP سالم نبود" bool><Switch /></F></Col>
+                <Col span={12}><F k="ip.retention_days" label="نگهداری IP کاربران برای گزارش GeoIP (روز)" tip="برای هر روز، یک ردیف به ازای هر سرور، IP و کاربر نگه داشته می‌شود؛ هر روز بیشتر یعنی دیتابیس بزرگ‌تر و گزارش کندتر. ردیف‌های قدیمی‌تر کم‌کم (در دسته‌های کوچک) پاک می‌شوند. پیش‌فرض ۷"><InputNumber min={1} max={30} style={{ width: '100%' }} /></F></Col>
                 <Col span={12}><F k="ip.ban_hours" label="بن IP فیلتر یا تعویض‌شده (ساعت)" tip="IPی که فیلتر شد یا تعویض/جایگزینی‌اش را خواستید تا این مدت دوباره خریده یا استفاده نمی‌شود. 0 = بدون بن"><InputNumber min={0} max={720} style={{ width: '100%' }} /></F></Col>
                 <Col span={12}><F k="auto.max_per_location" label="سقف سرور هم‌زمان در هر لوکیشن" tip="برای لوکیشن‌هایی که ظرفیت 0 دارند"><InputNumber min={1} max={50} style={{ width: '100%' }} /></F></Col>
               </Row>
