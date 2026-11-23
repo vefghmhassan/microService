@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -297,6 +298,25 @@ func (a *App) createServerAuto(c *fiber.Ctx) error {
 		}
 		if err := orchestrator.CheckTarget(&acc); err != nil {
 			return errJSON(c, fiber.StatusBadRequest, err.Error())
+		}
+	} else if p.GroupID != 0 {
+		p.SourceLocationID = 0
+		var g models.LocationGroup
+		if err := a.DB.First(&g, p.GroupID).Error; err != nil {
+			return errJSON(c, fiber.StatusBadRequest, "بسته لوکیشن پیدا نشد")
+		}
+		if !g.Enabled {
+			return errJSON(c, fiber.StatusBadRequest, "بسته لوکیشن غیرفعال است")
+		}
+		locs, err := a.Orch.GroupLocations(&g)
+		if err != nil {
+			return err
+		}
+		if len(locs) == 0 {
+			return errJSON(c, fiber.StatusBadRequest, "این بسته هیچ لوکیشن فعالی ندارد")
+		}
+		if p.Count > len(locs) {
+			return errJSON(c, fiber.StatusBadRequest, fmt.Sprintf("این بسته %d لوکیشن فعال دارد؛ تعداد حداکثر %d است", len(locs), len(locs)))
 		}
 	} else {
 		p.SourceLocationID = 0

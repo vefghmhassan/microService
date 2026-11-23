@@ -382,6 +382,23 @@ type BalancerMode struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// LocationGroup is a bundle of locations in priority order. Building N
+// servers from it puts one server in each of the first N locations that can
+// give a healthy one, going down the list when a location fails.
+type LocationGroup struct {
+	ID      uint   `gorm:"primaryKey" json:"id"`
+	Name    string `gorm:"size:100;not null;uniqueIndex" json:"name"`
+	Enabled bool   `json:"enabled"`
+	// Priority orders the bundles on their page (lower first).
+	Priority int `json:"priority"`
+	// LocationIDs (comma separated) are the bundle's locations, first = tried
+	// first.
+	LocationIDs string    `gorm:"column:location_ids;size:512" json:"location_ids"`
+	Note        string    `gorm:"size:255" json:"note"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 // AdsValues lists the ads flags the mode sets itself, nil when it follows
 // the vpn-pannel.
 func (m BalancerMode) AdsValues() []bool {
@@ -754,6 +771,7 @@ func All() []any {
 		&Job{}, &JobLog{}, &Setting{}, &ClientIP{}, &IPGeo{}, &Destination{},
 		&CloudflareAccount{}, &Certificate{}, &CleanIP{}, &CleanIPSource{}, &CDNAddon{},
 		&SmartProfile{}, &SmartRule{}, &SmartUpload{}, &PanelCleanup{}, &NodeUpload{}, &BalancerMode{},
+		&LocationGroup{},
 	}
 }
 

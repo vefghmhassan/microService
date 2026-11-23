@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/
 import { App } from 'antd'
 import { del, get, post, put } from './client'
 import type {
-  BalancerModes, CDNAddon, Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, NearRegion, NodesOverview, Option, ProviderAccount, ProviderBilling,
+  BalancerModes, CDNAddon, Certificate, CheckRun, CleanIPList, CloudflareAccount, CloudflareZone, Dashboard, IPAddress, Job, Link, LiveStatus, Location, LocationGroup, NearRegion, NodesOverview, Option, ProviderAccount, ProviderBilling,
   ProviderType, Server, ServerEvent, ServerInbounds, Settings, SmartProfile, SmartRule, SmartUpload, TemplateResponse,
   UpdateBackup, UpdateBranch, UpdateCommit, UpdateOp, UpdateStatus, UpdateVersion,
 } from './types'
@@ -20,6 +20,7 @@ export const keys = {
   job: (id: number) => ['job', id] as const,
   ips: ['ips'] as const,
   locations: ['locations'] as const,
+  locationGroups: ['location-groups'] as const,
   nodes: ['nodes'] as const,
   balancerModes: ['balancer-modes'] as const,
   checks: ['checks'] as const,
@@ -81,6 +82,7 @@ export const useNearestRegions = (locationId?: number, accountId?: number) =>
     enabled: !!locationId && !!accountId, staleTime: 600_000, retry: false,
   })
 export const useLocations = () => useQuery({ queryKey: keys.locations, queryFn: () => get<Location[]>('/locations') })
+export const useLocationGroups = () => useQuery({ queryKey: keys.locationGroups, queryFn: () => get<LocationGroup[]>('/location-groups') })
 export const useNodes = () =>
   useQuery({ queryKey: keys.nodes, queryFn: () => get<NodesOverview>('/nodes'), refetchInterval: 30_000 })
 export const useBalancerModes = () =>
@@ -161,6 +163,9 @@ export const serverAction = (id: number, action: string, body?: unknown) => post
 export const deleteServer = (id: number) => del<Job>(`/servers/${id}`)
 export const scheduleDelete = (id: number) => post<Job>(`/servers/${id}/schedule-delete`)
 export const cancelScheduledDelete = (id: number) => del<{ ok: boolean }>(`/servers/${id}/schedule-delete`)
+export interface BulkResult { id: number; name: string; job?: Job; error?: string }
+export const bulkServerAction = (ids: number[], action: string, body?: Record<string, unknown>) =>
+  post<BulkResult[]>('/servers/bulk', { ids, action, body })
 export { del, get, post, put }
 
 /**

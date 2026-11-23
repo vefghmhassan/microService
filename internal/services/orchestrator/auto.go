@@ -44,6 +44,9 @@ type AutoParams struct {
 	// default plan.
 	TargetAccountID  uint `json:"target_account_id,omitempty"`
 	SourceLocationID uint `json:"source_location_id,omitempty"`
+	// GroupID builds from a location bundle: one server per location, in the
+	// bundle's order, moving down the list when a location fails.
+	GroupID uint `json:"group_id,omitempty"`
 }
 
 // InstallParams are the install job's parameters.
@@ -118,6 +121,9 @@ func (o *Orchestrator) provisionAuto(ctx context.Context, r *jobs.Run) error {
 	if p.TargetAccountID != 0 {
 		return o.provisionNearest(ctx, r, p)
 	}
+	if p.GroupID != 0 {
+		return o.provisionGroup(ctx, r, &p)
+	}
 	var locs []models.Location
 	if err := o.DB.Preload("ProviderAccount").Where("enabled = ?", true).Order("priority, id").Find(&locs).Error; err != nil {
 		return err
@@ -171,6 +177,80 @@ func (o *Orchestrator) provisionAuto(ctx context.Context, r *jobs.Run) error {
 	}
 	if need > 0 {
 		return fmt.Errorf("found %d of %d healthy servers after trying every location", p.Count-need, p.Count)
+	}
+	return nil
+}
+
+// GroupLocations returns a bundle's enabled locations, in the bundle's
+// order, with their provider accounts.
+func (o *Orchestrator) GroupLocations(g *models.LocationGroup) ([]models.Location, error) {
+	ids := ModeLocationIDs(g.LocationIDs)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var rows []models.Location
+	if err := o.DB.Preload("ProviderAccount").Where("id IN ? AND enabled = ?", ids, true).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	byID := make(map[uint]models.Location, len(rows))
+	for _, l := range rows {
+		byID[l.ID] = l
+	}
+	out := make([]models.Location, 0, len(rows))
+	for _, id := range ids {
+		if l, ok := byID[id]; ok {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+// provisionGroup builds p.Count servers from a location bundle: at most one
+// per location, the first locations first. A location that gives no healthy
+// server is passed over for the next one.
+func (o *Orchestrator) provisionGroup(ctx context.Context, r *jobs.Run, p *AutoParams) error {
+	var g models.LocationGroup
+	if err := o.DB.First(&g, p.GroupID).Error; err != nil {
+		return fmt.Errorf("location bundle %d not found", p.GroupID)
+	}
+	locs, err := o.GroupLocations(&g)
+	if err != nil {
+		return err
+	}
+	if len(locs) == 0 {
+		return fmt.Errorf("bundle %q has no enabled location", g.Name)
+	}
+	r.Info("bundle %q: %d of %d locations, one server each", g.Name, p.Count, len(locs))
+	need := p.Count - o.keptSoFar(r)
+	for i := range locs {
+		if need <= 0 {
+			break
+		}
+		loc := &locs[i]
+		key := "loc:" + strconv.Itoa(int(loc.ID))
+		if r.Done(key) {
+			continue
+		}
+		if loc.ProviderAccount == nil || !loc.ProviderAccount.Enabled {
+			r.Info("skipping location %d: its provider account is disabled", loc.ID)
+			continue
+		}
+		r.Step(fmt.Sprintf("bundle location %d: %s %s/%s", i+1, loc.ProviderAccount.Name, loc.Region, loc.Plan))
+		kept, err := o.tryLocation(ctx, r, loc, 1, firstNonEmpty(p.IPFamily, loc.IPFamily))
+		if err != nil && ctx.Err() != nil {
+			return err
+		}
+		if err != nil {
+			r.Logf("warn", "%s/%s: %v; trying the next location of the bundle", loc.ProviderAccount.Name, loc.Region, err)
+		}
+		if err := o.installKept(r, p, kept); err != nil {
+			return err
+		}
+		r.Mark(key)
+		need -= len(kept)
+	}
+	if need > 0 {
+		return fmt.Errorf("found %d of %d healthy servers after trying every location of bundle %q", p.Count-need, p.Count, g.Name)
 	}
 	return nil
 }

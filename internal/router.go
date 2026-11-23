@@ -52,6 +52,7 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 
 	p.Get("/servers", a.ListServers)
 	p.Post("/servers", a.CreateServer)
+	p.Post("/servers/bulk", a.BulkServerAction)
 	p.Get("/servers/:id", a.GetServer)
 	p.Put("/servers/:id", a.UpdateServer)
 	p.Delete("/servers/:id", a.ServerAction(orchestrator.KindDelete))
@@ -88,6 +89,12 @@ func Register(app *fiber.App, a *controllers.App, web fs.FS) {
 	p.Put("/balancer-modes/only", a.SetNodeOnly)
 	p.Put("/balancer-modes/:id", a.UpdateMode)
 	p.Delete("/balancer-modes/:id", a.DeleteMode)
+
+	p.Get("/location-groups", a.ListLocationGroups)
+	p.Post("/location-groups", a.CreateLocationGroup)
+	p.Post("/location-groups/reorder", a.ReorderLocationGroups)
+	p.Put("/location-groups/:id", a.UpdateLocationGroup)
+	p.Delete("/location-groups/:id", a.DeleteLocationGroup)
 
 	p.Get("/locations", a.ListLocations)
 	p.Post("/locations", a.CreateLocation)

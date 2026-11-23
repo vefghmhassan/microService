@@ -690,3 +690,37 @@ func TestTrafficCapReplacesServerOnce(t *testing.T) {
 		t.Fatalf("replaced %v", dest.replaced)
 	}
 }
+
+func TestGroupPlacementOnePerLocationInBundleOrder(t *testing.T) {
+	o, _, _, _, acc, filtered := setup(t)
+	filtered["10.0.0.1"] = true // the bundle's first location gives a filtered IP
+	// Global priority is the reverse of the bundle's order and has a location
+	// outside the bundle first: neither may matter.
+	outside := models.Location{Priority: 1, ProviderAccountID: acc.ID, Region: "nbg1", Plan: "p", Capacity: 1, Enabled: true}
+	fsn := models.Location{Priority: 2, ProviderAccountID: acc.ID, Region: "fsn1", Plan: "p", Capacity: 1, Enabled: true}
+	hel := models.Location{Priority: 3, ProviderAccountID: acc.ID, Region: "hel1", Plan: "p", Capacity: 1, Enabled: true}
+	sin := models.Location{Priority: 4, ProviderAccountID: acc.ID, Region: "sin", Plan: "p", Capacity: 1, Enabled: true}
+	for _, l := range []*models.Location{&outside, &fsn, &hel, &sin} {
+		o.DB.Create(l)
+	}
+	g := models.LocationGroup{Name: "b", Enabled: true, LocationIDs: fmt.Sprintf("%d,%d,%d", sin.ID, hel.ID, fsn.ID)}
+	o.DB.Create(&g)
+
+	j, _ := o.Engine.Enqueue(KindProvisionAuto, nil, AutoParams{Count: 2, GroupID: g.ID}, "test")
+	if got := waitJob(t, o, j.ID); got.Status != models.JobDone {
+		t.Fatalf("group: %s", got.Error)
+	}
+	var kept []models.Server
+	o.DB.Where("status <> ?", models.ServerDeleted).Order("id").Find(&kept)
+	if len(kept) != 2 || kept[0].Region != "hel1" || kept[1].Region != "fsn1" {
+		t.Fatalf("kept %+v", kept)
+	}
+	if kept[0].LocationID != hel.ID || kept[1].LocationID != fsn.ID {
+		t.Fatalf("location ids %d %d", kept[0].LocationID, kept[1].LocationID)
+	}
+	var n int64
+	o.DB.Model(&models.Server{}).Where("region = ?", "nbg1").Count(&n)
+	if n != 0 {
+		t.Fatal("built outside the bundle")
+	}
+}

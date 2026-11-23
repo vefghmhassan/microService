@@ -1,4 +1,4 @@
-import { Card, Flex, Tag, Tooltip, Typography } from 'antd'
+import { Card, Checkbox, Flex, Tag, Tooltip, Typography } from 'antd'
 import { CheckCircleFilled, CloseCircleFilled, QuestionCircleFilled } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import type { Job, Server } from '../api/types'
@@ -29,13 +29,18 @@ export function CheckBadge({ server }: { server: Pick<Server, 'last_check_ok' | 
 }
 
 /** ServerCard is the phone-sized view of a server row. */
-export function ServerCard({ server, limit = 0, onJob }: { server: Server; limit?: number; onJob?: (j: Job) => void }) {
+export function ServerCard({ server, limit = 0, onJob, selected, onSelect }: {
+  server: Server; limit?: number; onJob?: (j: Job) => void
+  /** With onSelect, the card has a checkbox for bulk actions. */
+  selected?: boolean; onSelect?: (on: boolean) => void
+}) {
   const nav = useNavigate()
   const quality = useQuality()
   return (
     <Card size="small" className="server-card">
       <Flex vertical gap={10}>
         <Flex justify="space-between" align="center" gap={8}>
+          {onSelect && <Checkbox checked={selected} onChange={(e) => onSelect(e.target.checked)} aria-label="انتخاب" />}
           <Typography.Link strong onClick={() => nav(`/servers/${server.id}`)} ellipsis>
             {flagEmoji(server.country)} {server.name}
           </Typography.Link>

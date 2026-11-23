@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Alert, Form, Input, InputNumber, Modal, Segmented, Select, Switch, Typography } from 'antd'
+import { Alert, Flex, Form, Input, InputNumber, Modal, Segmented, Select, Switch, Typography } from 'antd'
 import { Link } from 'react-router-dom'
-import { keys, post, useAction, useLocations, useNearestRegions, usePlans, useProviders, useRegions } from '../api/hooks'
+import { keys, post, useAction, useLocationGroups, useLocations, useNearestRegions, usePlans, useProviders, useRegions } from '../api/hooks'
 import type { IPFamily, Job } from '../api/types'
 import { flagEmoji, money } from '../lib/format'
 import { rotateMethod } from '../lib/labels'
+import { groupLocIDs, locLabel } from '../pages/LocationGroups'
 
 interface Values {
   account_id?: number
@@ -21,9 +22,11 @@ interface Values {
   /** Nearest mode: build on target_account_id near source_location_id. */
   source_location_id?: number
   target_account_id?: number
+  /** Group mode: one server per location of this bundle. */
+  group_id?: number
 }
 
-type Mode = 'auto' | 'nearest' | 'manual'
+type Mode = 'auto' | 'group' | 'nearest' | 'manual'
 
 const matchLabel: Record<string, string> = { region: '', city: ' (از روی نام شهر)', country: ' (تقریبی، از روی کشور)' }
 
@@ -41,6 +44,9 @@ export function NewServerModal({ open, onClose, onJob }: { open: boolean; onClos
     if (open) setMode(enabledLocs.length ? 'auto' : 'manual')
   }, [open, enabledLocs.length])
   const nearest = mode === 'nearest'
+  const grouped = mode === 'group'
+  const { data: groups } = useLocationGroups()
+  const enabledGroups = (groups ?? []).filter((g) => g.enabled)
   // Both automatic modes take their settings from a location.
   const auto = mode !== 'manual'
   // Auto mode defaults to each location's family; manual has to pick one.
@@ -56,6 +62,12 @@ export function NewServerModal({ open, onClose, onJob }: { open: boolean; onClos
   const targetId = Form.useWatch('target_account_id', form)
   const target = accounts?.find((a) => a.id === targetId)
   const near = useNearestRegions(nearest ? sourceId : undefined, nearest && target?.default_plan ? targetId : undefined)
+  const groupId = Form.useWatch('group_id', form)
+  const group = enabledGroups.find((g) => g.id === groupId)
+  const byLoc = new Map((locations ?? []).map((l) => [l.id, l]))
+  // The bundle's locations that can build: the server skips disabled ones.
+  const groupLocs = group ? groupLocIDs(group.location_ids).map((id) => byLoc.get(id)).filter((l) => !!l && l.enabled) : []
+  const count = Form.useWatch('count', form)
   const regions = useRegions(accountId)
   const plans = usePlans(accountId, region)
 
@@ -73,6 +85,7 @@ export function NewServerModal({ open, onClose, onJob }: { open: boolean; onClos
       return post<Job[]>('/servers?auto=1', {
         count: v.count, upload: v.upload, base_name: v.base_name, ip_family: v.ip_family || undefined,
         ...(nearest ? { source_location_id: v.source_location_id, target_account_id: v.target_account_id } : {}),
+        ...(grouped ? { group_id: v.group_id } : {}),
       })
     }
     const { count, ...body } = v
@@ -106,6 +119,7 @@ export function NewServerModal({ open, onClose, onJob }: { open: boolean; onClos
         onChange={(v) => setMode(v as Mode)}
         options={[
           { value: 'auto', label: 'خودکار (اولویت لوکیشن‌ها)', disabled: enabledLocs.length === 0 },
+          { value: 'group', label: 'بسته لوکیشن', disabled: enabledGroups.length === 0 },
           { value: 'nearest', label: 'لوکیشن روی ارائه‌دهنده دیگر', disabled: !locations?.length },
           { value: 'manual', label: 'دستی (یک لوکیشن)' },
         ]}
@@ -129,6 +143,24 @@ export function NewServerModal({ open, onClose, onJob }: { open: boolean; onClos
             { value: 'v6', label: 'IPv6' },
           ]} />
         </Form.Item>
+        {grouped && <>
+        <Form.Item name="group_id" label="بسته لوکیشن" rules={[{ required: true, message: 'یک بسته انتخاب کنید' }]}
+          extra={<span>بسته‌ها را در <Link to="/location-groups" onClick={onClose}>صفحه بسته لوکیشن</Link> بسازید.</span>}>
+          <Select placeholder="انتخاب بسته" options={enabledGroups.map((g) => ({ value: g.id, label: g.name }))}
+            onChange={() => form.setFieldValue('count', 1)} />
+        </Form.Item>
+        {group && (
+          <Alert type="info" showIcon style={{ marginBottom: 16 }}
+            title={`از هر لوکیشن یک سرور، ${Math.min(count || 1, groupLocs.length)} لوکیشن اول:`}
+            description={<Flex vertical gap={2}>
+              {groupLocs.map((l, i) => (
+                <Typography.Text key={l!.id} type={i < (count || 1) ? undefined : 'secondary'}>
+                  {i + 1}. <span dir="ltr">{locLabel(l!)}</span>{i >= (count || 1) && ' — ذخیره، اگر یکی از بالایی‌ها شکست بخورد'}
+                </Typography.Text>
+              ))}
+            </Flex>} />
+        )}
+        </>}
         {nearest && <>
         <Form.Item name="source_location_id" label="لوکیشن" rules={[{ required: true, message: 'یک لوکیشن انتخاب کنید' }]}
           tooltip="پروفایل، ظرفیت، نام کانفیگ‌ها، DNS و افزونه‌ها از همین لوکیشن گرفته می‌شود؛ فقط ارائه‌دهنده، ریجن و پلن عوض می‌شود.">
@@ -218,8 +250,8 @@ export function NewServerModal({ open, onClose, onJob }: { open: boolean; onClos
         <Form.Item name="upload" label="بارگذاری خودکار کانفیگ‌ها در vpn-pannel" valuePropName="checked">
           <Switch />
         </Form.Item>
-        <Form.Item name="count" label={auto ? 'تعداد سرور سالم لازم' : 'تعداد'}>
-          <InputNumber min={1} max={auto ? 20 : 10} />
+        <Form.Item name="count" label={grouped ? 'تعداد سرور (یکی در هر لوکیشن)' : auto ? 'تعداد سرور سالم لازم' : 'تعداد'}>
+          <InputNumber min={1} max={grouped ? Math.max(1, groupLocs.length) : auto ? 20 : 10} />
         </Form.Item>
       </Form>
     </Modal>

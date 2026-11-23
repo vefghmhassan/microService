@@ -20,6 +20,7 @@ import { Templates } from './pages/Templates'
 import { ConfigBuilder } from './pages/ConfigBuilder'
 import { Settings } from './pages/Settings'
 import { Locations } from './pages/Locations'
+import { LocationGroups } from './pages/LocationGroups'
 import { Cloudflare } from './pages/Cloudflare'
 import { CleanIPs } from './pages/CleanIPs'
 import { CDNAddonPage } from './pages/CDNAddon'
@@ -69,6 +70,7 @@ export default function App() {
             <Route path="/ips" element={<IPPool />} />
             <Route path="/geo" element={<GeoReport />} />
             <Route path="/locations" element={<Locations />} />
+            <Route path="/location-groups" element={<LocationGroups />} />
             <Route path="/providers" element={<Providers />} />
             <Route path="/cloudflare" element={<Cloudflare />} />
             <Route path="/clean-ips" element={<CleanIPs />} />

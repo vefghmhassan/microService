@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Button, Col, Flex, Grid, Input, Row, Segmented, Select, Skeleton, Table, Tag, Typography } from 'antd'
+import { Button, Checkbox, Col, Flex, Grid, Input, Row, Segmented, Select, Skeleton, Table, Tag, Typography } from 'antd'
 import { CloseCircleOutlined, FilterOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import { useLocations, useServers, useSettings } from '../api/hooks'
 import { TrafficBar } from '../components/TrafficBar'
@@ -11,6 +11,7 @@ import { ServerMarks } from '../components/ServerMarks'
 import { HostBadge } from '../components/HostBadge'
 import { CheckBadge, ServerCard } from '../components/ServerCard'
 import { ServerActions } from '../components/ServerActions'
+import { BulkServerActions } from '../components/BulkServerActions'
 import { NewServerModal } from '../components/NewServerModal'
 import { EmptyState } from '../components/EmptyState'
 import { useOpenJob } from '../components/JobViewer'
@@ -76,6 +77,8 @@ export function Servers() {
   const nav = useNavigate()
   const openJob = useOpenJob()
   const mobile = !Grid.useBreakpoint().md
+  // Selected servers, kept across filters and pages until cleared.
+  const [selIds, setSelIds] = useState<number[]>([])
   const status = params.get('status') ?? ''
   const providers = params.getAll('provider')
   const countries = params.getAll('country')
@@ -132,6 +135,18 @@ export function Servers() {
   }, [data, status, q, params, locations, settings])
 
   const filtered = data && list.length !== data.length
+  const selSet = new Set(selIds)
+  const selected = (data ?? []).filter((s) => selSet.has(s.id) && s.status !== 'deleted')
+  const allListed = list.length > 0 && list.every((s) => selSet.has(s.id))
+  const toggleListed = () => {
+    const ids = new Set(selIds)
+    for (const s of list) {
+      if (allListed) ids.delete(s.id)
+      else if (s.status !== 'deleted') ids.add(s.id)
+    }
+    setSelIds([...ids])
+  }
+  const toggleOne = (id: number, on: boolean) => setSelIds(on ? [...selIds, id] : selIds.filter((x) => x !== id))
   const fw = mobile ? { width: '100%' } : undefined
 
   return (
@@ -158,18 +173,30 @@ export function Servers() {
         <Select allowClear placeholder="مصرف ترافیک" options={usageOptions} value={usage}
           onChange={(v) => setParam('usage', v)} style={{ width: mobile ? '100%' : 170 }} />
         {extraActive && <Button type="link" icon={<CloseCircleOutlined />} onClick={clearFilters}>پاک کردن فیلترها</Button>}
+        {list.length > 0 && (
+          <Checkbox checked={allListed} indeterminate={!allListed && list.some((s) => selSet.has(s.id))} onChange={toggleListed}>
+            {filtered ? `انتخاب همه ${list.length.toLocaleString('fa-IR')} سرور فیلترشده` : 'انتخاب همه'}
+          </Checkbox>
+        )}
       </Flex>
+      <BulkServerActions selected={selected} onClear={() => setSelIds([])} />
 
       {isLoading ? <Skeleton active /> : list.length === 0 ? (
         <EmptyState text="سروری پیدا نشد" action={<Button type="primary" onClick={() => setNewOpen(true)}>خرید اولین سرور</Button>} />
       ) : mobile ? (
         <Row gutter={[12, 12]}>
-          {list.map((s) => <Col xs={24} key={s.id}><ServerCard server={s} limit={limitOf(s)} onJob={(j) => openJob(j.id)} /></Col>)}
+          {list.map((s) => <Col xs={24} key={s.id}><ServerCard server={s} limit={limitOf(s)} onJob={(j) => openJob(j.id)}
+            selected={selSet.has(s.id)} onSelect={s.status === 'deleted' ? undefined : (on) => toggleOne(s.id, on)} /></Col>)}
         </Row>
       ) : (
         <Table<Server>
           rowKey="id"
           dataSource={list}
+          rowSelection={{
+            selectedRowKeys: selIds, preserveSelectedRowKeys: true,
+            onChange: (keys) => setSelIds(keys as number[]),
+            getCheckboxProps: (s) => ({ disabled: s.status === 'deleted' }),
+          }}
           pagination={{ pageSize: 25, hideOnSinglePage: true }}
           scroll={{ x: 1250 }}
           columns={[

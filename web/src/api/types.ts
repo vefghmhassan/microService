@@ -133,6 +133,17 @@ export interface PanelNode {
   server_id: number
 }
 
+/** A bundle of locations in priority order: N servers go one each to its first N working locations. */
+export interface LocationGroup {
+  id: number
+  name: string
+  enabled: boolean
+  priority: number
+  /** Comma separated location IDs, first = tried first. */
+  location_ids: string
+  note: string
+}
+
 /** A balancer config the admin keeps: some node locations behind one balancer. */
 export interface BalancerMode {
   id: number
